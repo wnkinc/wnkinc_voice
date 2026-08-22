@@ -1,0 +1,105 @@
+import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import OpenAI from 'openai';
+
+// ---- Environment ------------------------------------------------------------
+
+/** Set by infra/index.ts on the Lambdas and the worker. Read lazily so tests can override. */
+export const env = {
+  get tenantsTable() { return process.env.TENANTS_TABLE ?? ''; },
+  get callsTable() { return process.env.CALLS_TABLE ?? ''; },
+  get leadsTable() { return process.env.LEADS_TABLE ?? ''; },
+  get eventBusName() { return process.env.EVENT_BUS_NAME ?? ''; },
+  get eventSource() { return process.env.EVENT_SOURCE ?? 'wnkinc.voice'; },
+  get sessionQueueUrl() { return process.env.SESSION_QUEUE_URL ?? ''; },
+  get openaiSecretArn() { return process.env.OPENAI_SECRET_ARN ?? ''; },
+  get sesFromEmail() { return process.env.SES_FROM_EMAIL ?? ''; },
+  get workerMaxCalls() { return Number(process.env.WORKER_MAX_CALLS ?? 20); },
+  get defaultTenantPhone() { return process.env.DEFAULT_TENANT_PHONE ?? ''; },
+  /** Secrets Manager name prefix for per-tenant CRM credentials, e.g. `wnkinc-voice-dev/crm/`. */
+  get crmSecretPrefix() { return process.env.CRM_SECRET_PREFIX ?? ''; },
+};
+
+// ---- Secrets ----------------------------------------------------------------
+
+export interface OpenAISecrets {
+  OPENAI_API_KEY: string;
+  OPENAI_WEBHOOK_SECRET: string;
+}
+
+let secretsPromise: Promise<OpenAISecrets> | undefined;
+
+/** OpenAI credentials from Secrets Manager (fetched once per process). Env vars override (tests). */
+export function getOpenAISecrets(): Promise<OpenAISecrets> {
+  secretsPromise ??= loadSecrets().catch((err) => {
+    secretsPromise = undefined;
+    throw err;
+  });
+  return secretsPromise;
+}
+
+async function loadSecrets(): Promise<OpenAISecrets> {
+  const key = process.env.OPENAI_API_KEY;
+  const secret = process.env.OPENAI_WEBHOOK_SECRET;
+  if (key && secret) return { OPENAI_API_KEY: key, OPENAI_WEBHOOK_SECRET: secret };
+  if (!env.openaiSecretArn) throw new Error('OPENAI_SECRET_ARN is not set');
+  const res = await new SecretsManagerClient({}).send(new GetSecretValueCommand({ SecretId: env.openaiSecretArn }));
+  const parsed = JSON.parse(res.SecretString ?? '{}') as Partial<OpenAISecrets>;
+  if (!parsed.OPENAI_API_KEY || !parsed.OPENAI_WEBHOOK_SECRET) throw new Error('secret must contain OPENAI_API_KEY and OPENAI_WEBHOOK_SECRET');
+  if (parsed.OPENAI_API_KEY.startsWith('REPLACE')) throw new Error('OpenAI secret still has placeholder values (see README "Configure secrets")');
+  return { OPENAI_API_KEY: parsed.OPENAI_API_KEY, OPENAI_WEBHOOK_SECRET: parsed.OPENAI_WEBHOOK_SECRET };
+}
+
+export interface CrmSecrets {
+  HUBSPOT_TOKEN?: string;
+}
+
+/** Per-tenant CRM credentials; undefined if the secret is missing or still a placeholder. */
+export async function getCrmSecret(tenantId: string): Promise<CrmSecrets | undefined> {
+  if (!env.crmSecretPrefix) return undefined;
+  try {
+    const res = await new SecretsManagerClient({}).send(new GetSecretValueCommand({ SecretId: `${env.crmSecretPrefix}${tenantId}` }));
+    const parsed = JSON.parse(res.SecretString ?? '{}') as CrmSecrets;
+    if (!parsed.HUBSPOT_TOKEN || parsed.HUBSPOT_TOKEN.startsWith('REPLACE')) return undefined;
+    return parsed;
+  } catch (err) {
+    if ((err as { name?: string }).name === 'ResourceNotFoundException') return undefined;
+    throw err;
+  }
+}
+
+export function createOpenAI(s: OpenAISecrets): OpenAI {
+  return new OpenAI({ apiKey: s.OPENAI_API_KEY, webhookSecret: s.OPENAI_WEBHOOK_SECRET, maxRetries: 1, timeout: 8_000 });
+}
+
+// ---- Logging ----------------------------------------------------------------
+
+type Level = 'debug' | 'info' | 'warn' | 'error';
+const LEVELS: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
+
+export interface Logger {
+  debug(msg: string, data?: Record<string, unknown>): void;
+  info(msg: string, data?: Record<string, unknown>): void;
+  warn(msg: string, data?: Record<string, unknown>): void;
+  error(msg: string, data?: Record<string, unknown>): void;
+  child(ctx: Record<string, unknown>): Logger;
+}
+
+/** One JSON object per line; CloudWatch indexes the fields. LOG_LEVEL=debug|info|warn|error|silent. */
+export function createLogger(ctx: Record<string, unknown> = {}): Logger {
+  const emit = (level: Level, msg: string, data?: Record<string, unknown>) => {
+    const min = process.env.LOG_LEVEL ?? 'info';
+    if (min === 'silent' || LEVELS[level] < (LEVELS[min as Level] ?? LEVELS.info)) return;
+    const line: Record<string, unknown> = { level, msg, ts: new Date().toISOString(), ...ctx };
+    for (const [k, v] of Object.entries(data ?? {})) {
+      line[k] = v instanceof Error ? { name: v.name, message: v.message, stack: v.stack } : v;
+    }
+    (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(JSON.stringify(line));
+  };
+  return {
+    debug: (m, d) => emit('debug', m, d),
+    info: (m, d) => emit('info', m, d),
+    warn: (m, d) => emit('warn', m, d),
+    error: (m, d) => emit('error', m, d),
+    child: (more) => createLogger({ ...ctx, ...more }),
+  };
+}

@@ -1,0 +1,46 @@
+{
+  "name": "wnkinc-voice",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Serverless control layer for an OpenAI Realtime phone receptionist (Twilio SIP -> OpenAI -> AWS Lambda)",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "seed": "tsx scripts/seed-tenant.ts",
+    "preview": "pulumi preview",
+    "up": "pulumi up",
+    "destroy": "pulumi destroy",
+    "outputs": "pulumi stack output"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1116.0",
+    "@aws-sdk/client-eventbridge": "^3.1116.0",
+    "@aws-sdk/client-lambda": "^3.1116.0",
+    "@aws-sdk/client-secrets-manager": "^3.1116.0",
+    "@aws-sdk/client-ses": "^3.1116.0",
+    "@aws-sdk/client-sns": "^3.1116.0",
+    "@aws-sdk/client-sqs": "^3.1116.0",
+    "@aws-sdk/lib-dynamodb": "^3.1116.0",
+    "@openai/agents": "^0.17.0",
+    "@pulumi/aws": "^7.43.0",
+    "@pulumi/pulumi": "^3.259.0",
+    "openai": "^7.5.0",
+    "ws": "^8.21.3",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.0",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.4"
+  }
+}

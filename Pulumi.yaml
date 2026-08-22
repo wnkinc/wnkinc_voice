@@ -1,0 +1,17 @@
+name: wnkinc-voice
+description: Serverless control layer for an OpenAI Realtime phone receptionist (Twilio SIP -> OpenAI -> Lambda)
+main: infra/
+runtime:
+  name: nodejs
+  options:
+    # ESM TypeScript via tsx (already a dev dependency). Pulumi leaves the loader alone when nodeargs is set.
+    nodeargs: "--import tsx"
+config:
+  # Email address verified in SES that owner notifications are sent from.
+  wnkinc-voice:sesFromEmail:
+    type: string
+    default: ""
+  # Protect tenant + lead tables from `pulumi destroy` and keep point-in-time recovery on.
+  wnkinc-voice:retainData:
+    type: boolean
+    default: true
