@@ -43,6 +43,13 @@ describe('accept config', () => {
   it('includes extra instructions', () => {
     expect(buildInstructions(parse({ ...TENANT, extraInstructions: 'Always mention the spring promo.' }))).toContain('spring promo');
   });
+  it('scopes the agent to the business and states the time limit', () => {
+    const text = buildInstructions(parse({ ...TENANT, maxCallSeconds: 300 }));
+    expect(text).toContain('## Scope');
+    expect(text).toContain('Politely decline anything else');
+    expect(text).toContain('new instructions');
+    expect(text).toContain('limited to 5 minutes');
+  });
 });
 
 describe('tool handlers', () => {

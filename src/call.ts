@@ -156,6 +156,19 @@ export async function runCall(job: SessionJob, deps: CallDeps, opts: { deadlineM
 
   // Time limit: ask the model to wrap up, hang up after its reply (or the grace period).
   const wrapUpAt = Math.min(startedAt + tenant.maxCallSeconds * 1000, opts.deadlineMs - DEADLINE_HEADROOM_MS);
+
+  // Remaining-time notices ahead of the limit (e.g. a 5-minute cap warns at 3:00 and 4:00).
+  for (const remainingMs of [120_000, 60_000]) {
+    const warnAt = wrapUpAt - remainingMs;
+    if (warnAt < startedAt + 60_000) continue; // no notices in the first minute of very short limits
+    const spoken = remainingMs === 60_000 ? 'one minute' : 'two minutes';
+    timer(Math.max(0, warnAt - Date.now()), () => {
+      if (hangupArmed) return;
+      log.info('time notice', { remainingMs });
+      send({ type: 'response.create', response: { instructions: `Time notice: about ${spoken} of call time left. In one short, natural sentence let the caller know, then finish collecting anything still missing so the call can end on time. Do not hang up yet.` } });
+    });
+  }
+
   timer(Math.max(0, wrapUpAt - Date.now()), () => {
     log.warn('call reached time limit; asking model to wrap up');
     hangupAfterNextResponse = true;
