@@ -12,10 +12,6 @@ export function bundleHandler(name: string): string {
   return bundle(name, path.resolve(here, '../src', `${name}.ts`));
 }
 
-export function bundleWorker(): string {
-  return path.join(bundle('worker', path.resolve(here, '../src/worker.ts')), 'index.mjs');
-}
-
 function bundle(name: string, entry: string): string {
   const outdir = path.resolve(here, '.build', name);
   buildSync({

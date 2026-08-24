@@ -16,14 +16,7 @@ export interface CallOutcome {
   status: CallStatus;
   durationSeconds: number;
   transcript: TranscriptEntry[];
-  /** True when detach() was called: the call is still live and another worker should pick it up. */
-  detached?: boolean;
   error?: string;
-}
-
-export interface CallHandle {
-  /** Drop the socket without hanging up; the call stays live for a new worker to re-attach. */
-  detach(): void;
 }
 
 const DEADLINE_HEADROOM_MS = 25_000; // wrap up this long before the hard deadline
@@ -36,9 +29,9 @@ const TOOL_HANGUP_FALLBACK_MS = 10_000; // hang up anyway if no response follows
  * Attach to an accepted SIP call and run it to completion. Same shape as OpenAI's
  * realtime-twilio-sip example: RealtimeSession + OpenAIRealtimeSIP transport, with
  * the SDK running the tool loop. On top of that we log transcripts, enforce a time
- * limit, hang up cleanly, and support detaching for worker restarts.
+ * limit, and hang up cleanly.
  */
-export async function runCall(job: SessionJob, deps: CallDeps, opts: { deadlineMs: number; onStart?: (h: CallHandle) => void }): Promise<CallOutcome | undefined> {
+export async function runCall(job: SessionJob, deps: CallDeps, opts: { deadlineMs: number }): Promise<CallOutcome | undefined> {
   const { callId } = job;
   const log = deps.log.child({ callId });
 
@@ -61,7 +54,6 @@ export async function runCall(job: SessionJob, deps: CallDeps, opts: { deadlineM
   const timers = new Set<NodeJS.Timeout>();
   const background: Promise<unknown>[] = [];
   let closed = false;
-  let detached = false;
   let hungUp = false;
   let hangupArmed = false;
   let hangupAfterNextResponse = false;
@@ -161,15 +153,6 @@ export async function runCall(job: SessionJob, deps: CallDeps, opts: { deadlineM
   }
   log.info(resuming ? 're-attached to call in progress' : 'attached to call');
   await deps.store.setCallStatus(callId, 'in_progress');
-  opts.onStart?.({
-    detach: () => {
-      if (closed || detached) return;
-      detached = true;
-      log.warn('detaching from live call');
-      for (const t of timers) clearTimeout(t);
-      session.close();
-    },
-  });
 
   // Time limit: ask the model to wrap up, hang up after its reply (or the grace period).
   const wrapUpAt = Math.min(startedAt + tenant.maxCallSeconds * 1000, opts.deadlineMs - DEADLINE_HEADROOM_MS);
@@ -189,8 +172,6 @@ export async function runCall(job: SessionJob, deps: CallDeps, opts: { deadlineM
   await Promise.allSettled(background);
 
   const durationSeconds = Math.round((Date.now() - startedAt) / 1000);
-  if (detached) return { status: 'in_progress', durationSeconds, transcript, detached: true };
-
   const status: CallStatus = error && transcript.length === 0 ? 'failed' : 'completed';
   try {
     await deps.store.setCallStatus(callId, status, { endedAt: new Date().toISOString(), error });

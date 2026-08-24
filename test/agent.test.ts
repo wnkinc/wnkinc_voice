@@ -16,9 +16,9 @@ describe('tenant config', () => {
     expect(t.maxCallSeconds).toBe(600);
     expect(t.active).toBe(true);
   });
-  it('rejects bad phone numbers and calls beyond the 29-minute ceiling', () => {
+  it('rejects bad phone numbers and calls beyond the Lambda ceiling', () => {
     expect(() => parse({ ...TENANT, phoneNumber: '555-0100' })).toThrow();
-    expect(() => parse({ ...TENANT, maxCallSeconds: 1800 })).toThrow();
+    expect(() => parse({ ...TENANT, maxCallSeconds: 900 })).toThrow();
   });
 });
 

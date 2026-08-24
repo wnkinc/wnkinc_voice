@@ -13,7 +13,6 @@ export const env = {
   get sessionQueueUrl() { return process.env.SESSION_QUEUE_URL ?? ''; },
   get openaiSecretArn() { return process.env.OPENAI_SECRET_ARN ?? ''; },
   get sesFromEmail() { return process.env.SES_FROM_EMAIL ?? ''; },
-  get workerMaxCalls() { return Number(process.env.WORKER_MAX_CALLS ?? 20); },
   get defaultTenantPhone() { return process.env.DEFAULT_TENANT_PHONE ?? ''; },
   /** Secrets Manager name prefix for per-tenant CRM credentials, e.g. `wnkinc-voice-dev/crm/`. */
   get crmSecretPrefix() { return process.env.CRM_SECRET_PREFIX ?? ''; },

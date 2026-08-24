@@ -31,8 +31,8 @@ export const TenantConfigSchema = z.object({
 
   notifications: z.object({ email: z.email().optional(), sms: E164.optional() }).default({}),
 
-  /** Hard cap; the agent is asked to wrap up and the call is hung up after this. OpenAI caps sessions at 30 min. */
-  maxCallSeconds: z.number().int().positive().max(1740).default(600),
+  /** Hard cap; the agent is asked to wrap up and the call is hung up after this. The session Lambda's 15-minute timeout is the ceiling. */
+  maxCallSeconds: z.number().int().positive().max(840).default(600),
 
   /** CRM adapter. Credentials live in Secrets Manager at `<CRM_SECRET_PREFIX><tenantId>`. */
   crm: z.object({ type: z.literal('hubspot') }).optional(),

@@ -6,7 +6,7 @@ Twilio owns the number and the SIP transport. Inbound calls are forwarded over a
 Twilio Elastic SIP trunk straight into OpenAI Realtime. OpenAI fires a
 `realtime.call.incoming` webhook at this backend, which verifies it, maps the
 **called number → tenant**, accepts the call with that tenant's model / voice /
-instructions / tools, and hands the call to a small EC2 worker that holds the
+instructions / tools, and hands the call to a session Lambda that holds the
 WebSocket and executes tool calls (record a lead, notify the owner, end the
 call). One deployment serves many businesses.
 
@@ -20,7 +20,7 @@ call). One deployment serves many businesses.
                        POST /v1/realtime/calls/{id}/accept {model, voice, instructions, tools}
                                                     │ SQS
                                                     ▼
-                                   Session worker (EC2 t4g.nano, systemd)
+                              Session Lambda (SQS · one call per invocation)
                             wss://api.openai.com/v1/realtime?call_id=…
                             transcripts → Calls table · function_call → tools
                                                     │
@@ -36,8 +36,8 @@ call). One deployment serves many businesses.
 | Path | What |
 |---|---|
 | `src/webhook.ts` | Lambda: `POST /openai/webhook` — verify, route by called number, claim, accept, enqueue |
-| `src/worker.ts` | EC2 worker: long-polls SQS, runs one call per message, re-attaches after restarts |
-| `src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup, detach |
+| `src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration |
+| `src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
 | `src/notifier.ts` | Lambda: EventBridge → SES email / SNS SMS |
 | `src/crm-sync.ts` | Lambda: EventBridge → CRM (lead → contact + note + task; call → transcript note) |
@@ -69,9 +69,9 @@ pulumi config set sesFromEmail alerts@yourdomain.com
 pulumi up                                   # bundles the handlers with esbuild and deploys
 ```
 
-Outputs (`pulumi stack output`): `webhookUrl`, `openaiSecretArn`, `tenantsTableName`, `callsTableName`, `leadsTableName`, `eventBusName`, `sessionQueueUrl`, `workerInstanceId`, `workerLogGroupName`.
+Outputs (`pulumi stack output`): `webhookUrl`, `openaiSecretArn`, `tenantsTableName`, `callsTableName`, `leadsTableName`, `eventBusName`, `sessionQueueUrl`, `sessionFunctionName`.
 
-Optional config: `workerInstanceType` (default `t4g.nano`), `workerMaxCalls` (default 20).
+Optional config: `sessionMaxConcurrency` (default 20) — ceiling on simultaneous calls, and therefore on concurrent OpenAI Realtime sessions.
 
 ### 1. Configure secrets
 
@@ -126,7 +126,7 @@ See `TenantConfigSchema` in `src/types.ts`. Key fields:
 | `model` (default `gpt-realtime-2.1`), `voice` (default `marin`) | Passed to `accept` |
 | `tools` | Subset of `record_lead`, `notify_owner`, `end_call` |
 | `notifications.email` / `.sms` | Where the notifier delivers |
-| `maxCallSeconds` (default 600, max 1740) | Agent is asked to wrap up, then the call is hung up |
+| `maxCallSeconds` (default 600, max 840) | Agent is asked to wrap up, then the call is hung up |
 | `active` | `false` → calls rejected with SIP 603 |
 | `crm` | `{ "type": "hubspot" }` enables CRM sync + caller recognition; token in Secrets Manager at `<stack>/crm/<tenantId>` |
 
@@ -144,34 +144,32 @@ Unknown numbers are rejected with SIP 404.
    instructions, voice, semantic VAD with interruption, far-field noise reduction,
    `gpt-4o-mini-transcribe` input transcription, and function tools.
 5. **Hand off** — the webhook puts a `SessionJob` on the SQS queue and returns 200.
-6. **Session** — the EC2 worker receives the message and attaches with the Agents SDK
+6. **Session** — the session Lambda receives the message (one call per invocation) and attaches with the Agents SDK
    (`RealtimeSession` over `OpenAIRealtimeSIP`, the same pattern as OpenAI's
    [realtime-twilio-sip example](https://github.com/openai/openai-agents-js/tree/main/examples/realtime-twilio-sip)).
    It sends a `response.create` that speaks the greeting; the SDK validates and executes
    tool calls and returns results to the model. We log transcripts from the raw events.
    After `end_call` the next response is allowed to finish, audio drains, then we hang up via REST.
-7. **Limits** — at `min(tenant.maxCallSeconds, 29 min)` the model is told to wrap up; hangup
-   follows the next `response.done` (hard stop 20 s later). OpenAI caps sessions at 30 min.
+7. **Limits** — at `min(tenant.maxCallSeconds, Lambda deadline − 25 s)` the model is told to
+   wrap up; hangup follows the next `response.done` (hard stop 20 s later). The Lambda's
+   15-minute timeout is the ceiling, hence `maxCallSeconds` maxes at 840.
 8. **End** — on socket close the call record gets `status`/`endedAt`, a `call.ended` event
-   is published with the full transcript, and the SQS message is deleted.
-9. **Restarts** — the message is only deleted when the call ends. If the worker is restarted
-   (deploy, crash, SIGTERM) it `detach()`es live sockets and releases their messages; the next
-   worker re-attaches to the same `call_id` and skips the greeting. A message received 5 times
-   without completing goes to the DLQ.
+   is published with the full transcript, and the SQS message is deleted by the event
+   source mapping.
+9. **Failures** — an attach failure is reported as a batch item failure, so the message
+   becomes visible again (after the queue's visibility timeout) and the call is retried.
+   There is no mid-call re-attach: if an invocation dies, the call drops and the caller
+   calls back. A message received 3 times without completing goes to the DLQ.
 
-## Operating the worker
+## Operating the session Lambda
 
 ```bash
-aws ssm start-session --target $(pulumi stack output workerInstanceId)   # shell, no SSH/inbound ports
-sudo systemctl status wnkinc-voice-worker
-sudo journalctl -u wnkinc-voice-worker -f                                  # or the CloudWatch group below
-aws logs tail $(pulumi stack output workerLogGroupName) --follow
+aws logs tail /aws/lambda/$(pulumi stack output sessionFunctionName) --follow
 ```
 
-Deploying new worker code is `pulumi up`: the bundle is uploaded to S3 and the instance is
-replaced (its user data embeds the bundle hash). Calls in progress are re-attached by the new
-instance within ~a minute of it booting. The AMI is pinned via `ignoreChanges` so AL2023
-releases don't churn the instance; remove that line to roll forward deliberately.
+Deploying new session code is `pulumi up`. Because in-flight calls live inside a Lambda
+invocation, a deploy never interrupts them: running invocations finish on the old code,
+new calls get the new code.
 
 ## CRM (HubSpot)
 
@@ -202,15 +200,15 @@ starts. The `notifier` Lambda is the v1 stand-in for that worker.
 
 ## Cost & scale notes
 
-- Fixed cost is the worker: t4g.nano ≈ $3/mo + 8 GB gp3 ≈ $0.64 + public IPv4 ≈ $3.65 → **≈ $7.50/mo**.
-  Everything else (HTTP API, two Lambdas, DynamoDB, SQS, EventBridge) is on-demand and ~$0 idle;
-  per call you pay OpenAI Realtime usage.
-- One t4g.nano (512 MB) comfortably runs dozens of concurrent calls — the worker holds sockets and
-  does JSON, no audio. `workerMaxCalls` caps it; bump `workerInstanceType` to `t4g.micro` for headroom.
-- The worker is a single instance in one AZ. If it is down, OpenAI still answers calls with the
-  tenant's instructions, but tools and transcripts resume only when the worker is back (jobs wait in
-  SQS up to an hour).
-- IaC is Pulumi (TypeScript, `infra/index.ts`); Lambdas and the worker are bundled by esbuild at
+- Everything (HTTP API, four Lambdas, DynamoDB, SQS, EventBridge) is on-demand and ~$0 idle;
+  per call you pay OpenAI Realtime usage plus Lambda duration for the call's length
+  (a 10-minute call at 512 MB is well under a cent).
+- Each call is its own invocation with its own 512 MB — the session Lambda holds a socket and
+  does JSON, no audio. `sessionMaxConcurrency` (default 20) caps simultaneous calls; the account
+  concurrency limit is the hard ceiling.
+- There is no mid-call failover: if an invocation dies the call drops and the caller calls back.
+  Undelivered jobs wait in SQS up to an hour.
+- IaC is Pulumi (TypeScript, `infra/index.ts`); all Lambdas are bundled by esbuild at
   `pulumi up` time into `infra/.build/`.
 - Calls table rows expire after 90 days (TTL); tenants and leads are `protect`ed from `pulumi destroy`
   (`pulumi config set retainData false` to change).

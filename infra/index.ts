@@ -1,9 +1,9 @@
 import * as aws from '@pulumi/aws';
 import * as pulumi from '@pulumi/pulumi';
-import { bundleHandler, bundleWorker } from './bundle.js';
+import { bundleHandler } from './bundle.js';
 
 /**
- * API Gateway (HTTP) -> webhook Lambda -> [accept call] -> SQS -> EC2 worker (WebSocket to OpenAI)
+ * API Gateway (HTTP) -> webhook Lambda -> [accept call] -> SQS -> session Lambda (WebSocket to OpenAI)
  * DynamoDB: tenants (by called number), calls, leads. Secrets Manager: OpenAI keys.
  * EventBridge bus: lead.recorded / owner.notify / call.ended -> notifier Lambda (SES/SNS).
  */
@@ -11,8 +11,8 @@ import { bundleHandler, bundleWorker } from './bundle.js';
 const cfg = new pulumi.Config();
 const sesFromEmail = cfg.get('sesFromEmail') ?? '';
 const retainData = cfg.getBoolean('retainData') ?? true;
-const workerInstanceType = cfg.get('workerInstanceType') ?? 't4g.nano';
-const workerMaxCalls = cfg.getNumber('workerMaxCalls') ?? 20;
+// Ceiling on simultaneous calls (and therefore concurrent OpenAI Realtime sessions). SQS scaling config minimum is 2.
+const sessionMaxConcurrency = cfg.getNumber('sessionMaxConcurrency') ?? 20;
 
 const name = `${pulumi.getProject()}-${pulumi.getStack()}`;
 const region = aws.getRegionOutput().region;
@@ -87,14 +87,15 @@ for (const tenantId of ['wnk']) {
   }, { ignoreChanges: ['secretString', 'versionStages'], dependsOn: [] });
 }
 
-// Call jobs wait here until the worker finishes the call. A message that is
-// received 5 times without being deleted (worker crashing on it) goes to the DLQ.
+// Call jobs wait here until the session Lambda finishes the call. Lambda requires the
+// visibility timeout to be at least the function timeout; a reported batch failure
+// makes the message visible again, and repeated failures go to the DLQ.
 const sessionDlq = new aws.sqs.Queue('session-dlq', { messageRetentionSeconds: 14 * 86400 });
 const sessionQueue = new aws.sqs.Queue('session-queue', {
-  visibilityTimeoutSeconds: 90,
+  visibilityTimeoutSeconds: 960,
   messageRetentionSeconds: 3600, // a call older than an hour is over
   receiveWaitTimeSeconds: 20,
-  redrivePolicy: sessionDlq.arn.apply((arn) => JSON.stringify({ deadLetterTargetArn: arn, maxReceiveCount: 5 })),
+  redrivePolicy: sessionDlq.arn.apply((arn) => JSON.stringify({ deadLetterTargetArn: arn, maxReceiveCount: 3 })),
 });
 
 // ---- Lambda helper ----------------------------------------------------------
@@ -189,146 +190,31 @@ const notifierFn = lambdaFunction('notifier', {
   ],
 });
 
-// ---- Session worker (EC2) ---------------------------------------------------
+// ---- Session Lambda ---------------------------------------------------------
 //
-// One small Graviton instance runs src/worker/main.ts under systemd. It only makes
-// outbound connections (SQS, OpenAI, DynamoDB), so the security group has no
-// inbound rules; use SSM Session Manager for a shell. `pulumi up` uploads a new
-// bundle and replaces the instance (user data changes); in-flight calls are
-// re-attached by the new instance via the queue.
+// One invocation per call: attaches the WebSocket to OpenAI and runs the call to
+// completion. Lambda's 15-minute cap is the hard ceiling on call length; the
+// tenant schema caps maxCallSeconds at 840 to leave wrap-up headroom.
 
-const artifacts = new aws.s3.Bucket('artifacts', { forceDestroy: true });
-new aws.s3.BucketPublicAccessBlock('artifacts-private', {
-  bucket: artifacts.id,
-  blockPublicAcls: true, blockPublicPolicy: true, ignorePublicAcls: true, restrictPublicBuckets: true,
+const sessionFn = lambdaFunction('session', {
+  description: 'Holds the OpenAI Realtime WebSocket for one call and runs the tool loop',
+  timeoutSeconds: 900,
+  statements: [
+    { actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes'], resources: [sessionQueue.arn] },
+    { actions: ['secretsmanager:GetSecretValue'], resources: [openaiSecret.arn] },
+    { actions: ['dynamodb:GetItem'], resources: [tenants.arn] },
+    { actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'], resources: [calls.arn] },
+    { actions: ['dynamodb:PutItem'], resources: [leads.arn] },
+    { actions: ['events:PutEvents'], resources: [bus.arn] },
+  ],
 });
-const workerBundlePath = bundleWorker();
-const workerBundle = new aws.s3.BucketObject('worker-bundle', {
-  bucket: artifacts.id,
-  key: 'worker/index.mjs',
-  source: new pulumi.asset.FileAsset(workerBundlePath),
-  sourceHash: pulumi.output(workerBundlePath).apply(async (p) => {
-    const { createHash } = await import('node:crypto');
-    const { readFile } = await import('node:fs/promises');
-    return createHash('sha256').update(await readFile(p)).digest('hex');
-  }),
+new aws.lambda.EventSourceMapping('session-source', {
+  eventSourceArn: sessionQueue.arn,
+  functionName: sessionFn.arn,
+  batchSize: 1, // one call per invocation
+  functionResponseTypes: ['ReportBatchItemFailures'],
+  scalingConfig: { maximumConcurrency: sessionMaxConcurrency },
 });
-
-const workerLogGroup = new aws.cloudwatch.LogGroup('worker-logs', {
-  name: `/${name}/worker`,
-  retentionInDays: 30,
-});
-
-const workerRole = new aws.iam.Role('worker-role', {
-  assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({ Service: 'ec2.amazonaws.com' }),
-});
-new aws.iam.RolePolicyAttachment('worker-ssm', { role: workerRole.name, policyArn: aws.iam.ManagedPolicy.AmazonSSMManagedInstanceCore });
-new aws.iam.RolePolicyAttachment('worker-cwagent', { role: workerRole.name, policyArn: aws.iam.ManagedPolicy.CloudWatchAgentServerPolicy });
-new aws.iam.RolePolicy('worker-policy', {
-  role: workerRole.id,
-  policy: aws.iam.getPolicyDocumentOutput({
-    statements: [
-      { actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:ChangeMessageVisibility'], resources: [sessionQueue.arn] },
-      { actions: ['secretsmanager:GetSecretValue'], resources: [openaiSecret.arn] },
-      { actions: ['dynamodb:GetItem', 'dynamodb:Query'], resources: [tenants.arn] },
-      { actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'], resources: [calls.arn] },
-      { actions: ['dynamodb:PutItem'], resources: [leads.arn] },
-      { actions: ['events:PutEvents'], resources: [bus.arn] },
-      { actions: ['s3:GetObject'], resources: [pulumi.interpolate`${artifacts.arn}/worker/*`] },
-    ],
-  }).json,
-});
-const workerProfile = new aws.iam.InstanceProfile('worker-profile', { role: workerRole.name });
-
-const defaultVpc = aws.ec2.getVpcOutput({ default: true });
-const defaultSubnets = aws.ec2.getSubnetsOutput({ filters: [{ name: 'vpc-id', values: [defaultVpc.id] }, { name: 'default-for-az', values: ['true'] }] });
-const workerSg = new aws.ec2.SecurityGroup('worker-sg', {
-  vpcId: defaultVpc.id,
-  description: 'Session worker: outbound only',
-  egress: [{ protocol: '-1', fromPort: 0, toPort: 0, cidrBlocks: ['0.0.0.0/0'], ipv6CidrBlocks: ['::/0'] }],
-});
-
-const al2023Arm = aws.ssm.getParameterOutput({ name: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64' });
-
-const workerEnv = pulumi.all([tenants.name, calls.name, leads.name, bus.name, openaiSecret.arn, sessionQueue.url, region]).apply(
-  ([t, c, l, b, secretArn, queueUrl, r]) => [
-    `AWS_REGION=${r}`,
-    `TENANTS_TABLE=${t}`,
-    `CALLS_TABLE=${c}`,
-    `LEADS_TABLE=${l}`,
-    `EVENT_BUS_NAME=${b}`,
-    `EVENT_SOURCE=${EVENT_SOURCE}`,
-    `OPENAI_SECRET_ARN=${secretArn}`,
-    `SESSION_QUEUE_URL=${queueUrl}`,
-    `WORKER_MAX_CALLS=${workerMaxCalls}`,
-    `LOG_LEVEL=info`,
-  ].join('\n'),
-);
-
-const userData = pulumi.all([artifacts.bucket, workerBundle.key, workerBundle.sourceHash, workerEnv, workerLogGroup.name]).apply(
-  ([bucket, key, hash, envFile, logGroup]) => `#!/bin/bash
-set -euxo pipefail
-# bundle sha256: ${hash}
-# 512 MB instances have no swap; dnf parsing AL2023 repo metadata can get OOM-killed without it.
-if ! swapon --show | grep -q /swapfile; then
-  fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
-  echo '/swapfile none swap sw 0 0' >> /etc/fstab
-fi
-for attempt in 1 2 3; do
-  dnf install -y --setopt=install_weak_deps=False nodejs22 amazon-cloudwatch-agent && break
-  echo "dnf attempt $attempt failed; retrying" && sleep 10
-done
-command -v node
-mkdir -p /opt/wnkinc-voice /etc/wnkinc-voice /var/log/wnkinc-voice
-aws s3 cp "s3://${bucket}/${key}" /opt/wnkinc-voice/index.mjs
-cat > /etc/wnkinc-voice/worker.env <<'ENV'
-${envFile}
-ENV
-id -u voice >/dev/null 2>&1 || useradd --system --shell /sbin/nologin voice
-chown -R voice:voice /opt/wnkinc-voice /var/log/wnkinc-voice
-NODE_BIN="$(command -v node)"
-cat > /etc/systemd/system/wnkinc-voice-worker.service <<UNIT
-[Unit]
-Description=wnkinc voice session worker
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-User=voice
-EnvironmentFile=/etc/wnkinc-voice/worker.env
-ExecStart=$NODE_BIN --enable-source-maps /opt/wnkinc-voice/index.mjs
-Restart=always
-RestartSec=2
-KillSignal=SIGTERM
-TimeoutStopSec=60
-StandardOutput=append:/var/log/wnkinc-voice/worker.log
-StandardError=append:/var/log/wnkinc-voice/worker.log
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-cat > /etc/wnkinc-voice/cwagent.json <<'CW'
-{"logs":{"logs_collected":{"files":{"collect_list":[{"file_path":"/var/log/wnkinc-voice/worker.log","log_group_name":"${logGroup}","log_stream_name":"{instance_id}","timezone":"UTC"}]}}}}
-CW
-/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/etc/wnkinc-voice/cwagent.json -s
-systemctl daemon-reload
-systemctl enable --now wnkinc-voice-worker
-`,
-);
-
-const worker = new aws.ec2.Instance('worker', {
-  ami: al2023Arm.value,
-  instanceType: workerInstanceType,
-  subnetId: defaultSubnets.ids[0],
-  vpcSecurityGroupIds: [workerSg.id],
-  iamInstanceProfile: workerProfile.name,
-  associatePublicIpAddress: true, // outbound internet without a NAT gateway
-  userData,
-  userDataReplaceOnChange: true,
-  rootBlockDevice: { volumeType: 'gp3', volumeSize: 8, encrypted: true },
-  metadataOptions: { httpTokens: 'required' }, // IMDSv2 only
-  tags: { Name: `${name}-worker` },
-}, { ignoreChanges: ['ami'] /* don't replace on every AL2023 release; bump deliberately */ });
 
 // ---- Event routing ----------------------------------------------------------
 
@@ -408,6 +294,5 @@ export const callsTableName = calls.name;
 export const leadsTableName = leads.name;
 export const eventBusName = bus.name;
 export const sessionQueueUrl = sessionQueue.url;
-export const workerInstanceId = worker.id;
-export const workerLogGroupName = workerLogGroup.name;
+export const sessionFunctionName = sessionFn.name;
 export const crmSecretNamePrefix = crmSecretPrefix;

@@ -139,7 +139,7 @@ export function createWebhookHandler(deps: WebhookDeps): APIGatewayProxyHandlerV
   };
 }
 
-/** Production: enqueue for the EC2 worker. The message lives until the call ends, so a worker restart re-attaches. */
+/** Production: enqueue for the session Lambda, which runs the call to completion. */
 export function sqsSessionStarter(queueUrl = env.sessionQueueUrl): WebhookDeps['startSession'] {
   const sqs = new SQSClient({});
   return async (job) => {
