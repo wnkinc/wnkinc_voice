@@ -15,6 +15,7 @@ export interface CognitoStackProps extends cdk.StackProps {
 export class CognitoStack extends cdk.Stack {
   readonly userPool: cognito.UserPool;
   readonly machineClient: cognito.UserPoolClient;
+  readonly tokenUrl: string;
 
   constructor(scope: Construct, id: string, props: CognitoStackProps) {
     super(scope, id, props);
@@ -60,8 +61,9 @@ export class CognitoStack extends cdk.Stack {
       },
     });
 
+    this.tokenUrl = `${domain.baseUrl()}/oauth2/token`;
     new cdk.CfnOutput(this, 'userPoolId', { value: this.userPool.userPoolId });
     new cdk.CfnOutput(this, 'machineClientId', { value: this.machineClient.userPoolClientId });
-    new cdk.CfnOutput(this, 'tokenUrl', { value: `${domain.baseUrl()}/oauth2/token` });
+    new cdk.CfnOutput(this, 'tokenUrl', { value: this.tokenUrl });
   }
 }
