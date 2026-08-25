@@ -9,9 +9,25 @@ const app = new cdk.App();
 const env = { region: 'us-west-2' };
 const prefix = 'wnkinc-voice-dev';
 
-const voice = new VoiceStack(app, 'wnk-voice-dev', { prefix, env, sesFromEmail: process.env.SES_FROM_EMAIL ?? '' });
-
 const auth = new CognitoStack(app, 'wnk-auth-dev', { prefix, env });
+
+// The gateway's URL, from context: the gateway stack consumes the voice stack's
+// tools Lambda, so the URL can't be a stack reference without a cycle. Set/update
+// `wnk:gatewayUrl` in cdk.json after (re)creating the gateway.
+const gatewayUrl = app.node.tryGetContext('wnk:gatewayUrl') as string | undefined;
+const voice = new VoiceStack(app, 'wnk-voice-dev', {
+  prefix,
+  env,
+  sesFromEmail: process.env.SES_FROM_EMAIL ?? '',
+  gateway: gatewayUrl
+    ? {
+        gatewayUrl,
+        userPoolId: auth.userPool.userPoolId,
+        clientId: auth.machineClient.userPoolClientId,
+        tokenUrl: auth.tokenUrl,
+      }
+    : undefined,
+});
 const identity = new IdentityStack(app, 'wnk-identity-dev', {
   prefix,
   env,
@@ -24,6 +40,7 @@ const gateway = new GatewayStack(app, 'wnk-gateway-dev', {
   userPool: auth.userPool,
   machineClient: auth.machineClient,
   hubspotProvider: identity.hubspotProvider,
+  voiceToolsFn: voice.gatewayToolsFn,
 });
 new RuntimeStack(app, 'wnk-runtime-dev', {
   prefix,

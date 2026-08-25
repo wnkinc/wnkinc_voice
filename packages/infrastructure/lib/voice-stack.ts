@@ -27,6 +27,18 @@ export interface VoiceStackProps extends cdk.StackProps {
   readonly sesFromEmail?: string;
   /** Ceiling on simultaneous calls (SQS scaling config minimum is 2). */
   readonly sessionMaxConcurrency?: number;
+  /**
+   * Gateway wiring for the session Lambda's tool calls. `gatewayUrl` comes from
+   * cdk.json context (a stable string) rather than a stack reference — the
+   * gateway stack consumes this stack's tools Lambda, so a CFN reference in the
+   * other direction would be a cycle. Unset: tools run in-process (first deploy).
+   */
+  readonly gateway?: {
+    readonly gatewayUrl: string;
+    readonly userPoolId: string;
+    readonly clientId: string;
+    readonly tokenUrl: string;
+  };
 }
 
 /**
@@ -41,6 +53,8 @@ export class VoiceStack extends cdk.Stack {
   readonly leadsTable: dynamodb.Table;
   readonly bus: events.EventBus;
   readonly openaiSecret: secretsmanager.Secret;
+  /** Gateway Lambda target: record_lead + notify_owner as platform tools. */
+  readonly gatewayToolsFn: NodejsFunction;
 
   constructor(scope: Construct, id: string, props: VoiceStackProps) {
     super(scope, id, props);
@@ -165,7 +179,21 @@ export class VoiceStack extends cdk.Stack {
     const sessionFn = fn('session', 'session.ts', {
       description: 'Holds the OpenAI Realtime WebSocket for one call and runs the tool loop',
       timeout: cdk.Duration.seconds(900),
+      env: props.gateway
+        ? {
+            GATEWAY_URL: props.gateway.gatewayUrl,
+            COGNITO_USER_POOL_ID: props.gateway.userPoolId,
+            COGNITO_CLIENT_ID: props.gateway.clientId,
+            COGNITO_TOKEN_URL: props.gateway.tokenUrl,
+          }
+        : {},
     });
+    if (props.gateway) {
+      sessionFn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['cognito-idp:DescribeUserPoolClient'],
+        resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${props.gateway.userPoolId}`],
+      }));
+    }
     this.openaiSecret.grantRead(sessionFn);
     this.tenantsTable.grantReadData(sessionFn);
     this.callsTable.grantReadWriteData(sessionFn);
@@ -193,6 +221,27 @@ export class VoiceStack extends cdk.Stack {
     });
     this.tenantsTable.grantReadData(crmSyncFn);
     crmSyncFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [crmSecretArnPattern] }));
+
+    // Gateway Lambda target: the voice tools as shared platform tools. Lives in
+    // this stack (it owns the tables and bus); the gateway stack registers it.
+    this.gatewayToolsFn = new NodejsFunction(this, 'gateway-tools', {
+      functionName: `${prefix}-gateway-tools`,
+      description: 'Gateway Lambda target: record_lead + notify_owner',
+      entry: path.resolve(here, '../../lambda/src/tools.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      timeout: cdk.Duration.seconds(15),
+      environment: {
+        LEADS_TABLE: this.leadsTable.tableName,
+        EVENT_BUS_NAME: this.bus.eventBusName,
+        EVENT_SOURCE,
+        LOG_LEVEL: 'info',
+      },
+      bundling: { format: OutputFormat.ESM, target: 'node22', banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" },
+    });
+    this.leadsTable.grantWriteData(this.gatewayToolsFn);
+    this.bus.grantPutEventsTo(this.gatewayToolsFn);
 
     // ---- Event routing --------------------------------------------------------
 

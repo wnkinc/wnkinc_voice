@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 import * as path from 'node:path';
@@ -13,6 +14,8 @@ export interface GatewayStackProps extends cdk.StackProps {
   readonly userPool: cognito.IUserPool;
   readonly machineClient: cognito.IUserPoolClient;
   readonly hubspotProvider: agentcore.IApiKeyCredentialProvider;
+  /** The voice stack's tools Lambda (record_lead / notify_owner). */
+  readonly voiceToolsFn: lambda.IFunction;
 }
 
 /**
@@ -52,6 +55,53 @@ export class GatewayStack extends cdk.Stack {
         agentcore.GatewayCredentialProvider.fromApiKeyIdentity(hubspotProvider, { credentialLocation: bearerHeader }),
       ],
     });
+
+    // Voice tools as a Lambda target: record_lead + notify_owner become shared
+    // platform tools. The tenant_* / call_* fields are context injected by the
+    // calling agent, never by the model.
+    const ctxProps = {
+      tenant_id: { type: agentcore.SchemaDefinitionType.STRING, description: 'Business/tenant id (injected by the caller)' },
+      tenant_phone: { type: agentcore.SchemaDefinitionType.STRING, description: 'Tenant E.164 phone (injected by the caller)' },
+      call_id: { type: agentcore.SchemaDefinitionType.STRING, description: 'Originating call id (injected by the caller)' },
+      caller_phone: { type: agentcore.SchemaDefinitionType.STRING, description: 'Caller id E.164, if known' },
+    };
+    this.gateway.addLambdaTarget('VoiceTools', {
+      gatewayTargetName: 'voice',
+      description: 'Voice receptionist platform tools: record a lead, notify the owner',
+      lambdaFunction: props.voiceToolsFn,
+      toolSchema: agentcore.ToolSchema.fromInline([
+        {
+          name: 'record_lead',
+          description: 'Save a caller as a lead for the business owner to follow up with.',
+          inputSchema: {
+            type: agentcore.SchemaDefinitionType.OBJECT,
+            properties: {
+              caller_name: { type: agentcore.SchemaDefinitionType.STRING, description: "The caller's name as they gave it" },
+              phone: { type: agentcore.SchemaDefinitionType.STRING, description: 'Callback number in digits; omit if declined' },
+              reason: { type: agentcore.SchemaDefinitionType.STRING, description: 'Why they called / what they need' },
+              preferred_callback_time: { type: agentcore.SchemaDefinitionType.STRING, description: 'When they want to be contacted' },
+              notes: { type: agentcore.SchemaDefinitionType.STRING, description: 'Anything else useful for the owner' },
+              ...ctxProps,
+            },
+            required: ['caller_name', 'reason', 'tenant_id', 'tenant_phone', 'call_id'],
+          },
+        },
+        {
+          name: 'notify_owner',
+          description: 'Send the business owner an immediate notification about a call.',
+          inputSchema: {
+            type: agentcore.SchemaDefinitionType.OBJECT,
+            properties: {
+              summary: { type: agentcore.SchemaDefinitionType.STRING, description: 'Two or three sentences the owner should read' },
+              urgency: { type: agentcore.SchemaDefinitionType.STRING, description: "'normal' or 'urgent'" },
+              ...ctxProps,
+            },
+            required: ['summary', 'tenant_id', 'tenant_phone', 'call_id'],
+          },
+        },
+      ]),
+    });
+    props.voiceToolsFn.grantInvoke(this.gateway.role);
 
     // Vended application logs -> CloudWatch, so tool-call failures are debuggable.
     const logGroup = new logs.LogGroup(this, 'GatewayLogs', {

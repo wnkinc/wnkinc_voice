@@ -4,6 +4,7 @@ import type { CallAcceptParams } from 'openai/resources/realtime/calls';
 import { z } from 'zod';
 import type { Logger } from '@wnk/shared';
 import type { EventPublisher } from '@wnk/shared';
+import { gatewayClient, gatewayConfigFromEnv } from '@wnk/shared';
 import { normalizePhone } from './sip.js';
 import type { Store } from '@wnk/shared';
 import type { CallExtras, CallParty, TenantConfig } from '@wnk/shared';
@@ -41,8 +42,29 @@ export const EndCallArgs = z.object({
   reason: z.enum(['completed', 'caller_requested', 'spam', 'abusive', 'no_response']).default('completed'),
 });
 
+// When the Gateway is wired (deployed session Lambda), record_lead and
+// notify_owner execute as shared platform tools through it — same catalog the
+// email responder uses, and where Policy will enforce rules. Without the env
+// (tests, local dev) the original in-process implementations run.
+const gwConfig = gatewayConfigFromEnv();
+const gateway = gwConfig ? gatewayClient(gwConfig) : undefined;
+
+function toolContext(ctx: CallContext) {
+  return {
+    tenant_id: ctx.tenant.tenantId,
+    tenant_phone: ctx.tenant.phoneNumber,
+    call_id: ctx.callId,
+    caller_phone: ctx.party.from,
+  };
+}
+
 export const handlers = {
   async record_lead(args: z.infer<typeof RecordLeadArgs>, ctx: CallContext) {
+    if (gateway) {
+      const res = await gateway.callTool('voice___record_lead', { ...args, ...toolContext(ctx) });
+      ctx.log.info('lead recorded via gateway');
+      return JSON.parse(res) as { ok: boolean; lead_id: string; phone_saved: string | null };
+    }
     const phone = normalizePhone(args.phone) ?? ctx.party.from;
     const lead = await ctx.store.createLead({
       tenantId: ctx.tenant.tenantId,
@@ -58,6 +80,11 @@ export const handlers = {
     return { ok: true, lead_id: lead.leadId, phone_saved: phone ?? null };
   },
   async notify_owner(args: z.infer<typeof NotifyOwnerArgs>, ctx: CallContext) {
+    if (gateway) {
+      const res = await gateway.callTool('voice___notify_owner', { ...args, ...toolContext(ctx) });
+      ctx.log.info('owner notified via gateway');
+      return JSON.parse(res) as { ok: boolean; delivered: string };
+    }
     await ctx.events.publish({
       type: 'owner.notify',
       tenantId: ctx.tenant.tenantId,

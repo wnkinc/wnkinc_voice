@@ -2,6 +2,7 @@
   "app": "npx tsx packages/infrastructure/bin/app.ts",
   "output": "cdk.out",
   "context": {
+    "wnk:gatewayUrl": "https://wnkinc-voice-dev-gateway-n7hf9gjnyw.gateway.bedrock-agentcore.us-west-2.amazonaws.com/mcp",
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/aws-iam:minimizePolicies": true,
