@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { composeNotification, createNotifierHandler, type NotifierEvent } from '../src/notifier.js';
-import { memoryStore } from '../src/store.js';
-import { TenantConfigSchema } from '../src/types.js';
+import { memoryStore } from '@wnk/shared';
+import { TenantConfigSchema } from '@wnk/shared';
 import { silentLog, TENANT } from './helpers.js';
 
 const lead: NotifierEvent = {

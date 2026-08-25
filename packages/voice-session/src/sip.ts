@@ -1,4 +1,4 @@
-import type { CallParty } from './types.js';
+import type { CallParty } from '@wnk/shared';
 
 export interface SipHeader {
   name: string;

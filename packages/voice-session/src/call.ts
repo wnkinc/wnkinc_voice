@@ -1,9 +1,9 @@
 import { OpenAIRealtimeSIP, RealtimeSession } from '@openai/agents/realtime';
 import { buildAgent, greeting, sessionOptions, type CallContext } from './agent.js';
-import { createOpenAI, type Logger, type OpenAISecrets } from './config.js';
-import type { EventPublisher } from './events.js';
-import type { Store } from './store.js';
-import type { CallStatus, SessionJob, TranscriptEntry } from './types.js';
+import { createOpenAI, type Logger, type OpenAISecrets } from '@wnk/shared';
+import type { EventPublisher } from '@wnk/shared';
+import type { Store } from '@wnk/shared';
+import type { CallStatus, SessionJob, TranscriptEntry } from '@wnk/shared';
 
 export interface CallDeps {
   secrets: () => Promise<OpenAISecrets>;

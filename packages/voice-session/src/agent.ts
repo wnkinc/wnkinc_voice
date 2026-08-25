@@ -2,11 +2,11 @@ import { OpenAIRealtimeSIP, RealtimeAgent, tool, type RealtimeContextData, type 
 import type { RunContext } from '@openai/agents';
 import type { CallAcceptParams } from 'openai/resources/realtime/calls';
 import { z } from 'zod';
-import type { Logger } from './config.js';
-import type { EventPublisher } from './events.js';
+import type { Logger } from '@wnk/shared';
+import type { EventPublisher } from '@wnk/shared';
 import { normalizePhone } from './sip.js';
-import type { Store } from './store.js';
-import type { CallExtras, CallParty, TenantConfig } from './types.js';
+import type { Store } from '@wnk/shared';
+import type { CallExtras, CallParty, TenantConfig } from '@wnk/shared';
 
 /** Everything a tool may touch during a call. Passed as the RealtimeSession context. */
 export interface CallContext {

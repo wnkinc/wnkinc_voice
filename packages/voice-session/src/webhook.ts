@@ -3,12 +3,12 @@ import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import type OpenAI from 'openai';
 import { APIError, InvalidWebhookSignatureError } from 'openai/error';
 import { buildAcceptConfig, enabledTools } from './agent.js';
-import { createLogger, createOpenAI, env, getOpenAISecrets, type Logger, type OpenAISecrets } from './config.js';
+import { createLogger, createOpenAI, env, getOpenAISecrets, type Logger, type OpenAISecrets } from '@wnk/shared';
 import { crmForTenant } from './crm-sync.js';
 import type { CrmAdapter } from './hubspot.js';
 import { identifyParties } from './sip.js';
-import { dynamoStore, type Store } from './store.js';
-import type { KnownCaller, SessionJob, TenantConfig } from './types.js';
+import { dynamoStore, type Store } from '@wnk/shared';
+import type { KnownCaller, SessionJob, TenantConfig } from '@wnk/shared';
 
 export interface WebhookDeps {
   secrets: () => Promise<OpenAISecrets>;

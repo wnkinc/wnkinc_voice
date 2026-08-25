@@ -5,7 +5,7 @@
  *   TENANTS_TABLE=... npm run seed -- tenants/acme.json tenants/other.json
  */
 import { readFileSync } from 'node:fs';
-import { dynamoStore } from '../src/store.js';
+import { dynamoStore } from '@wnk/shared';
 
 const files = process.argv.slice(2);
 if (!files.length) {

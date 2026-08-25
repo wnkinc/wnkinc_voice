@@ -1,6 +1,6 @@
 import { createHmac, randomBytes } from 'node:crypto';
-import { createLogger } from '../src/config.js';
-import type { TenantConfigInput } from '../src/types.js';
+import { createLogger } from '@wnk/shared';
+import type { TenantConfigInput } from '@wnk/shared';
 
 export const silentLog = createLogger({ test: true });
 

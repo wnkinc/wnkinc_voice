@@ -1,8 +1,8 @@
 import type { EventBridgeEvent } from 'aws-lambda';
-import { createLogger, getCrmSecret, type Logger } from './config.js';
+import { createLogger, getCrmSecret, type Logger } from '@wnk/shared';
 import { hubspotAdapter, nextBusinessMorning, type CrmAdapter } from './hubspot.js';
-import { dynamoStore, type Store } from './store.js';
-import type { TenantConfig, VoiceEvent } from './types.js';
+import { dynamoStore, type Store } from '@wnk/shared';
+import type { TenantConfig, VoiceEvent } from '@wnk/shared';
 
 type Detail<T extends VoiceEvent['type']> = Omit<Extract<VoiceEvent, { type: T }>, 'type'>;
 export type CrmSyncEvent =

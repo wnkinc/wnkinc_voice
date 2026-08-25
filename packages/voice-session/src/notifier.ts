@@ -1,9 +1,9 @@
 import type { EventBridgeEvent } from 'aws-lambda';
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { PublishCommand, SNSClient } from '@aws-sdk/client-sns';
-import { createLogger, env, type Logger } from './config.js';
-import { dynamoStore, type Store } from './store.js';
-import type { TenantConfig, VoiceEvent } from './types.js';
+import { createLogger, env, type Logger } from '@wnk/shared';
+import { dynamoStore, type Store } from '@wnk/shared';
+import type { TenantConfig, VoiceEvent } from '@wnk/shared';
 
 type Detail<T extends VoiceEvent['type']> = Omit<Extract<VoiceEvent, { type: T }>, 'type'>;
 export type NotifierEvent =

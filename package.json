@@ -2,21 +2,23 @@
   "name": "wnkinc-voice",
   "version": "0.1.0",
   "private": true,
-  "description": "Serverless control layer for an OpenAI Realtime phone receptionist (Twilio SIP -> OpenAI -> AWS Lambda)",
+  "description": "Agent platform for a small business: OpenAI Realtime phone receptionist + Bedrock AgentCore (Twilio SIP -> OpenAI -> AWS)",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "seed": "tsx scripts/seed-tenant.ts",
-    "preview": "pulumi preview",
-    "up": "pulumi up",
-    "destroy": "pulumi destroy",
-    "outputs": "pulumi stack output"
+    "synth": "cdk --app 'npx tsx packages/infrastructure/bin/app.ts' synth",
+    "deploy": "cdk --app 'npx tsx packages/infrastructure/bin/app.ts' deploy",
+    "diff": "cdk --app 'npx tsx packages/infrastructure/bin/app.ts' diff"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1116.0",
@@ -28,8 +30,8 @@
     "@aws-sdk/client-sqs": "^3.1116.0",
     "@aws-sdk/lib-dynamodb": "^3.1116.0",
     "@openai/agents": "^0.17.0",
-    "@pulumi/aws": "^7.43.0",
-    "@pulumi/pulumi": "^3.259.0",
+    "aws-cdk-lib": "^2.220.0",
+    "constructs": "^10.4.0",
     "openai": "^7.5.0",
     "ws": "^8.21.3",
     "zod": "^4.0.0"
@@ -38,6 +40,7 @@
     "@types/aws-lambda": "^8.10.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.0",
+    "aws-cdk": "^2.1100.0",
     "esbuild": "^0.28.2",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",

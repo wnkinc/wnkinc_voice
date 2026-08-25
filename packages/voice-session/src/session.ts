@@ -6,10 +6,10 @@
  */
 import type { Context, SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { runCall, type CallDeps, type CallOutcome } from './call.js';
-import { createLogger, getOpenAISecrets, type Logger } from './config.js';
-import { eventBridgePublisher } from './events.js';
-import { dynamoStore } from './store.js';
-import type { SessionJob } from './types.js';
+import { createLogger, getOpenAISecrets, type Logger } from '@wnk/shared';
+import { eventBridgePublisher } from '@wnk/shared';
+import { dynamoStore } from '@wnk/shared';
+import type { SessionJob } from '@wnk/shared';
 
 /** Wrap up this long before Lambda would kill the invocation mid-call. */
 const LAMBDA_DEADLINE_MARGIN_MS = 15_000;

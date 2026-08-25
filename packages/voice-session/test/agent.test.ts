@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { buildAcceptConfig, buildInstructions, enabledTools, greeting, handlers, spokenPhone, type CallContext } from '../src/agent.js';
-import { memoryPublisher } from '../src/events.js';
-import { memoryStore } from '../src/store.js';
-import { TenantConfigSchema } from '../src/types.js';
+import { memoryPublisher } from '@wnk/shared';
+import { memoryStore } from '@wnk/shared';
+import { TenantConfigSchema } from '@wnk/shared';
 import { silentLog, TENANT } from './helpers.js';
 
 const parse = (t: object) => TenantConfigSchema.parse(t);

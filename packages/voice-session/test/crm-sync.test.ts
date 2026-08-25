@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createCrmSyncHandler, splitName, type CrmSyncEvent } from '../src/crm-sync.js';
 import type { CrmAdapter } from '../src/hubspot.js';
-import { memoryStore } from '../src/store.js';
+import { memoryStore } from '@wnk/shared';
 import { silentLog, TENANT } from './helpers.js';
 
 function fakeCrm(existing?: { id: string; firstName?: string }): CrmAdapter & { notes: string[]; tasks: string[] } {

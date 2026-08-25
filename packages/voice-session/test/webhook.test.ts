@@ -1,8 +1,8 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { describe, expect, it, vi } from 'vitest';
-import { createOpenAI } from '../src/config.js';
-import { memoryStore } from '../src/store.js';
-import type { SessionJob } from '../src/types.js';
+import { createOpenAI } from '@wnk/shared';
+import { memoryStore } from '@wnk/shared';
+import type { SessionJob } from '@wnk/shared';
 import { createWebhookHandler } from '../src/webhook.js';
 import { incomingCallBody, makeWebhookSecret, signWebhook, silentLog, TENANT } from './helpers.js';
 
