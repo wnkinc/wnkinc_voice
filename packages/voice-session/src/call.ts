@@ -3,12 +3,14 @@ import { buildAgent, greeting, sessionOptions, type CallContext } from './agent.
 import { createOpenAI, type Logger, type OpenAISecrets } from '@wnk/shared';
 import type { EventPublisher } from '@wnk/shared';
 import type { Store } from '@wnk/shared';
-import type { CallStatus, SessionJob, TranscriptEntry } from '@wnk/shared';
+import type { CallerMemory, CallStatus, SessionJob, TranscriptEntry } from '@wnk/shared';
 
 export interface CallDeps {
   secrets: () => Promise<OpenAISecrets>;
   store: Store;
   events: EventPublisher;
+  /** Platform caller memory; when present, finished calls are written to it. */
+  memory?: CallerMemory;
   log: Logger;
 }
 
@@ -191,6 +193,11 @@ export async function runCall(job: SessionJob, deps: CallDeps, opts: { deadlineM
     await deps.events.publish({ type: 'call.ended', tenantId: tenant.tenantId, tenantPhoneNumber: tenant.phoneNumber, callId, callerPhone: job.from, status, durationSeconds, transcript });
   } catch (err) {
     log.error('failed to finalize call', { err });
+  }
+  if (deps.memory && job.from && status === 'completed' && transcript.length > 0) {
+    await deps.memory.recordCall(tenant.tenantId, job.from, callId, transcript)
+      .then(() => log.info('call written to caller memory'))
+      .catch((err) => log.warn('caller memory write failed', { err }));
   }
   log.info('call finished', { status, durationSeconds, turns: transcript.length });
   return { status, durationSeconds, transcript, error };

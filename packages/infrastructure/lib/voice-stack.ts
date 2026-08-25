@@ -5,6 +5,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import { MEMORY_USE_ACTIONS } from './memory-stack.js';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -39,6 +40,8 @@ export interface VoiceStackProps extends cdk.StackProps {
     readonly clientId: string;
     readonly tokenUrl: string;
   };
+  /** Caller memory (AgentCore Memory): webhook recalls, session writes. */
+  readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
 }
 
 /**
@@ -193,6 +196,15 @@ export class VoiceStack extends cdk.Stack {
         actions: ['cognito-idp:DescribeUserPoolClient'],
         resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${props.gateway.userPoolId}`],
       }));
+    }
+    if (props.callerMemory) {
+      for (const f of [webhookFn, sessionFn]) {
+        f.addEnvironment('MEMORY_ID', props.callerMemory.memoryId);
+        f.addToRolePolicy(new iam.PolicyStatement({
+          actions: MEMORY_USE_ACTIONS,
+          resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
+        }));
+      }
     }
     this.openaiSecret.grantRead(sessionFn);
     this.tenantsTable.grantReadData(sessionFn);

@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import { CognitoStack } from '../lib/cognito-stack.js';
 import { GatewayStack } from '../lib/gateway-stack.js';
 import { IdentityStack } from '../lib/identity-stack.js';
+import { MemoryStack } from '../lib/memory-stack.js';
 import { PolicyStack } from '../lib/policy-stack.js';
 import { RuntimeStack } from '../lib/runtime-stack.js';
 import { VoiceStack } from '../lib/voice-stack.js';
@@ -11,6 +12,8 @@ const env = { region: 'us-west-2' };
 const prefix = 'wnkinc-voice-dev';
 
 const auth = new CognitoStack(app, 'wnk-auth-dev', { prefix, env });
+const memory = new MemoryStack(app, 'wnk-memory-dev', { prefix, env });
+const callerMemory = { memoryId: memory.memory.memoryId, memoryArn: memory.memory.memoryArn };
 
 // The gateway's URL, from context: the gateway stack consumes the voice stack's
 // tools Lambda, so the URL can't be a stack reference without a cycle. Set/update
@@ -28,6 +31,7 @@ const voice = new VoiceStack(app, 'wnk-voice-dev', {
         tokenUrl: auth.tokenUrl,
       }
     : undefined,
+  callerMemory,
 });
 const identity = new IdentityStack(app, 'wnk-identity-dev', {
   prefix,
@@ -63,4 +67,5 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   googleProviderName: `${prefix.replace(/-/g, '_')}_google`,
   openaiSecret: voice.openaiSecret,
   bus: voice.bus,
+  callerMemory,
 });

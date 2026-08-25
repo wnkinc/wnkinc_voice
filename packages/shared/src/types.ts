@@ -102,6 +102,8 @@ export interface CallExtras {
   /** Caller ID (E.164), when the carrier provided it. */
   callerPhone?: string;
   knownCaller?: KnownCaller;
+  /** Extracted platform memories about this caller (AgentCore Memory). */
+  callerMemory?: string[];
 }
 
 /** What the webhook puts on the queue for the worker. */

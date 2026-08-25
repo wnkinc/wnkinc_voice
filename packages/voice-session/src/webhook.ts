@@ -8,6 +8,7 @@ import { crmForTenant } from './crm-sync.js';
 import type { CrmAdapter } from './hubspot.js';
 import { identifyParties } from './sip.js';
 import { dynamoStore, type Store } from '@wnk/shared';
+import { memoryFromEnv, type CallerMemory } from '@wnk/shared';
 import type { KnownCaller, SessionJob, TenantConfig } from '@wnk/shared';
 
 export interface WebhookDeps {
@@ -18,6 +19,8 @@ export interface WebhookDeps {
   startSession: (job: SessionJob) => Promise<void>;
   /** Tenant's CRM for caller recognition; optional. */
   crmFor?: (tenant: TenantConfig) => Promise<CrmAdapter | undefined>;
+  /** Platform caller memory (AgentCore Memory); optional. */
+  memory?: CallerMemory;
   /** Max time to spend on CRM lookup before accepting without it. */
   lookupTimeoutMs?: number;
   log?: Logger;
@@ -100,10 +103,16 @@ export function createWebhookHandler(deps: WebhookDeps): APIGatewayProxyHandlerV
     }
 
     const startedAt = new Date().toISOString();
-    const [claimed, knownCaller] = await Promise.all([
+    const [claimed, knownCaller, callerMemory] = await Promise.all([
       store.claimCall({ callId, tenantId: tenant.tenantId, tenantPhoneNumber: tenant.phoneNumber, from: party.from, to: party.to, webhookId: webhook.id, startedAt }),
       tenant.crm && deps.crmFor
         ? deps.crmFor(tenant).then((crm) => lookupKnownCaller(crm, party.from, deps.lookupTimeoutMs ?? 600, log)).catch(() => undefined)
+        : Promise.resolve(undefined),
+      deps.memory && party.from
+        ? deps.memory.recall(tenant.tenantId, party.from, 'who this caller is, their jobs, and their preferences').catch((err) => {
+            log.warn('caller memory recall failed', { err });
+            return undefined;
+          })
         : Promise.resolve(undefined),
     ]);
     if (!claimed) {
@@ -111,7 +120,8 @@ export function createWebhookHandler(deps: WebhookDeps): APIGatewayProxyHandlerV
       return json(200, { duplicate: true });
     }
     if (knownCaller) log.info('caller recognized', { contactId: knownCaller.contactId, name: knownCaller.name });
-    const extras = { callerPhone: party.from, knownCaller };
+    if (callerMemory?.length) log.info('caller memory recalled', { records: callerMemory.length });
+    const extras = { callerPhone: party.from, knownCaller, callerMemory };
 
     try {
       await openai.realtime.calls.accept(callId, await buildAcceptConfig(tenant, extras));
@@ -154,4 +164,5 @@ export const handler: APIGatewayProxyHandlerV2 = createWebhookHandler({
   store: dynamoStore,
   startSession: sqsSessionStarter(),
   crmFor: crmForTenant,
+  memory: memoryFromEnv(),
 });

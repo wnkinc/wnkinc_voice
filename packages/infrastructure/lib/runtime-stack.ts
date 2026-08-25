@@ -3,6 +3,7 @@ import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import { MEMORY_USE_ACTIONS } from './memory-stack.js';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
@@ -24,6 +25,8 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly googleProviderName: string;
   readonly openaiSecret: secretsmanager.ISecret;
   readonly bus: events.IEventBus;
+  /** Caller memory: the email agent recalls facts about the lead's caller. */
+  readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
 }
 
 /**
@@ -75,6 +78,7 @@ export class RuntimeStack extends cdk.Stack {
         OWNER_USER_ID: 'wesley',
         GOOGLE_PROVIDER_NAME: props.googleProviderName,
         OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
+        ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
       },
     });
 
@@ -95,6 +99,12 @@ export class RuntimeStack extends cdk.Stack {
       resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:bedrock-agentcore-identity!*`],
     }));
     props.openaiSecret.grantRead(emailAgent.role);
+    if (props.callerMemory) {
+      emailAgent.role.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: MEMORY_USE_ACTIONS,
+        resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
+      }));
+    }
     emailAgent.role.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['cognito-idp:DescribeUserPoolClient'],
       resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${props.cognitoUserPoolId}`],

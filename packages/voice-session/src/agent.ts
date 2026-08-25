@@ -190,6 +190,14 @@ export function buildInstructions(t: TenantConfig, extras: CallExtras = {}, tool
     '- Do not put the caller on hold or claim to transfer them.',
   );
   if (t.extraInstructions) lines.push('', '## Additional instructions from the business', t.extraInstructions);
+  if (extras.callerMemory?.length) {
+    lines.push(
+      '',
+      '## Caller memory',
+      'The platform remembers these things about this caller from previous calls. Confirm who you are speaking with before using any of it; weave it in naturally (e.g. reference their earlier job), never recite it as a list:',
+      ...extras.callerMemory.map((m) => `- ${m}`),
+    );
+  }
   const kc = extras.knownCaller;
   if (extras.callerPhone || kc) lines.push('', '## Caller ID');
   if (extras.callerPhone) {

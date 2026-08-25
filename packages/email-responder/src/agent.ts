@@ -16,7 +16,12 @@ import {
 } from '@aws-sdk/client-bedrock-agentcore';
 import { CognitoIdentityProviderClient, DescribeUserPoolClientCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { callerMemory } from '@wnk/shared';
 import * as http from 'node:http';
+
+async function callerMemoryRecall(tenantId: string, phone: string): Promise<string[]> {
+  return callerMemory(env('MEMORY_ID')).recall(tenantId, phone, 'who this caller is, their jobs, and their preferences');
+}
 
 const env = (name: string): string => {
   const v = process.env[name];
@@ -158,6 +163,16 @@ async function processLead(event: LeadEvent): Promise<{ ok: boolean; sentTo: str
       console.log(JSON.stringify({ msg: 'hubspot context fetched' }));
     } catch (err) {
       console.warn(JSON.stringify({ msg: 'hubspot context unavailable; continuing', err: String(err) }));
+    }
+    // Platform caller memory (facts + preferences extracted from past calls).
+    if (process.env.MEMORY_ID && event.tenantId) {
+      try {
+        const memories = await callerMemoryRecall(event.tenantId, lead.phone);
+        if (memories.length) crmContext += `\n\nPlatform memory about this caller:\n${memories.map((m) => `- ${m}`).join('\n')}`;
+        console.log(JSON.stringify({ msg: 'caller memory recalled', records: memories.length }));
+      } catch (err) {
+        console.warn(JSON.stringify({ msg: 'caller memory unavailable; continuing', err: String(err) }));
+      }
     }
   }
 
