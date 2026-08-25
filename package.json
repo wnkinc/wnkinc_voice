@@ -16,9 +16,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "seed": "tsx scripts/seed-tenant.ts",
-    "synth": "cdk --app 'npx tsx packages/infrastructure/bin/app.ts' synth",
-    "deploy": "cdk --app 'npx tsx packages/infrastructure/bin/app.ts' deploy",
-    "diff": "cdk --app 'npx tsx packages/infrastructure/bin/app.ts' diff"
+    "synth": "cdk synth",
+    "deploy": "cdk deploy",
+    "diff": "cdk diff"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1116.0",

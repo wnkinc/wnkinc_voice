@@ -35,26 +35,26 @@ call). One deployment serves many businesses.
 
 | Path | What |
 |---|---|
-| `src/webhook.ts` | Lambda: `POST /openai/webhook` — verify, route by called number, claim, accept, enqueue |
-| `src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration |
-| `src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
-| `src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
-| `src/notifier.ts` | Lambda: EventBridge → SES email / SNS SMS |
-| `src/crm-sync.ts` | Lambda: EventBridge → CRM (lead → contact + note + task; call → transcript note) |
-| `src/hubspot.ts` | HubSpot REST client behind a small `CrmAdapter` interface |
-| `src/store.ts` | DynamoDB (tenants, calls, leads) behind one `Store` interface, plus an in-memory version for tests |
-| `src/events.ts` | EventBridge publisher |
-| `src/sip.ts` | Caller/called number extraction from SIP headers |
-| `src/types.ts` | `TenantConfig` schema (zod) and record/event types |
-| `src/config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger |
-| `infra/` | Pulumi program (`index.ts`) + esbuild bundling (`bundle.ts`) |
+| `packages/voice-session/src/webhook.ts` | Lambda: `POST /openai/webhook` — verify, route by called number, claim, accept, enqueue |
+| `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration |
+| `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
+| `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
+| `packages/voice-session/src/notifier.ts` | Lambda: EventBridge → SES email / SNS SMS |
+| `packages/voice-session/src/crm-sync.ts` | Lambda: EventBridge → CRM (lead → contact + note + task; call → transcript note) |
+| `packages/voice-session/src/hubspot.ts` | HubSpot REST client behind a small `CrmAdapter` interface |
+| `packages/shared/src/store.ts` | DynamoDB (tenants, calls, leads) behind one `Store` interface, plus an in-memory version for tests |
+| `packages/shared/src/events.ts` | EventBridge publisher |
+| `packages/voice-session/src/sip.ts` | Caller/called number extraction from SIP headers |
+| `packages/shared/src/types.ts` | `TenantConfig` schema (zod) and record/event types |
+| `packages/shared/src/config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger |
+| `packages/infrastructure/` | CDK app: `bin/app.ts` + `lib/voice-stack.ts` (NodejsFunction bundles the Lambdas) |
 | `scripts/seed-tenant.ts` | Upsert tenant JSON into the Tenants table |
 | `tenants/example.json` | Example tenant config |
-| `test/` | vitest suites |
+| `packages/voice-session/test/` | vitest suites (each package carries its own tests) |
 
 ## Prerequisites
 
-- Node 22+, AWS CLI configured, Pulumi CLI (`brew install pulumi`) logged in to a backend (`pulumi login`)
+- Node 22+, AWS CLI configured (CDK bootstrap runs once per account/region: `npx cdk bootstrap`)
 - An OpenAI project with Realtime access (note the `proj_…` id under *Settings → Project → General*)
 - A Twilio account with a phone number
 - (Notifications) an SES-verified sender address; for SMS, an SNS account out of the sandbox
@@ -64,12 +64,11 @@ call). One deployment serves many businesses.
 ```bash
 npm install
 npm test
-pulumi stack init dev                       # once
-pulumi config set sesFromEmail alerts@yourdomain.com
-pulumi up                                   # bundles the handlers with esbuild and deploys
+npx cdk bootstrap                           # once per account/region
+SES_FROM_EMAIL=alerts@yourdomain.com npm run deploy
 ```
 
-Outputs (`pulumi stack output`): `webhookUrl`, `openaiSecretArn`, `tenantsTableName`, `callsTableName`, `leadsTableName`, `eventBusName`, `sessionQueueUrl`, `sessionFunctionName`.
+Outputs (printed by `npm run deploy`, or `aws cloudformation describe-stacks --stack-name wnk-voice-dev`): `webhookUrl`, `openaiSecretArn`, `tenantsTableName`, `callsTableName`, `leadsTableName`, `eventBusName`, `sessionQueueUrl`, `sessionFunctionName`.
 
 Optional config: `sessionMaxConcurrency` (default 20) — ceiling on simultaneous calls, and therefore on concurrent OpenAI Realtime sessions.
 
@@ -79,7 +78,7 @@ The stack creates the secret with placeholder values; nothing works until you se
 
 ```bash
 aws secretsmanager put-secret-value \
-  --secret-id $(pulumi stack output openaiSecretArn) \
+  --secret-id <openaiSecretArn output> \
   --secret-string '{"OPENAI_API_KEY":"sk-...","OPENAI_WEBHOOK_SECRET":"whsec_..."}'
 ```
 
@@ -104,19 +103,19 @@ Twilio Console → *Elastic SIP Trunking → Trunks → Create*:
 Edit `tenants/example.json` (one object per *called* number) and:
 
 ```bash
-TENANTS_TABLE=$(pulumi stack output tenantsTableName) npm run seed -- tenants/example.json
+TENANTS_TABLE=<tenantsTableName output> AWS_REGION=us-west-2 npm run seed -- tenants/example.json
 ```
 
 Call the number. The webhook Lambda logs every SIP header on each call
 (`"msg":"incoming call"`) — check that `to` resolved to your tenant's `phoneNumber`.
 With Twilio Elastic SIP Trunking the `To` header carries the OpenAI project id and the
-dialed number arrives in `Diversion`; `src/sip.ts` handles that. If another carrier puts it
+dialed number arrives in `Diversion`; `sip.ts` handles that. If another carrier puts it
 elsewhere, add the header name to `CALLED_HEADERS` there, or set `DEFAULT_TENANT_PHONE` on
 the webhook Lambda for single-tenant deployments.
 
 ## Tenant config
 
-See `TenantConfigSchema` in `src/types.ts`. Key fields:
+See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 
 | Field | Notes |
 |---|---|
@@ -164,10 +163,10 @@ Unknown numbers are rejected with SIP 404.
 ## Operating the session Lambda
 
 ```bash
-aws logs tail /aws/lambda/$(pulumi stack output sessionFunctionName) --follow
+aws logs tail /aws/lambda/wnkinc-voice-dev-session --follow
 ```
 
-Deploying new session code is `pulumi up`. Because in-flight calls live inside a Lambda
+Deploying new session code is `npm run deploy`. Because in-flight calls live inside a Lambda
 invocation, a deploy never interrupts them: running invocations finish on the old code,
 new calls get the new code.
 
@@ -175,7 +174,7 @@ new calls get the new code.
 
 Per tenant, opt-in via `crm: { type: "hubspot" }`. Credentials are a JSON secret
 `{"HUBSPOT_TOKEN":"pat-na1-..."}` at `wnkinc-voice-<stack>/crm/<tenantId>` (a HubSpot
-**Service Key** with contacts + companies read/write and owners read). `infra/index.ts` creates
+**Service Key** with contacts + companies read/write and owners read). `voice-stack.ts` creates
 the placeholder secret per tenant id listed there.
 
 - **`lead.recorded`** → contact upserted by phone, note with the lead, follow-up task due the
@@ -189,7 +188,7 @@ A second CRM is another implementation of `CrmAdapter` in a new file plus a `typ
 
 ## Adding a tool
 
-In `src/agent.ts`: add a zod args schema, a handler in `handlers`, and a `tool({...})` entry in
+In `packages/voice-session/src/agent.ts`: add a zod args schema, a handler in `handlers`, and a `tool({...})` entry in
 `TOOLS`; then list its name in a tenant's `tools`. The zod schema becomes the function's JSON
 schema; `CallContext` gives the handler the tenant, call id, caller number, store, event
 publisher and `requestHangup()`.
@@ -208,10 +207,10 @@ starts. The `notifier` Lambda is the v1 stand-in for that worker.
   concurrency limit is the hard ceiling.
 - There is no mid-call failover: if an invocation dies the call drops and the caller calls back.
   Undelivered jobs wait in SQS up to an hour.
-- IaC is Pulumi (TypeScript, `infra/index.ts`); all Lambdas are bundled by esbuild at
-  `pulumi up` time into `infra/.build/`.
-- Calls table rows expire after 90 days (TTL); tenants and leads are `protect`ed from `pulumi destroy`
-  (`pulumi config set retainData false` to change).
+- IaC is AWS CDK (TypeScript, `packages/infrastructure/`); Lambdas are bundled by
+  `NodejsFunction` (esbuild) at deploy time.
+- Calls table rows expire after 90 days (TTL). All tables use `RemovalPolicy.DESTROY` while this
+  is a learning stack; flip to `RETAIN` before real data.
 
 ## Roadmap
 
