@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import { CognitoStack } from '../lib/cognito-stack.js';
 import { GatewayStack } from '../lib/gateway-stack.js';
 import { IdentityStack } from '../lib/identity-stack.js';
+import { PolicyStack } from '../lib/policy-stack.js';
 import { RuntimeStack } from '../lib/runtime-stack.js';
 import { VoiceStack } from '../lib/voice-stack.js';
 
@@ -23,7 +24,7 @@ const voice = new VoiceStack(app, 'wnk-voice-dev', {
     ? {
         gatewayUrl,
         userPoolId: auth.userPool.userPoolId,
-        clientId: auth.machineClient.userPoolClientId,
+        clientId: auth.voiceClient.userPoolClientId,
         tokenUrl: auth.tokenUrl,
       }
     : undefined,
@@ -34,20 +35,29 @@ const identity = new IdentityStack(app, 'wnk-identity-dev', {
   hubspotSecretName: `${prefix}/crm/wnk`,
   googleOauthSecretName: `${prefix}/oauth/google`,
 });
+const policy = new PolicyStack(app, 'wnk-policy-dev', {
+  prefix,
+  env,
+  gatewayId: (app.node.tryGetContext('wnk:gatewayId') as string | undefined) ?? '',
+  adminClientId: auth.machineClient.userPoolClientId,
+  voiceClientId: auth.voiceClient.userPoolClientId,
+  emailClientId: auth.emailClient.userPoolClientId,
+});
 const gateway = new GatewayStack(app, 'wnk-gateway-dev', {
   prefix,
   env,
   userPool: auth.userPool,
-  machineClient: auth.machineClient,
+  allowedClients: [auth.machineClient, auth.voiceClient, auth.emailClient],
   hubspotProvider: identity.hubspotProvider,
   voiceToolsFn: voice.gatewayToolsFn,
+  policyEngineArn: policy.engine.attrPolicyEngineArn,
 });
 new RuntimeStack(app, 'wnk-runtime-dev', {
   prefix,
   env,
   gatewayUrl: gateway.gateway.gatewayUrl ?? '',
   cognitoUserPoolId: auth.userPool.userPoolId,
-  cognitoClientId: auth.machineClient.userPoolClientId,
+  cognitoClientId: auth.emailClient.userPoolClientId,
   cognitoTokenUrl: auth.tokenUrl,
   workloadName: identity.emailResponderIdentity.workloadIdentityName,
   googleProviderName: `${prefix.replace(/-/g, '_')}_google`,

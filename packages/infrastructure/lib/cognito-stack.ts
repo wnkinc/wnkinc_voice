@@ -15,6 +15,8 @@ export interface CognitoStackProps extends cdk.StackProps {
 export class CognitoStack extends cdk.Stack {
   readonly userPool: cognito.UserPool;
   readonly machineClient: cognito.UserPoolClient;
+  readonly voiceClient: cognito.UserPoolClient;
+  readonly emailClient: cognito.UserPoolClient;
   readonly tokenUrl: string;
 
   constructor(scope: Construct, id: string, props: CognitoStackProps) {
@@ -49,21 +51,28 @@ export class CognitoStack extends cdk.Stack {
       scopes: [invokeScope],
     });
 
-    // Machine-to-machine client: agents and test scripts exchange this client's
-    // credentials for a JWT the Gateway's authorizer accepts.
-    this.machineClient = this.userPool.addClient('Machine', {
-      userPoolClientName: `${prefix}-machine`,
-      generateSecret: true,
-      authFlows: {},
-      oAuth: {
-        flows: { clientCredentials: true },
-        scopes: [cognito.OAuthScope.resourceServer(resourceServer, invokeScope)],
-      },
-    });
+    // One app client per agent identity, so Policy can tell them apart by the
+    // JWT's client_id: machine is the all-tools admin/test identity; voice and
+    // email are least-privilege per-agent identities.
+    const m2mClient = (id: string, name: string) =>
+      this.userPool.addClient(id, {
+        userPoolClientName: `${prefix}-${name}`,
+        generateSecret: true,
+        authFlows: {},
+        oAuth: {
+          flows: { clientCredentials: true },
+          scopes: [cognito.OAuthScope.resourceServer(resourceServer, invokeScope)],
+        },
+      });
+    this.machineClient = m2mClient('Machine', 'machine');
+    this.voiceClient = m2mClient('VoiceAgent', 'voice-agent');
+    this.emailClient = m2mClient('EmailAgent', 'email-agent');
 
     this.tokenUrl = `${domain.baseUrl()}/oauth2/token`;
     new cdk.CfnOutput(this, 'userPoolId', { value: this.userPool.userPoolId });
     new cdk.CfnOutput(this, 'machineClientId', { value: this.machineClient.userPoolClientId });
+    new cdk.CfnOutput(this, 'voiceClientId', { value: this.voiceClient.userPoolClientId });
+    new cdk.CfnOutput(this, 'emailClientId', { value: this.emailClient.userPoolClientId });
     new cdk.CfnOutput(this, 'tokenUrl', { value: this.tokenUrl });
   }
 }

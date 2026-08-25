@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
@@ -12,10 +13,13 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export interface GatewayStackProps extends cdk.StackProps {
   readonly prefix: string;
   readonly userPool: cognito.IUserPool;
-  readonly machineClient: cognito.IUserPoolClient;
+  /** App clients whose JWTs the gateway accepts (machine, voice, email). */
+  readonly allowedClients: cognito.IUserPoolClient[];
   readonly hubspotProvider: agentcore.IApiKeyCredentialProvider;
   /** The voice stack's tools Lambda (record_lead / notify_owner). */
   readonly voiceToolsFn: lambda.IFunction;
+  /** Policy engine to enforce on every tool call (default deny once attached). */
+  readonly policyEngineArn?: string;
 }
 
 /**
@@ -28,16 +32,39 @@ export class GatewayStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: GatewayStackProps) {
     super(scope, id, props);
-    const { prefix, userPool, machineClient, hubspotProvider } = props;
+    const { prefix, userPool, hubspotProvider } = props;
 
     this.gateway = new agentcore.Gateway(this, 'Gateway', {
       gatewayName: `${prefix}-gateway`,
       description: 'WNK agent platform tool catalog',
       authorizerConfiguration: agentcore.GatewayAuthorizer.usingCognito({
         userPool,
-        allowedClients: [machineClient],
+        allowedClients: props.allowedClients,
       }),
     });
+
+    // Attach the Policy engine (no L2 support yet — escape hatch to the L1).
+    // The gateway's role evaluates policies against the engine at call time.
+    if (props.policyEngineArn) {
+      const cfnGateway = this.gateway.node.defaultChild as agentcore.CfnGateway;
+      cfnGateway.policyEngineConfiguration = { arn: props.policyEngineArn, mode: 'ENFORCE' };
+      const grant = this.gateway.role.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: [
+          'bedrock-agentcore:GetPolicyEngine',
+          'bedrock-agentcore:*Authorize*', // AuthorizeAction, PartiallyAuthorizeActions, ... (per-call evaluation)
+        ],
+        // gateway/* by pattern: the policy can't reference the gateway's own ARN
+        // attribute (the gateway depends on this policy — it would be a cycle).
+        resources: [
+          props.policyEngineArn,
+          `${props.policyEngineArn}/*`,
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:gateway/*`,
+        ],
+      }));
+      // The service validates GetPolicyEngine during the gateway update itself,
+      // so the role policy must land first.
+      if (grant.policyDependable) cfnGateway.node.addDependency(grant.policyDependable);
+    }
 
     // HubSpot CRM as MCP tools; auth is the API-key provider as a Bearer header.
     // NOTE: the CDK default prefix is 'Bearer ' (trailing space) but the service
