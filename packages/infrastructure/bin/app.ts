@@ -15,6 +15,7 @@ const identity = new IdentityStack(app, 'wnk-identity-dev', {
   prefix,
   env,
   hubspotSecretName: `${prefix}/crm/wnk`,
+  googleOauthSecretName: `${prefix}/oauth/google`,
 });
 new GatewayStack(app, 'wnk-gateway-dev', {
   prefix,
