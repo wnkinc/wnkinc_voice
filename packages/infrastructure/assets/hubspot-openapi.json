@@ -1,0 +1,119 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "HubSpot CRM (subset)",
+    "description": "The slice of HubSpot the WNK agents use: find, read, and create contacts, and attach notes.",
+    "version": "1.0.0"
+  },
+  "servers": [{ "url": "https://api.hubapi.com" }],
+  "paths": {
+    "/crm/v3/objects/contacts/search": {
+      "post": {
+        "operationId": "searchContacts",
+        "summary": "Search contacts by phone, email, or name",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": { "type": "string", "description": "Free-text search across contact fields (phone, email, name)" },
+                  "limit": { "type": "integer", "description": "Max results, default 10" }
+                },
+                "required": ["query"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Matching contacts",
+            "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } }
+          }
+        }
+      }
+    },
+    "/crm/v3/objects/contacts/{contactId}": {
+      "get": {
+        "operationId": "getContact",
+        "summary": "Read one contact by id",
+        "parameters": [
+          { "name": "contactId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "properties", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Comma-separated property names to return" }
+        ],
+        "responses": {
+          "200": {
+            "description": "The contact",
+            "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } }
+          }
+        }
+      }
+    },
+    "/crm/v3/objects/contacts": {
+      "post": {
+        "operationId": "createContact",
+        "summary": "Create a contact",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "properties": {
+                    "type": "object",
+                    "description": "Contact properties, e.g. firstname, lastname, phone, email",
+                    "additionalProperties": { "type": "string" }
+                  }
+                },
+                "required": ["properties"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created contact",
+            "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } }
+          }
+        }
+      }
+    },
+    "/crm/v3/objects/notes": {
+      "post": {
+        "operationId": "createNote",
+        "summary": "Create a note (associate to a contact via associations)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "properties": {
+                    "type": "object",
+                    "description": "Note properties: hs_note_body (the text), hs_timestamp (ISO date)",
+                    "additionalProperties": { "type": "string" }
+                  },
+                  "associations": {
+                    "type": "array",
+                    "description": "Associations, e.g. to the contact the note belongs to",
+                    "items": { "type": "object", "additionalProperties": true }
+                  }
+                },
+                "required": ["properties"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created note",
+            "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } }
+          }
+        }
+      }
+    }
+  }
+}
