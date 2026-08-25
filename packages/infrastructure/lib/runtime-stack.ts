@@ -39,27 +39,30 @@ export class RuntimeStack extends cdk.Stack {
     super(scope, id, props);
     const { prefix } = props;
 
-    // Bundle the agent at synth time, same pattern NodejsFunction uses for Lambdas.
-    const dist = path.resolve(here, '../.build/email-responder');
-    rmSync(dist, { recursive: true, force: true });
-    mkdirSync(dist, { recursive: true });
-    // Pin CJS interpretation of index.js regardless of any parent package.json.
-    writeFileSync(path.join(dist, 'package.json'), JSON.stringify({ type: 'commonjs' }));
-    // CJS + .js: the managed NODE_22 runtime requires a .js entrypoint, and CJS
-    // sidesteps any type:module ambiguity in how it launches the file.
-    buildSync({
-      entryPoints: [path.resolve(here, '../../email-responder/src/agent.ts')],
-      outfile: path.join(dist, 'index.js'),
-      bundle: true,
-      platform: 'node',
-      target: 'node22',
-      format: 'cjs',
-      sourcemap: false,
-      logLevel: 'warning',
-      // Deps use import.meta.url (undefined under CJS); shim it to this file's URL.
-      define: { 'import.meta.url': '__importMetaUrl' },
-      banner: { js: "const __importMetaUrl = require('node:url').pathToFileURL(__filename).href;" },
-    });
+    // Bundle an agent at synth time, same pattern NodejsFunction uses for
+    // Lambdas. CJS + .js: the managed NODE_22 runtime requires a .js entrypoint,
+    // and CJS sidesteps type:module ambiguity; the package.json pins that, and
+    // the banner shims import.meta.url (undefined under CJS) for deps.
+    const bundleAgent = (name: string): string => {
+      const dist = path.resolve(here, `../.build/${name}`);
+      rmSync(dist, { recursive: true, force: true });
+      mkdirSync(dist, { recursive: true });
+      writeFileSync(path.join(dist, 'package.json'), JSON.stringify({ type: 'commonjs' }));
+      buildSync({
+        entryPoints: [path.resolve(here, `../../${name}/src/agent.ts`)],
+        outfile: path.join(dist, 'index.js'),
+        bundle: true,
+        platform: 'node',
+        target: 'node22',
+        format: 'cjs',
+        sourcemap: false,
+        logLevel: 'warning',
+        define: { 'import.meta.url': '__importMetaUrl' },
+        banner: { js: "const __importMetaUrl = require('node:url').pathToFileURL(__filename).href;" },
+      });
+      return dist;
+    };
+    const dist = bundleAgent('email-responder');
 
     const emailAgent = new agentcore.Runtime(this, 'EmailResponder', {
       runtimeName: `${prefix.replace(/-/g, '_')}_email_responder`,
@@ -133,6 +136,39 @@ export class RuntimeStack extends cdk.Stack {
       targets: [new targets.LambdaFunction(triggerFn, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1) })],
     });
 
+    // ---- Back-office agent: Runtime + AgentCore Browser -----------------------
+
+    const browser = new agentcore.BrowserCustom(this, 'Browser', {
+      browserCustomName: `${prefix.replace(/-/g, '_')}_browser`,
+      description: 'Managed browser for back-office research tasks',
+      networkConfiguration: agentcore.BrowserNetworkConfiguration.usingPublicNetwork(),
+    });
+
+    const backOffice = new agentcore.Runtime(this, 'BackOffice', {
+      runtimeName: `${prefix.replace(/-/g, '_')}_back_office`,
+      description: 'Research tasks: drives an AgentCore Browser session and answers questions from pages',
+      agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromCodeAsset({
+        path: bundleAgent('back-office'),
+        runtime: agentcore.AgentCoreRuntime.NODE_22,
+        entrypoint: ['index.js'],
+      }),
+      environmentVariables: {
+        BROWSER_ID: browser.browserId,
+        OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
+      },
+    });
+    browser.grantUse(backOffice.role);
+    // grantUse only grants Start/Stop/UpdateBrowserStream — the automation-stream
+    // WebSocket needs ConnectBrowserAutomationStream, on both the browser ARN and
+    // its session subresources.
+    backOffice.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:ConnectBrowserAutomationStream', 'bedrock-agentcore:GetBrowserSession'],
+      resources: [browser.browserArn, `${browser.browserArn}/*`],
+    }));
+    props.openaiSecret.grantRead(backOffice.role);
+
     new cdk.CfnOutput(this, 'emailAgentRuntimeArn', { value: emailAgent.agentRuntimeArn });
+    new cdk.CfnOutput(this, 'backOfficeRuntimeArn', { value: backOffice.agentRuntimeArn });
+    new cdk.CfnOutput(this, 'browserId', { value: browser.browserId });
   }
 }
