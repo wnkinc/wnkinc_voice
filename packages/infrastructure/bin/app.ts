@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { CognitoStack } from '../lib/cognito-stack.js';
+import { ConsoleStack } from '../lib/console-stack.js';
 import { GatewayStack } from '../lib/gateway-stack.js';
 import { IdentityStack } from '../lib/identity-stack.js';
 import { MemoryStack } from '../lib/memory-stack.js';
@@ -67,5 +68,15 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   googleProviderName: `${prefix.replace(/-/g, '_')}_google`,
   openaiSecret: voice.openaiSecret,
   bus: voice.bus,
+  callerMemory,
+});
+
+new ConsoleStack(app, 'wnk-console-dev', {
+  prefix,
+  env,
+  userPool: auth.userPool,
+  authBaseUrl: auth.authBaseUrl,
+  callsTable: voice.callsTable,
+  leadsTable: voice.leadsTable,
   callerMemory,
 });

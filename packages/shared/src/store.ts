@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { env } from './config.js';
 import { TenantConfigSchema, type CallRecord, type CallStatus, type Lead, type TenantConfig, type TenantConfigInput, type ToolCallRecord, type TranscriptEntry } from './types.js';
 
@@ -22,6 +22,10 @@ export interface Store {
   appendTranscript(callId: string, entry: TranscriptEntry): Promise<void>;
   appendToolCall(callId: string, tc: ToolCallRecord): Promise<void>;
   createLead(lead: NewLead): Promise<Lead>;
+  /** Newest-first calls for a tenant (byTenant GSI). */
+  listCalls(tenantId: string, limit?: number): Promise<CallRecord[]>;
+  /** Newest-first leads for a tenant. */
+  listLeads(tenantId: string, limit?: number): Promise<Lead[]>;
 }
 
 function buildLead(input: NewLead): Lead {
@@ -104,6 +108,27 @@ export function dynamoStore(): Store {
       await db.send(new PutCommand({ TableName: leads(), Item: lead }));
       return lead;
     },
+    async listCalls(tenantId, limit = 50) {
+      const res = await db.send(new QueryCommand({
+        TableName: calls(),
+        IndexName: 'byTenant',
+        KeyConditionExpression: 'tenantId = :t',
+        ExpressionAttributeValues: { ':t': tenantId },
+        ScanIndexForward: false,
+        Limit: limit,
+      }));
+      return (res.Items ?? []) as CallRecord[];
+    },
+    async listLeads(tenantId, limit = 50) {
+      const res = await db.send(new QueryCommand({
+        TableName: leads(),
+        KeyConditionExpression: 'tenantId = :t',
+        ExpressionAttributeValues: { ':t': tenantId },
+        ScanIndexForward: false,
+        Limit: limit,
+      }));
+      return (res.Items ?? []) as Lead[];
+    },
   };
 }
 
@@ -139,6 +164,13 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
     async setCallStatus(id, status, extra = {}) { Object.assign(must(id), extra, { status }); },
     async appendTranscript(id, e) { (must(id).transcript ??= []).push(e); },
     async appendToolCall(id, tc) { (must(id).toolCalls ??= []).push(tc); },
+    async listCalls(tenantId, limit = 50) {
+      return [...calls.values()].filter((c) => c.tenantId === tenantId)
+        .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? '')).slice(0, limit);
+    },
+    async listLeads(tenantId, limit = 50) {
+      return leads.filter((l) => l.tenantId === tenantId).slice().reverse().slice(0, limit);
+    },
     async createLead(input) {
       const lead = buildLead(input);
       leads.push(lead);
