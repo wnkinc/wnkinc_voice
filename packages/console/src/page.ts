@@ -35,19 +35,8 @@ export const PAGE_HTML = `<!doctype html>
 <main id="main" hidden></main>
 <script>
 const DOMAIN='__COGNITO_DOMAIN__', CLIENT='__CLIENT_ID__', HERE=location.origin+'/';
-const b64u=(buf)=>btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
-async function login(){
-  const v=b64u(crypto.getRandomValues(new Uint8Array(32)));
-  sessionStorage.setItem('pkce',v);
-  const c=b64u(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v)));
-  location=DOMAIN+'/oauth2/authorize?response_type=code&client_id='+CLIENT+'&redirect_uri='+encodeURIComponent(HERE)+'&scope=openid+email&code_challenge_method=S256&code_challenge='+c;
-}
-async function exchange(code){
-  const r=await fetch(DOMAIN+'/oauth2/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},
-    body:new URLSearchParams({grant_type:'authorization_code',client_id:CLIENT,code,redirect_uri:HERE,code_verifier:sessionStorage.getItem('pkce')})});
-  if(!r.ok){alert('login failed');return;}
-  sessionStorage.setItem('idt',(await r.json()).id_token);
-  history.replaceState({},'',HERE);
+function login(){
+  location=DOMAIN+'/oauth2/authorize?response_type=code&client_id='+CLIENT+'&redirect_uri='+encodeURIComponent(HERE+'auth/callback')+'&scope=openid+email';
 }
 const api=async(p)=>{const r=await fetch('/api'+p,{headers:{authorization:'Bearer '+sessionStorage.getItem('idt')}});
   if(r.status===401){sessionStorage.removeItem('idt');show();throw new Error('expired');} return r.json();};
@@ -86,8 +75,6 @@ const tabs={calls:tabCalls,leads:tabLeads,memory:tabMemory};
 document.getElementById('nav').onclick=(e)=>{const t=e.target.dataset?.tab;if(!t)return;
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));tabs[t]();};
 async function show(){
-  const code=new URLSearchParams(location.search).get('code');
-  if(code)await exchange(code);
   const signedIn=!!sessionStorage.getItem('idt');
   document.getElementById('login').hidden=signedIn;
   document.getElementById('nav').hidden=!signedIn;

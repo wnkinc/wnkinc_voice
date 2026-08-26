@@ -73,6 +73,27 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     return { statusCode: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body: html };
   }
 
+  // Server-side OAuth code exchange (the Cognito token endpoint is unreliable
+  // about CORS for browser fetches). Hands the ID token to the page via a tiny
+  // bootstrap script, then returns to /.
+  if (path === '/auth/callback') {
+    const code = event.queryStringParameters?.code;
+    if (!code) return json(400, { error: 'missing code' });
+    const redirectUri = `https://${event.headers.host}/auth/callback`;
+    const res = await fetch(`${env('COGNITO_DOMAIN')}/oauth2/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'authorization_code', client_id: await clientId(), code, redirect_uri: redirectUri }),
+    });
+    if (!res.ok) {
+      const detail = await res.text();
+      return { statusCode: 502, headers: { 'content-type': 'text/plain' }, body: `token exchange failed: ${res.status} ${detail.slice(0, 300)}` };
+    }
+    const tokens = (await res.json()) as { id_token: string };
+    const body = `<!doctype html><script>sessionStorage.setItem('idt',${JSON.stringify(tokens.id_token)});location.replace('/');</script>`;
+    return { statusCode: 200, headers: { 'content-type': 'text/html' }, body };
+  }
+
   if (!path.startsWith('/api/')) return json(404, { error: 'not found' });
   const who = await tenantFromAuth(event);
   if (!who) return json(401, { error: 'sign in required' });

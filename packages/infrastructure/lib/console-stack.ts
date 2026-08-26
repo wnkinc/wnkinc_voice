@@ -71,7 +71,7 @@ export class ConsoleStack extends cdk.Stack {
       oAuth: {
         flows: { authorizationCodeGrant: true },
         scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL],
-        callbackUrls: [url.url],
+        callbackUrls: [`${url.url}auth/callback`],
       },
       preventUserExistenceErrors: true,
     });
