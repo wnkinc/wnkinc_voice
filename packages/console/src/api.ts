@@ -56,9 +56,13 @@ async function tenantFromAuth(event: APIGatewayProxyEventV2): Promise<{ tenantId
   try {
     const claims = await (await verifier()).verify(token);
     const tenantId = claims['custom:businessId'];
-    if (typeof tenantId !== 'string' || !tenantId) return undefined;
+    if (typeof tenantId !== 'string' || !tenantId) {
+      console.error(JSON.stringify({ msg: 'token verified but no businessId claim', claims: Object.keys(claims) }));
+      return undefined;
+    }
     return { tenantId, email: typeof claims.email === 'string' ? claims.email : undefined };
-  } catch {
+  } catch (err) {
+    console.error(JSON.stringify({ msg: 'token verification failed', err: String(err) }));
     return undefined;
   }
 }

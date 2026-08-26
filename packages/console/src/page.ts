@@ -13,7 +13,7 @@ export const PAGE_HTML = `<!doctype html>
   * { box-sizing:border-box; } body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--ink); }
   header { display:flex; align-items:center; gap:16px; padding:14px 22px; border-bottom:2px solid var(--ink); }
   header h1 { font-size:17px; margin:0; } header .who { color:var(--soft); font-size:13px; margin-left:auto; }
-  nav { display:flex; gap:6px; padding:12px 22px 0; }
+  nav { display:flex; gap:6px; padding:12px 22px 0; } nav[hidden] { display:none; }
   nav button { font:inherit; padding:6px 14px; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:6px 6px 0 0; cursor:pointer; }
   nav button.on { border-color:var(--accent); color:var(--accent); font-weight:600; }
   main { padding:16px 22px 60px; max-width:960px; }
@@ -36,7 +36,7 @@ export const PAGE_HTML = `<!doctype html>
 <script>
 const DOMAIN='__COGNITO_DOMAIN__', CLIENT='__CLIENT_ID__', HERE=location.origin+'/';
 function login(){
-  location=DOMAIN+'/oauth2/authorize?response_type=code&client_id='+CLIENT+'&redirect_uri='+encodeURIComponent(HERE+'auth/callback')+'&scope=openid+email';
+  location=DOMAIN+'/oauth2/authorize?response_type=code&client_id='+CLIENT+'&redirect_uri='+encodeURIComponent(HERE+'auth/callback')+'&scope=openid+email+profile';
 }
 const api=async(p)=>{const r=await fetch('/api'+p,{headers:{authorization:'Bearer '+sessionStorage.getItem('idt')}});
   if(r.status===401){sessionStorage.removeItem('idt');show();throw new Error('expired');} return r.json();};
@@ -68,7 +68,7 @@ async function tabMemory(){
   main.querySelectorAll('button.link').forEach(b=>b.onclick=async()=>{
     const m=await api('/memories?phone='+encodeURIComponent(b.dataset.p));
     document.getElementById('mem').replaceChildren(el('<div class="detail"><p class="muted">'+esc(m.phone)+'</p>'+
-      (m.records.length?m.records.map(r=>'<p class="t">• '+esc(r)+'</p>').join(''):'<p class="muted">nothing yet</p>')+'</div>'));
+      (m.records.length?m.records.map(r=>{try{const j=JSON.parse(r);r=(j.preference||r)+(j.context?' — '+j.context:'');}catch{}return '<p class="t">• '+esc(r)+'</p>';}).join(''):'<p class="muted">nothing yet</p>')+'</div>'));
   });
 }
 const tabs={calls:tabCalls,leads:tabLeads,memory:tabMemory};

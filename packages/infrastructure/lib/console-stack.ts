@@ -70,7 +70,7 @@ export class ConsoleStack extends cdk.Stack {
       authFlows: { adminUserPassword: true },
       oAuth: {
         flows: { authorizationCodeGrant: true },
-        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL],
+        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE], // PROFILE carries custom attrs (businessId) into the ID token
         callbackUrls: [`${url.url}auth/callback`],
       },
       preventUserExistenceErrors: true,
