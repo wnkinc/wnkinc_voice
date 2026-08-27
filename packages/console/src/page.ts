@@ -30,7 +30,7 @@ export const PAGE_HTML = `<!doctype html>
 <header><h1>WNK Console</h1><span class="who" id="who"></span></header>
 <div id="login" hidden><p>Read-only console for your business's agents.</p><button onclick="login()">Sign in</button></div>
 <nav id="nav" hidden>
-  <button data-tab="calls" class="on">Calls</button><button data-tab="leads">Leads</button><button data-tab="memory">Memory</button>
+  <button data-tab="calls" class="on">Calls</button><button data-tab="leads">Leads</button><button data-tab="memory">Memory</button><button data-tab="business">Business</button>
 </nav>
 <main id="main" hidden></main>
 <script>
@@ -71,7 +71,22 @@ async function tabMemory(){
       (m.records.length?m.records.map(r=>{try{const j=JSON.parse(r);r=(j.preference||r)+(j.context?' — '+j.context:'');}catch{}return '<p class="t">• '+esc(r)+'</p>';}).join(''):'<p class="muted">nothing yet</p>')+'</div>'));
   });
 }
-const tabs={calls:tabCalls,leads:tabLeads,memory:tabMemory};
+async function tabBusiness(){
+  const {config:c,prompt}=await api('/tenant');
+  const row=(k,v)=>'<tr><td>'+esc(k)+'</td><td>'+esc(v)+'</td></tr>';
+  const groups=[
+    ['Identity',[['phoneNumber (routing key)',c.phoneNumber],['businessName',c.businessName],['agentName',c.agentName],['greeting',c.greeting||'(default)'],['active',c.active]]],
+    ['Knowledge (fed into prompt)',[['description',c.description||'—'],['services',(c.services||[]).join(', ')],['hours',c.hours||'—'],['timezone',c.timezone]]],
+    ['Behavior',[['extraInstructions',c.extraInstructions||'—'],['tools',(c.tools||[]).join(', ')],['maxCallSeconds',c.maxCallSeconds+' ('+Math.round(c.maxCallSeconds/60)+' min)']]],
+    ['Voice & model',[['model',c.model],['voice',c.voice]]],
+    ['Integrations',[['notifications.email',c.notifications?.email||'(none — owner gets no email)'],['notifications.sms',c.notifications?.sms||'(none)'],['crm',c.crm?.type||'(none)']]],
+  ];
+  main.innerHTML='<p class="muted">Every per-business lever, live from the tenants table. Change via tenants/'+esc(c.tenantId)+'.json + npm run seed.</p>'+
+    groups.map(([g,rows])=>'<h3 style="margin:18px 0 4px;font-size:15px">'+esc(g)+'</h3><table>'+rows.map(r=>row(r[0],r[1])).join('')+'</table>').join('')+
+    '<h3 style="margin:22px 0 4px;font-size:15px">The prompt these levers produce</h3><p class="muted">Exactly what the voice agent is told at call start (before caller memory / caller ID are appended):</p>'+
+    '<pre style="background:var(--card);border:1px solid var(--line);border-radius:6px;padding:14px;white-space:pre-wrap;font-size:12.5px;overflow-x:auto">'+esc(prompt)+'</pre>';
+}
+const tabs={calls:tabCalls,leads:tabLeads,memory:tabMemory,business:tabBusiness};
 document.getElementById('nav').onclick=(e)=>{const t=e.target.dataset?.tab;if(!t)return;
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));tabs[t]();};
 async function show(){

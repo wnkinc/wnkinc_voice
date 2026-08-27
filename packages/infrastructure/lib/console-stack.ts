@@ -17,6 +17,7 @@ export interface ConsoleStackProps extends cdk.StackProps {
   readonly userPool: cognito.IUserPool;
   /** Cognito hosted-UI base URL (domain.baseUrl()). */
   readonly authBaseUrl: string;
+  readonly tenantsTable: dynamodb.ITable;
   readonly callsTable: dynamodb.ITable;
   readonly leadsTable: dynamodb.ITable;
   readonly callerMemory: { readonly memoryId: string; readonly memoryArn: string };
@@ -42,6 +43,7 @@ export class ConsoleStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(15),
       bundling: { format: OutputFormat.ESM, target: 'node22', banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" },
       environment: {
+        TENANTS_TABLE: props.tenantsTable.tableName,
         CALLS_TABLE: props.callsTable.tableName,
         LEADS_TABLE: props.leadsTable.tableName,
         MEMORY_ID: props.callerMemory.memoryId,
@@ -49,6 +51,7 @@ export class ConsoleStack extends cdk.Stack {
         COGNITO_DOMAIN: props.authBaseUrl,
       },
     });
+    props.tenantsTable.grantReadData(fn);
     props.callsTable.grantReadData(fn);
     props.leadsTable.grantReadData(fn);
     fn.addToRolePolicy(new iam.PolicyStatement({

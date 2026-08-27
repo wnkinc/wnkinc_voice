@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { env } from './config.js';
 import { TenantConfigSchema, type CallRecord, type CallStatus, type Lead, type TenantConfig, type TenantConfigInput, type ToolCallRecord, type TranscriptEntry } from './types.js';
 
@@ -22,6 +22,8 @@ export interface Store {
   appendTranscript(callId: string, entry: TranscriptEntry): Promise<void>;
   appendToolCall(callId: string, tc: ToolCallRecord): Promise<void>;
   createLead(lead: NewLead): Promise<Lead>;
+  /** Tenant by id (table is keyed by phone; scan — tenant tables are tiny). */
+  findTenantById(tenantId: string): Promise<TenantConfig | undefined>;
   /** Newest-first calls for a tenant (byTenant GSI). */
   listCalls(tenantId: string, limit?: number): Promise<CallRecord[]>;
   /** Newest-first leads for a tenant. */
@@ -108,6 +110,15 @@ export function dynamoStore(): Store {
       await db.send(new PutCommand({ TableName: leads(), Item: lead }));
       return lead;
     },
+    async findTenantById(tenantId) {
+      const res = await db.send(new ScanCommand({
+        TableName: tenants(),
+        FilterExpression: 'tenantId = :t',
+        ExpressionAttributeValues: { ':t': tenantId },
+      }));
+      const item = res.Items?.[0];
+      return item ? TenantConfigSchema.parse(item) : undefined;
+    },
     async listCalls(tenantId, limit = 50) {
       const res = await db.send(new QueryCommand({
         TableName: calls(),
@@ -164,6 +175,9 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
     async setCallStatus(id, status, extra = {}) { Object.assign(must(id), extra, { status }); },
     async appendTranscript(id, e) { (must(id).transcript ??= []).push(e); },
     async appendToolCall(id, tc) { (must(id).toolCalls ??= []).push(tc); },
+    async findTenantById(tenantId) {
+      return [...tenantMap.values()].find((t) => t.tenantId === tenantId);
+    },
     async listCalls(tenantId, limit = 50) {
       return [...calls.values()].filter((c) => c.tenantId === tenantId)
         .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? '')).slice(0, limit);

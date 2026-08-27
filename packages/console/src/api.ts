@@ -12,7 +12,7 @@
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { callerMemory, dynamoStore } from '@wnk/shared';
+import { buildInstructions, callerMemory, dynamoStore } from '@wnk/shared';
 import { PAGE_HTML } from './page.js';
 
 const env = (name: string): string => {
@@ -116,6 +116,11 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     return json(200, call);
   }
   if (path === '/api/leads') return json(200, await store.listLeads(tenantId, 50));
+  if (path === '/api/tenant') {
+    const config = await store.findTenantById(tenantId);
+    if (!config) return json(404, { error: 'no tenant config' });
+    return json(200, { config, prompt: buildInstructions(config) });
+  }
   if (path === '/api/memories') {
     const phone = event.queryStringParameters?.phone;
     if (!phone) return json(400, { error: 'phone required' });

@@ -76,6 +76,7 @@ new ConsoleStack(app, 'wnk-console-dev', {
   env,
   userPool: auth.userPool,
   authBaseUrl: auth.authBaseUrl,
+  tenantsTable: voice.tenantsTable,
   callsTable: voice.callsTable,
   leadsTable: voice.leadsTable,
   callerMemory,

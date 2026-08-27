@@ -5,3 +5,4 @@ export * from './config.js';
 export * from './phone.js';
 export * from './gateway-client.js';
 export * from './memory.js';
+export * from './prompt.js';
