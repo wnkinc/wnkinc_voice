@@ -3,6 +3,7 @@ import { buildAgent, greeting, sessionOptions, type CallContext } from './agent.
 import { createOpenAI, type Logger, type OpenAISecrets } from '@wnk/shared';
 import type { EventPublisher } from '@wnk/shared';
 import type { Store } from '@wnk/shared';
+import { recordUsage } from '@wnk/shared';
 import type { CallerMemory, CallStatus, SessionJob, TranscriptEntry } from '@wnk/shared';
 
 export interface CallDeps {
@@ -193,6 +194,9 @@ export async function runCall(job: SessionJob, deps: CallDeps, opts: { deadlineM
     await deps.events.publish({ type: 'call.ended', tenantId: tenant.tenantId, tenantPhoneNumber: tenant.phoneNumber, callId, callerPhone: job.from, status, durationSeconds, transcript });
   } catch (err) {
     log.error('failed to finalize call', { err });
+  }
+  if (status === 'completed' && durationSeconds > 0) {
+    await recordUsage(tenant.tenantId, 'voice_minutes', durationSeconds / 60, callId);
   }
   if (deps.memory && job.from && status === 'completed' && transcript.length > 0) {
     await deps.memory.recordCall(tenant.tenantId, job.from, callId, transcript)

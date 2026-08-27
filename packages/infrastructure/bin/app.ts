@@ -68,6 +68,7 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   googleProviderName: `${prefix.replace(/-/g, '_')}_google`,
   openaiSecret: voice.openaiSecret,
   bus: voice.bus,
+  usageTable: voice.usageTable,
   callerMemory,
 });
 
@@ -79,5 +80,6 @@ new ConsoleStack(app, 'wnk-console-dev', {
   tenantsTable: voice.tenantsTable,
   callsTable: voice.callsTable,
   leadsTable: voice.leadsTable,
+  usageTable: voice.usageTable,
   callerMemory,
 });

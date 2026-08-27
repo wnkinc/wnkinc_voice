@@ -10,6 +10,7 @@
  */
 import { BedrockAgentCoreClient, StartBrowserSessionCommand, StopBrowserSessionCommand } from '@aws-sdk/client-bedrock-agentcore';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { recordUsage } from '@wnk/shared';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { HttpRequest } from '@smithy/protocol-http';
 import { SignatureV4 } from '@smithy/signature-v4';
@@ -115,6 +116,8 @@ async function browsePage(url: string): Promise<{ title: string; text: string }>
   }
 }
 
+let answerTokens = 0; // set by answer() per invocation; read by the meter
+
 // ---- Answering --------------------------------------------------------------
 
 async function answer(question: string, page: { title: string; text: string }, url: string): Promise<string> {
@@ -134,21 +137,26 @@ async function answer(question: string, page: { title: string; text: string }, u
     }),
   });
   if (!res.ok) throw new Error(`openai ${res.status}`);
-  const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+  const data = (await res.json()) as { choices: Array<{ message: { content: string } }>; usage?: { total_tokens?: number } };
+  answerTokens = data.usage?.total_tokens ?? 0;
   return data.choices[0]?.message.content ?? '';
 }
 
 // ---- Runtime HTTP contract ---------------------------------------------------
 
-interface Task { question?: string; url?: string }
+interface Task { question?: string; url?: string; tenantId?: string }
 
 async function processTask(task: Task): Promise<{ ok: boolean; answer: string; title: string; url: string }> {
   if (!task.question || !task.url) throw new Error('payload needs { question, url }');
   console.log(JSON.stringify({ msg: 'task received', question: task.question, url: task.url }));
   const page = await browsePage(task.url);
   console.log(JSON.stringify({ msg: 'page fetched', title: page.title, chars: page.text.length }));
+  answerTokens = 0;
   const result = await answer(task.question, page, task.url);
   console.log(JSON.stringify({ msg: 'answered' }));
+  const tenantId = task.tenantId ?? 'wnk';
+  await recordUsage(tenantId, 'browser_tasks', 1, task.url);
+  if (answerTokens > 0) await recordUsage(tenantId, 'llm_tokens', answerTokens, task.url);
   return { ok: true, answer: result, title: page.title, url: task.url };
 }
 

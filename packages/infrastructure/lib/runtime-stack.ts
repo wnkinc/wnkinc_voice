@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -25,6 +26,7 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly googleProviderName: string;
   readonly openaiSecret: secretsmanager.ISecret;
   readonly bus: events.IEventBus;
+  readonly usageTable: dynamodb.ITable;
   /** Caller memory: the email agent recalls facts about the lead's caller. */
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
 }
@@ -81,6 +83,7 @@ export class RuntimeStack extends cdk.Stack {
         OWNER_USER_ID: 'wesley',
         GOOGLE_PROVIDER_NAME: props.googleProviderName,
         OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
+        USAGE_TABLE: props.usageTable.tableName,
         ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
       },
     });
@@ -102,6 +105,7 @@ export class RuntimeStack extends cdk.Stack {
       resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:bedrock-agentcore-identity!*`],
     }));
     props.openaiSecret.grantRead(emailAgent.role);
+    props.usageTable.grantWriteData(emailAgent.role);
     if (props.callerMemory) {
       emailAgent.role.addToPrincipalPolicy(new iam.PolicyStatement({
         actions: MEMORY_USE_ACTIONS,
@@ -155,9 +159,11 @@ export class RuntimeStack extends cdk.Stack {
       environmentVariables: {
         BROWSER_ID: browser.browserId,
         OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
+        USAGE_TABLE: props.usageTable.tableName,
       },
     });
     browser.grantUse(backOffice.role);
+    props.usageTable.grantWriteData(backOffice.role);
     // grantUse only grants Start/Stop/UpdateBrowserStream — the automation-stream
     // WebSocket needs ConnectBrowserAutomationStream, on both the browser ARN and
     // its session subresources.

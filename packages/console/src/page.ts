@@ -30,7 +30,7 @@ export const PAGE_HTML = `<!doctype html>
 <header><h1>WNK Console</h1><span class="who" id="who"></span></header>
 <div id="login" hidden><p>Read-only console for your business's agents.</p><button onclick="login()">Sign in</button></div>
 <nav id="nav" hidden>
-  <button data-tab="calls" class="on">Calls</button><button data-tab="leads">Leads</button><button data-tab="memory">Memory</button><button data-tab="business">Business</button>
+  <button data-tab="calls" class="on">Calls</button><button data-tab="leads">Leads</button><button data-tab="memory">Memory</button><button data-tab="business">Business</button><button data-tab="costs">Costs</button>
 </nav>
 <main id="main" hidden></main>
 <script>
@@ -86,7 +86,20 @@ async function tabBusiness(){
     '<h3 style="margin:22px 0 4px;font-size:15px">The prompt these levers produce</h3><p class="muted">Exactly what the voice agent is told at call start (before caller memory / caller ID are appended):</p>'+
     '<pre style="background:var(--card);border:1px solid var(--line);border-radius:6px;padding:14px;white-space:pre-wrap;font-size:12.5px;overflow-x:auto">'+esc(prompt)+'</pre>';
 }
-const tabs={calls:tabCalls,leads:tabLeads,memory:tabMemory,business:tabBusiness};
+async function tabCosts(month){
+  month=month||new Date().toISOString().slice(0,7);
+  const c=await api('/costs?month='+month);
+  const prev=(m=>{const[y,mo]=m.split('-').map(Number);const d=new Date(Date.UTC(y,mo-2,1));return d.toISOString().slice(0,7);})(month);
+  main.innerHTML='<p class="muted">Estimated platform cost for <b>'+esc(month)+'</b> — metered usage × the rate card. Reconcile against Twilio/OpenAI/AWS invoices monthly. '+
+    '<button class="link" id="prevmo">← '+esc(prev)+'</button></p>'+
+    '<table><tr><th>Meter</th><th>Units</th><th>Rate</th><th>Est. cost</th><th>What it is</th></tr>'+
+    c.lines.map(l=>'<tr><td>'+esc(l.meter)+'</td><td>'+l.units+'</td><td>$'+l.rate+'</td><td>$'+l.cost.toFixed(2)+'</td><td class="muted">'+esc(l.note)+'</td></tr>').join('')+
+    (c.overhead?'<tr><td>shared AWS overhead</td><td>—</td><td>—</td><td>$'+c.overhead.toFixed(2)+'</td><td class="muted">Lambda, DynamoDB, Gateway, Memory, logs (flat)</td></tr>':'')+
+    '<tr><td><b>Total</b></td><td></td><td></td><td><b>$'+c.total.toFixed(2)+'</b></td><td></td></tr></table>'+
+    (c.lines.length?'':'<p class="muted">No usage recorded this month yet.</p>');
+  document.getElementById('prevmo').onclick=()=>tabCosts(prev);
+}
+const tabs={calls:tabCalls,leads:tabLeads,memory:tabMemory,business:tabBusiness,costs:()=>tabCosts()};
 document.getElementById('nav').onclick=(e)=>{const t=e.target.dataset?.tab;if(!t)return;
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));tabs[t]();};
 async function show(){

@@ -55,6 +55,8 @@ export class VoiceStack extends cdk.Stack {
   readonly callsTable: dynamodb.Table;
   readonly leadsTable: dynamodb.Table;
   readonly bus: events.EventBus;
+  /** Usage metering records: (tenantId, timestamp#meter) -> units. */
+  readonly usageTable: dynamodb.Table;
   readonly openaiSecret: secretsmanager.Secret;
   /** Gateway Lambda target: record_lead + notify_owner as platform tools. */
   readonly gatewayToolsFn: NodejsFunction;
@@ -107,6 +109,13 @@ export class VoiceStack extends cdk.Stack {
     });
 
     this.leadsTable = new dynamodb.Table(this, 'Leads', {
+      partitionKey: { name: 'tenantId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    this.usageTable = new dynamodb.Table(this, 'Usage', {
       partitionKey: { name: 'tenantId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -197,6 +206,8 @@ export class VoiceStack extends cdk.Stack {
         resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${props.gateway.userPoolId}`],
       }));
     }
+    sessionFn.addEnvironment('USAGE_TABLE', this.usageTable.tableName);
+    this.usageTable.grantWriteData(sessionFn);
     if (props.callerMemory) {
       for (const f of [webhookFn, sessionFn]) {
         f.addEnvironment('MEMORY_ID', props.callerMemory.memoryId);

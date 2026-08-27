@@ -16,7 +16,7 @@ import {
 } from '@aws-sdk/client-bedrock-agentcore';
 import { CognitoIdentityProviderClient, DescribeUserPoolClientCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { callerMemory } from '@wnk/shared';
+import { callerMemory, recordUsage } from '@wnk/shared';
 import * as http from 'node:http';
 
 async function callerMemoryRecall(tenantId: string, phone: string): Promise<string[]> {
@@ -89,7 +89,10 @@ async function googleAccessToken(): Promise<string> {
 
 // ---- Drafting ---------------------------------------------------------------
 
+let draftTokens = 0; // set by draftEmail per invocation; read by the meter
+
 async function draftEmail(lead: NonNullable<LeadEvent['lead']>, crmContext: string): Promise<{ subject: string; body: string }> {
+  draftTokens = 0;
   const fallback = {
     subject: `New lead: ${lead.callerName ?? 'unknown caller'} — ${lead.reason?.slice(0, 60) ?? 'phone inquiry'}`,
     body: [
@@ -121,7 +124,8 @@ async function draftEmail(lead: NonNullable<LeadEvent['lead']>, crmContext: stri
       }),
     });
     if (!res.ok) throw new Error(`openai ${res.status}`);
-    const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+    const data = (await res.json()) as { choices: Array<{ message: { content: string } }>; usage?: { total_tokens?: number } };
+    draftTokens = data.usage?.total_tokens ?? 0;
     const parsed = JSON.parse(data.choices[0]?.message.content ?? '{}') as { subject?: string; body?: string };
     if (parsed.subject && parsed.body) return { subject: parsed.subject, body: parsed.body };
     return fallback;
@@ -180,6 +184,9 @@ async function processLead(event: LeadEvent): Promise<{ ok: boolean; sentTo: str
   const googleToken = await googleAccessToken();
   const sentTo = await sendAsOwner(googleToken, draft.subject, draft.body);
   console.log(JSON.stringify({ msg: 'email sent', sentTo, subject: draft.subject }));
+  const tenantId = event.tenantId ?? 'wnk';
+  await recordUsage(tenantId, 'emails_sent', 1, event.callId);
+  if (draftTokens > 0) await recordUsage(tenantId, 'llm_tokens', draftTokens, event.callId);
   return { ok: true, sentTo, subject: draft.subject };
 }
 

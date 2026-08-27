@@ -12,7 +12,7 @@
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { buildInstructions, callerMemory, dynamoStore } from '@wnk/shared';
+import { buildInstructions, callerMemory, computeCosts, dynamoStore, listUsage } from '@wnk/shared';
 import { PAGE_HTML } from './page.js';
 
 const env = (name: string): string => {
@@ -120,6 +120,11 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     const config = await store.findTenantById(tenantId);
     if (!config) return json(404, { error: 'no tenant config' });
     return json(200, { config, prompt: buildInstructions(config) });
+  }
+  if (path === '/api/costs') {
+    const month = event.queryStringParameters?.month ?? new Date().toISOString().slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) return json(400, { error: 'month must be YYYY-MM' });
+    return json(200, computeCosts(month, await listUsage(tenantId, month)));
   }
   if (path === '/api/memories') {
     const phone = event.queryStringParameters?.phone;

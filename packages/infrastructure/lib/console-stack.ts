@@ -20,6 +20,7 @@ export interface ConsoleStackProps extends cdk.StackProps {
   readonly tenantsTable: dynamodb.ITable;
   readonly callsTable: dynamodb.ITable;
   readonly leadsTable: dynamodb.ITable;
+  readonly usageTable: dynamodb.ITable;
   readonly callerMemory: { readonly memoryId: string; readonly memoryArn: string };
 }
 
@@ -46,6 +47,7 @@ export class ConsoleStack extends cdk.Stack {
         TENANTS_TABLE: props.tenantsTable.tableName,
         CALLS_TABLE: props.callsTable.tableName,
         LEADS_TABLE: props.leadsTable.tableName,
+        USAGE_TABLE: props.usageTable.tableName,
         MEMORY_ID: props.callerMemory.memoryId,
         COGNITO_USER_POOL_ID: props.userPool.userPoolId,
         COGNITO_DOMAIN: props.authBaseUrl,
@@ -54,6 +56,7 @@ export class ConsoleStack extends cdk.Stack {
     props.tenantsTable.grantReadData(fn);
     props.callsTable.grantReadData(fn);
     props.leadsTable.grantReadData(fn);
+    props.usageTable.grantReadData(fn);
     fn.addToRolePolicy(new iam.PolicyStatement({
       actions: MEMORY_USE_ACTIONS,
       resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],

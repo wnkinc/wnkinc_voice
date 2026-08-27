@@ -6,3 +6,5 @@ export * from './phone.js';
 export * from './gateway-client.js';
 export * from './memory.js';
 export * from './prompt.js';
+export * from './rates.js';
+export * from './usage.js';
