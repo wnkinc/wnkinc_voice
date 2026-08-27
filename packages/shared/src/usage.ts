@@ -16,6 +16,8 @@ export interface UsageRecord {
   sk: string;
   meter: Meter;
   units: number;
+  /** Rate snapshotted at write time, so history survives rate-card changes. */
+  rate?: number;
   /** What produced it (callId, message id, task id) — for spot-checking. */
   ref?: string;
 }
@@ -31,7 +33,14 @@ export async function recordUsage(tenantId: string, meter: Meter, units: number,
   const t = table();
   if (!t || !(units > 0)) return;
   db ??= DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
-  const record: UsageRecord = { tenantId, sk: `${new Date().toISOString()}#${meter}#${randomUUID()}`, meter, units, ref };
+  const record: UsageRecord = {
+    tenantId,
+    sk: `${new Date().toISOString()}#${meter}#${randomUUID()}`,
+    meter,
+    units,
+    rate: RATES.meters[meter]?.rate, // snapshot: cost history stays a fact when the card changes
+    ref,
+  };
   await db.send(new PutCommand({ TableName: t, Item: record })).catch((err) => {
     console.warn(JSON.stringify({ msg: 'usage record failed (ignored)', meter, err: String(err) }));
   });
@@ -71,15 +80,28 @@ export interface CostSummary {
   total: number;
 }
 
-/** Pure: aggregate records per meter and price them with the rate card. */
+/**
+ * Pure: aggregate records per meter and price them. Each record's snapshotted
+ * rate wins; the current card only prices legacy rows without one. A line's
+ * displayed rate is the effective (cost/units) rate.
+ */
 export function computeCosts(month: string, records: UsageRecord[], rates = RATES): CostSummary {
-  const byMeter = new Map<Meter, number>();
-  for (const r of records) byMeter.set(r.meter, (byMeter.get(r.meter) ?? 0) + r.units);
+  const byMeter = new Map<Meter, { units: number; cost: number }>();
+  for (const r of records) {
+    const rate = r.rate ?? rates.meters[r.meter]?.rate ?? 0;
+    const acc = byMeter.get(r.meter) ?? { units: 0, cost: 0 };
+    acc.units += r.units;
+    acc.cost += r.units * rate;
+    byMeter.set(r.meter, acc);
+  }
   const lines: CostLine[] = [...byMeter.entries()]
-    .map(([meter, units]) => {
-      const { rate, note } = rates.meters[meter] ?? { rate: 0, note: 'unpriced meter' };
-      return { meter, units: Math.round(units * 100) / 100, rate, cost: Math.round(units * rate * 10000) / 10000, note };
-    })
+    .map(([meter, { units, cost }]) => ({
+      meter,
+      units: Math.round(units * 100) / 100,
+      rate: units > 0 ? Math.round((cost / units) * 1e6) / 1e6 : 0,
+      cost: Math.round(cost * 10000) / 10000,
+      note: rates.meters[meter]?.note ?? 'unpriced meter',
+    }))
     .sort((a, b) => b.cost - a.cost);
   const overhead = records.length > 0 ? rates.monthlyOverhead : 0;
   const total = Math.round((lines.reduce((s, l) => s + l.cost, 0) + overhead) * 100) / 100;

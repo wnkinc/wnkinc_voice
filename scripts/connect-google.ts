@@ -39,6 +39,9 @@ const tokenArgs = {
   // DEV: the callback Lambda reads the user id from `state`. Real onboarding
   // must derive it from its own logged-in session instead.
   customState: userId,
+  // Google only issues a REFRESH token with offline access + forced consent;
+  // without it the vault dies when the 1-hour access token expires.
+  customParameters: { access_type: 'offline', prompt: 'consent' },
 };
 
 let res = await client.send(new GetResourceOauth2TokenCommand(tokenArgs));

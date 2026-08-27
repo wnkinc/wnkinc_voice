@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { computeCosts, type UsageRecord } from '../src/usage.js';
 
-const rec = (meter: UsageRecord['meter'], units: number): UsageRecord => ({
+const rec = (meter: UsageRecord['meter'], units: number, rate?: number): UsageRecord => ({
   tenantId: 'wnk',
   sk: `2026-08-27T00:00:00.000Z#${meter}#x`,
   meter,
   units,
+  rate,
 });
 
 const rates = {
@@ -25,6 +26,11 @@ describe('computeCosts', () => {
     expect(c.lines[1]).toMatchObject({ meter: 'llm_tokens', units: 50_000, cost: 0.1 });
     expect(c.overhead).toBe(2);
     expect(c.total).toBe(2.6);
+  });
+  it("prefers each record's snapshotted rate over the current card", () => {
+    // card says 0.1, but 2 old minutes were recorded at 0.2 and 3 new at 0.1
+    const c = computeCosts('2026-08', [rec('voice_minutes', 2, 0.2), rec('voice_minutes', 3, 0.1)], rates);
+    expect(c.lines[0]).toMatchObject({ meter: 'voice_minutes', units: 5, cost: 0.7, rate: 0.14 }); // effective rate
   });
   it('is zero-cost and zero-overhead with no usage', () => {
     const c = computeCosts('2026-08', [], rates);
