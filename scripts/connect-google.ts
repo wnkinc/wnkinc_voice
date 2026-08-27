@@ -13,11 +13,12 @@ import {
   GetWorkloadAccessTokenForUserIdCommand,
 } from '@aws-sdk/client-bedrock-agentcore';
 import { execFileSync } from 'node:child_process';
+import { GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS } from '@wnk/shared';
 
 const REGION = 'us-west-2';
 const WORKLOAD_NAME = 'wnkinc-voice-dev-email-responder';
 const PROVIDER_NAME = 'wnkinc_voice_dev_google';
-const SCOPES = ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.readonly'];
+const SCOPES = GOOGLE_GMAIL_SCOPES;
 
 const userId = process.argv[2] ?? 'wesley';
 const client = new BedrockAgentCoreClient({ region: REGION });
@@ -39,9 +40,9 @@ const tokenArgs = {
   // DEV: the callback Lambda reads the user id from `state`. Real onboarding
   // must derive it from its own logged-in session instead.
   customState: userId,
-  // Google only issues a REFRESH token with offline access + forced consent;
-  // without it the vault dies when the 1-hour access token expires.
-  customParameters: { access_type: 'offline', prompt: 'consent' },
+  // Shared constants: params are part of the vault's token cache key AND what
+  // makes Google issue a refresh token. See @wnk/shared google-oauth.ts.
+  customParameters: GOOGLE_OAUTH_PARAMS,
 };
 
 let res = await client.send(new GetResourceOauth2TokenCommand(tokenArgs));

@@ -11,7 +11,7 @@ import { GetSecretValueCommand, ResourceNotFoundException, SecretsManagerClient 
 import { BedrockAgentCoreClient, GetResourceOauth2TokenCommand, GetWorkloadAccessTokenForUserIdCommand } from '@aws-sdk/client-bedrock-agentcore';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { dynamoStore, TenantConfigSchema } from '@wnk/shared';
+import { dynamoStore, GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS, TenantConfigSchema } from '@wnk/shared';
 
 const REGION = 'us-west-2';
 const PREFIX = 'wnkinc-voice-dev';
@@ -77,8 +77,9 @@ try {
   const res = await ac.send(new GetResourceOauth2TokenCommand({
     workloadIdentityToken: workloadAccessToken,
     resourceCredentialProviderName: `${PREFIX.replace(/-/g, '_')}_google`,
-    scopes: ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.readonly'],
+    scopes: GOOGLE_GMAIL_SCOPES,
     oauth2Flow: 'USER_FEDERATION',
+    customParameters: GOOGLE_OAUTH_PARAMS,
   })).catch((err) => ({ accessToken: undefined, err: String(err) }));
   if (res.accessToken) ok('Google connection', 'vault has a live token (email agent can send)');
   else warn('Google connection', 'no vault token — run: npx tsx scripts/connect-google.ts');

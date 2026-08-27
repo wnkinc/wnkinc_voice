@@ -16,7 +16,7 @@ import {
 } from '@aws-sdk/client-bedrock-agentcore';
 import { CognitoIdentityProviderClient, DescribeUserPoolClientCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { callerMemory, recordUsage } from '@wnk/shared';
+import { callerMemory, GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS, recordUsage } from '@wnk/shared';
 import * as http from 'node:http';
 
 async function callerMemoryRecall(tenantId: string, phone: string): Promise<string[]> {
@@ -80,8 +80,9 @@ async function googleAccessToken(): Promise<string> {
   const res = await agentcore.send(new GetResourceOauth2TokenCommand({
     workloadIdentityToken: workloadAccessToken,
     resourceCredentialProviderName: env('GOOGLE_PROVIDER_NAME'),
-    scopes: ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.readonly'],
+    scopes: GOOGLE_GMAIL_SCOPES,
     oauth2Flow: 'USER_FEDERATION',
+    customParameters: GOOGLE_OAUTH_PARAMS, // part of the vault's cache key — must match the consent flow
   }));
   if (!res.accessToken) throw new Error('no Google token in the vault; the owner must run the Connect Google flow');
   return res.accessToken;
