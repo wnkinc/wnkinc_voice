@@ -17,6 +17,7 @@ import {
 import { CognitoIdentityProviderClient, DescribeUserPoolClientCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { callerMemory, GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS, recordUsage } from '@wnk/shared';
+import { composioGmail } from '@wnk/shared/composio';
 import * as http from 'node:http';
 
 async function callerMemoryRecall(tenantId: string, phone: string): Promise<string[]> {
@@ -182,10 +183,17 @@ async function processLead(event: LeadEvent): Promise<{ ok: boolean; sentTo: str
   }
 
   const draft = await draftEmail(lead, crmContext);
-  const googleToken = await googleAccessToken();
-  const sentTo = await sendAsOwner(googleToken, draft.subject, draft.body);
-  console.log(JSON.stringify({ msg: 'email sent', sentTo, subject: draft.subject }));
   const tenantId = event.tenantId ?? 'wnk';
+  // EMAIL_SEND_VIA=composio: their vault + verified OAuth app carry the Google
+  // credential (no 7-day expiry, no unverified screen). Default: our vault.
+  let sentTo: string;
+  if (process.env.EMAIL_SEND_VIA === 'composio') {
+    sentTo = await composioGmail.sendAsOwner(tenantId, draft.subject, draft.body);
+  } else {
+    const googleToken = await googleAccessToken();
+    sentTo = await sendAsOwner(googleToken, draft.subject, draft.body);
+  }
+  console.log(JSON.stringify({ msg: 'email sent', sentTo, subject: draft.subject, via: process.env.EMAIL_SEND_VIA ?? 'vault' }));
   await recordUsage(tenantId, 'emails_sent', 1, event.callId);
   if (draftTokens > 0) await recordUsage(tenantId, 'llm_tokens', draftTokens, event.callId);
   return { ok: true, sentTo, subject: draft.subject };

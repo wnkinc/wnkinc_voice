@@ -66,6 +66,16 @@ export class RuntimeStack extends cdk.Stack {
     };
     const dist = bundleAgent('email-responder');
 
+    // Composio: Gmail credential broker (their verified OAuth app; no 7-day
+    // token expiry). Fill after deploy:
+    //   aws secretsmanager put-secret-value --secret-id <arn> \
+    //     --secret-string '{"COMPOSIO_API_KEY":"ak_..."}'
+    // Flip the send path with: cdk deploy -c emailSendVia=composio
+    const composioSecret = new secretsmanager.Secret(this, 'ComposioSecret', {
+      description: 'Composio project API key ({"COMPOSIO_API_KEY": ...})',
+    });
+    const emailSendVia = (this.node.tryGetContext('emailSendVia') as string | undefined) ?? 'vault';
+
     const emailAgent = new agentcore.Runtime(this, 'EmailResponder', {
       runtimeName: `${prefix.replace(/-/g, '_')}_email_responder`,
       description: 'Drafts and sends the owner a follow-up email for each recorded lead',
@@ -84,9 +94,13 @@ export class RuntimeStack extends cdk.Stack {
         GOOGLE_PROVIDER_NAME: props.googleProviderName,
         OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
         USAGE_TABLE: props.usageTable.tableName,
+        COMPOSIO_SECRET_ARN: composioSecret.secretArn,
+        EMAIL_SEND_VIA: emailSendVia,
         ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
       },
     });
+    composioSecret.grantRead(emailAgent.role);
+    new cdk.CfnOutput(this, 'composioSecretArn', { value: composioSecret.secretArn });
 
     // The agent's own credentials: read the vault token for its workload, read
     // the OpenAI key, and read the Cognito client secret for Gateway JWTs.
