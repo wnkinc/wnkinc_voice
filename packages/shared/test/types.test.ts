@@ -45,3 +45,14 @@ describe('requireTenant', () => {
     await expect(requireTenant(store, 'nobody')).rejects.toThrow(/no tenant config/);
   });
 });
+
+describe('once-markers', () => {
+  it('marks a key once per call and reports duplicates', async () => {
+    const store = memoryStore();
+    expect(await store.isDone('c1', 'notify:lead:L1')).toBe(false);
+    expect(await store.markDone('c1', 'notify:lead:L1')).toBe(true);
+    expect(await store.isDone('c1', 'notify:lead:L1')).toBe(true);
+    expect(await store.markDone('c1', 'notify:lead:L1')).toBe(false);
+    expect(await store.isDone('c2', 'notify:lead:L1')).toBe(false);
+  });
+});

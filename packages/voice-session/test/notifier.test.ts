@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { composeNotification, createNotifierHandler, type NotifierEvent } from '../src/notifier.js';
+import { composeNotification, createNotifierHandler, notificationKey, type NotifierEvent } from '../src/notifier.js';
 import { memoryStore } from '@wnk/shared';
 import { TenantConfigSchema } from '@wnk/shared';
 import { silentLog, TENANT } from './helpers.js';
@@ -34,6 +34,28 @@ describe('notifier', () => {
     await handler(notify);
     expect(sendSms).toHaveBeenCalledWith('+15555550199', expect.stringContaining('URGENT'));
     expect(sendEmail).toHaveBeenCalledTimes(2);
+  });
+  it('ignores a redelivered event, but retries one that failed', async () => {
+    const store = memoryStore([TENANT]);
+    const sendEmail = vi.fn(async () => {});
+    const handler = createNotifierHandler({ store: () => store, sendEmail, sendSms: vi.fn(async () => {}), log: silentLog });
+    await handler(lead);
+    await handler(lead); // EventBridge delivered twice
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+
+    let fail = true;
+    const flaky = vi.fn(async () => { if (fail) throw new Error('ses down'); });
+    const h2 = createNotifierHandler({ store: () => memoryStore([TENANT]), sendEmail: flaky, sendSms: vi.fn(async () => {}), log: silentLog });
+    await expect(h2(lead)).rejects.toThrow(); // not marked: nothing was sent
+    fail = false;
+    await h2(lead);
+    expect(flaky).toHaveBeenCalledTimes(2);
+  });
+  it('keys owner alerts by content so two different alerts in one call both go out', () => {
+    const other = { ...notify, detail: { ...notify.detail, summary: 'Different thing' } } as NotifierEvent;
+    expect(notificationKey(notify)).not.toBe(notificationKey(other));
+    expect(notificationKey(notify)).toBe(notificationKey({ ...notify } as NotifierEvent));
+    expect(notificationKey(lead)).toBe('notify:lead:L1');
   });
   it('throws only when every channel fails', async () => {
     const handler = createNotifierHandler({

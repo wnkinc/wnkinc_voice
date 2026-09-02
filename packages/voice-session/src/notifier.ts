@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { EventBridgeEvent } from 'aws-lambda';
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { PublishCommand, SNSClient } from '@aws-sdk/client-sns';
@@ -48,12 +49,25 @@ export function composeNotification(event: NotifierEvent, tenant: TenantConfig):
   };
 }
 
+/** Once-key: a lead notifies once per lead; an owner alert once per distinct summary in a call. */
+export function notificationKey(event: NotifierEvent): string {
+  if (event['detail-type'] === 'lead.recorded') return `notify:lead:${event.detail.lead.leadId}`;
+  const d = event.detail;
+  return `notify:owner:${createHash('sha256').update(`${d.urgency}|${d.summary}`).digest('hex').slice(0, 12)}`;
+}
+
 /** EventBridge → email/SMS. Replace or augment with a Temporal workflow starter later. */
 export function createNotifierHandler(deps: NotifierDeps) {
   const baseLog = deps.log ?? createLogger({ fn: 'notifier' });
   return async (event: NotifierEvent): Promise<void> => {
     const log = baseLog.child({ callId: event.detail.callId, eventType: event['detail-type'] });
-    const tenant = await deps.store().getTenant(event.detail.tenantPhoneNumber);
+    const store = deps.store();
+    const key = notificationKey(event);
+    if (await store.isDone(event.detail.callId, key)) {
+      log.info('already notified; duplicate delivery ignored', { key });
+      return;
+    }
+    const tenant = await store.getTenant(event.detail.tenantPhoneNumber);
     if (!tenant) {
       log.error('tenant not found', { tenantPhoneNumber: event.detail.tenantPhoneNumber });
       return;
@@ -70,6 +84,7 @@ export function createNotifierHandler(deps: NotifierDeps) {
     const results = await Promise.allSettled(attempts.map((a) => a.run()));
     results.forEach((r, i) => { if (r.status === 'rejected') log.error(`${attempts[i]!.channel} failed`, { err: r.reason }); });
     if (results.every((r) => r.status === 'rejected')) throw new Error('all notification channels failed');
+    await store.markDone(event.detail.callId, key);
     log.info('notification sent', { channels: attempts.map((a) => a.channel) });
   };
 }

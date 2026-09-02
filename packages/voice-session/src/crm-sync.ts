@@ -33,7 +33,15 @@ export function createCrmSyncHandler(deps: CrmSyncDeps) {
 
   return async (event: CrmSyncEvent): Promise<void> => {
     const log = baseLog.child({ callId: event.detail.callId, eventType: event['detail-type'] });
-    const tenant = await deps.store().getTenant(event.detail.tenantPhoneNumber);
+    const store = deps.store();
+    // Notes and tasks are plain creates in HubSpot (no idempotency key), so a
+    // redelivered event is stopped here. Contact upsert is safe on its own.
+    const key = event['detail-type'] === 'lead.recorded' ? `crm:lead:${event.detail.lead.leadId}` : 'crm:call';
+    if (await store.isDone(event.detail.callId, key)) {
+      log.info('already synced; duplicate delivery ignored', { key });
+      return;
+    }
+    const tenant = await store.getTenant(event.detail.tenantPhoneNumber);
     if (!tenant?.crm) {
       log.debug('tenant has no CRM; skipping');
       return;
@@ -66,6 +74,7 @@ export function createCrmSyncHandler(deps: CrmSyncDeps) {
         body: `${lead.reason}${lead.preferredCallbackTime ? `\nPreferred: ${lead.preferredCallbackTime}` : ''}`,
         dueAt: nextBusinessMorning(now(), tenant.timezone),
       });
+      await store.markDone(callId, key);
       log.info('lead synced to CRM', { contactId: contact.id });
       return;
     }
@@ -92,6 +101,7 @@ export function createCrmSyncHandler(deps: CrmSyncDeps) {
       `Call ID: ${callId}`,
     ].join('\n');
     await crm.addNote(contact.id, body.slice(0, 60_000), now());
+    await store.markDone(callId, key);
     log.info('call logged to CRM', { contactId: contact.id, lines: lines.length });
   };
 }

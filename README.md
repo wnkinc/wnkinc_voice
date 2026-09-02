@@ -178,6 +178,13 @@ fields @timestamp, @log, msg, tenantId, callId
 | sort @timestamp
 ```
 
+Delivery is at-least-once everywhere (EventBridge, Lambda async retries, SDK retries), so every
+event consumer with an external side effect checks a once-marker on the call row before acting
+and sets it after success (`Store.isDone` / `markDone`, keys like `notify:lead:<leadId>`,
+`crm:call`, `email:lead:<leadId>`). That narrows a duplicate to a crash between the send and the
+mark; it is not exactly-once. Anything that costs money or reaches a customer irreversibly
+should get a pending → completed ledger with reconciliation instead.
+
 Failures after retries land in a dead-letter queue (session jobs, notifier/CRM events, email
 trigger), and each queue has an alarm. The email trigger throws on a non-2xx from the agent,
 so a lost lead email is a retried, dead-lettered, alarmed event rather than a log line.

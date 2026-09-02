@@ -38,7 +38,7 @@ const REGION = process.env.AWS_REGION ?? 'us-west-2';
 const store = dynamoStore();
 
 interface LeadEvent {
-  lead?: { callerName?: string; phone?: string; reason?: string; preferredCallbackTime?: string; notes?: string };
+  lead?: { leadId?: string; callerName?: string; phone?: string; reason?: string; preferredCallbackTime?: string; notes?: string };
   tenantId?: string;
   callId?: string;
 }
@@ -174,6 +174,14 @@ async function processLead(event: LeadEvent, trace: TraceContext): Promise<{ ok:
     return { ok: true, skipped: 'email responder not enabled for this tenant' };
   }
   const lead = event.lead ?? {};
+  // Once per lead: a redelivered event (EventBridge, or the trigger's retries
+  // after a failure past the send) must not email the owner twice. Checked
+  // before the HubSpot lookup and the draft, so a duplicate costs nothing.
+  const onceKey = `email:lead:${lead.leadId ?? 'unknown'}`;
+  if (event.callId && (await store.isDone(event.callId, onceKey))) {
+    console.log(JSON.stringify({ msg: 'already emailed; duplicate delivery ignored', ...ctx }));
+    return { ok: true, skipped: 'already emailed for this lead' };
+  }
   console.log(JSON.stringify({ msg: 'lead received', lead, ...ctx }));
 
   let crmContext = '';
@@ -208,6 +216,7 @@ async function processLead(event: LeadEvent, trace: TraceContext): Promise<{ ok:
     const googleToken = await googleAccessToken(ownerUserId(tenantId));
     sentTo = await sendAsOwner(googleToken, draft.subject, draft.body);
   }
+  if (event.callId) await store.markDone(event.callId, onceKey);
   console.log(JSON.stringify({ msg: 'email sent', sentTo, subject: draft.subject, via: service.via, ...ctx }));
   await recordUsage(tenantId, 'emails_sent', 1, event.callId);
   if (draftTokens > 0) await recordUsage(tenantId, 'llm_tokens', draftTokens, event.callId);

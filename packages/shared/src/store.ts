@@ -22,6 +22,22 @@ export interface Store {
   appendTranscript(callId: string, entry: TranscriptEntry): Promise<void>;
   appendToolCall(callId: string, tc: ToolCallRecord): Promise<void>;
   createLead(lead: NewLead): Promise<Lead>;
+  /**
+   * Once-markers for side effects that run under at-least-once delivery
+   * (EventBridge, Lambda async retries, our own SDK retries). Pattern:
+   * `if (await isDone(callId, key)) return;` ... do the side effect ...
+   * `await markDone(callId, key)`. Keys are DOMAIN identity, e.g.
+   * `notify:lead:<leadId>` — never the EventBridge event id, which differs
+   * between two PutEvents of the same fact.
+   *
+   * This is the low-risk level: it narrows the duplicate window to a crash
+   * between the side effect and the mark. It is not exactly-once. Actions
+   * that cost money or reach a customer irreversibly need a ledger
+   * (pending -> completed with a lease) plus reconciliation instead.
+   */
+  isDone(callId: string, key: string): Promise<boolean>;
+  /** Marks `key` done for the call. False if it was already marked (a race lost). */
+  markDone(callId: string, key: string): Promise<boolean>;
   /** Tenant by id (table is keyed by phone; scan — tenant tables are tiny). */
   findTenantById(tenantId: string): Promise<TenantConfig | undefined>;
   /** Newest-first calls for a tenant (byTenant GSI). */
@@ -110,6 +126,30 @@ export function dynamoStore(): Store {
       await db.send(new PutCommand({ TableName: leads(), Item: lead }));
       return lead;
     },
+    async isDone(callId, key) {
+      const res = await db.send(new GetCommand({
+        TableName: calls(), Key: { callId },
+        ProjectionExpression: '#k', ExpressionAttributeNames: { '#k': `done:${key}` },
+      }));
+      return Boolean(res.Item?.[`done:${key}`]);
+    },
+    async markDone(callId, key) {
+      try {
+        // Upsert: a marker on a call row that somehow doesn't exist still
+        // expires (TTL), so nothing accumulates.
+        await db.send(new UpdateCommand({
+          TableName: calls(), Key: { callId },
+          UpdateExpression: 'SET #k = :at, expiresAt = if_not_exists(expiresAt, :ttl)',
+          ConditionExpression: 'attribute_not_exists(#k)',
+          ExpressionAttributeNames: { '#k': `done:${key}` },
+          ExpressionAttributeValues: { ':at': new Date().toISOString(), ':ttl': Math.floor(Date.now() / 1000) + CALL_TTL_DAYS * 86400 },
+        }));
+        return true;
+      } catch (err) {
+        if (err instanceof ConditionalCheckFailedException) return false;
+        throw err;
+      }
+    },
     async findTenantById(tenantId) {
       const res = await db.send(new ScanCommand({
         TableName: tenants(),
@@ -151,6 +191,7 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
   }));
   const calls = new Map<string, CallRecord>();
   const leads: Lead[] = [];
+  const done = new Set<string>();
   const must = (id: string) => {
     const c = calls.get(id);
     if (!c) throw new Error(`unknown call ${id}`);
@@ -189,6 +230,13 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
       const lead = buildLead(input);
       leads.push(lead);
       return lead;
+    },
+    isDone: async (id, key) => done.has(`${id}|${key}`),
+    async markDone(id, key) {
+      const k = `${id}|${key}`;
+      if (done.has(k)) return false;
+      done.add(k);
+      return true;
     },
   };
 }

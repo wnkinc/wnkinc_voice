@@ -32,6 +32,8 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly usageTable: dynamodb.ITable;
   /** Agents read their tenant's row to check the service is enabled and how it is configured. */
   readonly tenantsTable: dynamodb.ITable;
+  /** Once-markers for "already emailed this lead" live on the call row. */
+  readonly callsTable: dynamodb.ITable;
   readonly alarmTopic: sns.ITopic;
   /** Caller memory: the email agent recalls facts about the lead's caller. */
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
@@ -99,12 +101,14 @@ export class RuntimeStack extends cdk.Stack {
         OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
         USAGE_TABLE: props.usageTable.tableName,
         TENANTS_TABLE: props.tenantsTable.tableName,
+        CALLS_TABLE: props.callsTable.tableName,
         COMPOSIO_SECRET_ARN: composioSecret.secretArn,
         ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
       },
     });
     composioSecret.grantRead(emailAgent.role);
     props.tenantsTable.grantReadData(emailAgent.role);
+    props.callsTable.grantReadWriteData(emailAgent.role);
     new cdk.CfnOutput(this, 'composioSecretArn', { value: composioSecret.secretArn });
 
     // The agent's own credentials: read the vault token for its workload, read

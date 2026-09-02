@@ -58,6 +58,16 @@ describe('crm-sync', () => {
     expect(due.toISOString()).toBe('2026-08-24T16:00:00.000Z');
   });
 
+  it('a redelivered lead.recorded creates one note and one task', async () => {
+    const crm = fakeCrm();
+    const store = memoryStore([{ ...TENANT, crm: { type: 'hubspot' } }]);
+    const h = createCrmSyncHandler({ store: () => store, crmFor: async () => crm, log: silentLog });
+    await h(leadEvent('+15550001111'));
+    await h(leadEvent('+15550001111'));
+    expect(crm.notes).toHaveLength(1);
+    expect(crm.tasks).toHaveLength(1);
+  });
+
   it('lead without a phone is skipped', async () => {
     const crm = fakeCrm();
     const h = createCrmSyncHandler({ store: () => memoryStore([{ ...TENANT, crm: { type: 'hubspot' } }]), crmFor: async () => crm, log: silentLog });

@@ -71,6 +71,7 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   bus: voice.bus,
   usageTable: voice.usageTable,
   tenantsTable: voice.tenantsTable,
+  callsTable: voice.callsTable,
   alarmTopic: voice.alarmTopic,
   callerMemory,
 });
