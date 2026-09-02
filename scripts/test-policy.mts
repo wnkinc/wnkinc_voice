@@ -33,7 +33,8 @@ const leadArgs = { caller_name: 'Policy Test', reason: 'phase 4 check', tenant_i
 const cases: Array<[string, string, unknown, string]> = [
   ['admin', 'hubspot___searchContacts', { query: 'Jordan', limit: 1 }, 'expect ALLOW'],
   ['voice', 'voice___notify_owner', { summary: 'phase 4 policy check', tenant_id: 'wnk', tenant_phone: '+15555550100', call_id: 'policy-test-1' }, 'expect ALLOW'],
-  ['voice', 'voice___record_lead', { ...leadArgs, tenant_id: 'someone-else' }, 'expect DENY (wrong tenant)'],
+  ['voice', 'voice___record_lead', { ...leadArgs, tenant_id: 'any-other-tenant' }, 'expect ALLOW (tenant context present; the Lambda resolved it, not the model)'],
+  ['voice', 'voice___record_lead', { ...leadArgs, tenant_id: '' }, 'expect DENY (no tenant context)'],
   ['voice', 'hubspot___searchContacts', { query: 'Jordan', limit: 1 }, 'expect DENY (not its tool)'],
   ['email', 'hubspot___searchContacts', { query: 'Jordan', limit: 1 }, 'expect ALLOW'],
   ['email', 'hubspot___createContact', { properties: { firstname: 'Nope' } }, 'expect DENY (read-only)'],

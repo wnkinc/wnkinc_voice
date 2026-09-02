@@ -69,6 +69,7 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   openaiSecret: voice.openaiSecret,
   bus: voice.bus,
   usageTable: voice.usageTable,
+  tenantsTable: voice.tenantsTable,
   callerMemory,
 });
 

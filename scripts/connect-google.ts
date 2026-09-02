@@ -1,8 +1,10 @@
 /**
- * 3LO consent flow: connect a user's Google account to the AgentCore Identity
- * token vault, delegated to the email-responder workload identity.
+ * 3LO consent flow: connect a tenant owner's Google account to the AgentCore
+ * Identity token vault, delegated to the email-responder workload identity.
+ * The vault user id is derived from the tenant id (ownerUserId), which is how
+ * the email agent finds the token later.
  *
- *   npx tsx scripts/connect-google.ts [userId]
+ *   npx tsx scripts/connect-google.ts [tenantId]      (default: wnk)
  *
  * Prints the Google consent URL, then polls until the vault has the token.
  * After consent, proves it by reading the Gmail profile with the vault token.
@@ -13,14 +15,15 @@ import {
   GetWorkloadAccessTokenForUserIdCommand,
 } from '@aws-sdk/client-bedrock-agentcore';
 import { execFileSync } from 'node:child_process';
-import { GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS } from '@wnk/shared';
+import { GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS, ownerUserId } from '@wnk/shared';
 
 const REGION = 'us-west-2';
 const WORKLOAD_NAME = 'wnkinc-voice-dev-email-responder';
 const PROVIDER_NAME = 'wnkinc_voice_dev_google';
 const SCOPES = GOOGLE_GMAIL_SCOPES;
 
-const userId = process.argv[2] ?? 'wesley';
+const tenantId = process.argv[2] ?? 'wnk';
+const userId = ownerUserId(tenantId);
 const client = new BedrockAgentCoreClient({ region: REGION });
 
 const { workloadAccessToken } = await client.send(

@@ -79,7 +79,7 @@ async function tabBusiness(){
     ['Knowledge (fed into prompt)',[['description',c.description||'—'],['services',(c.services||[]).join(', ')],['hours',c.hours||'—'],['timezone',c.timezone]]],
     ['Behavior',[['extraInstructions',c.extraInstructions||'—'],['tools',(c.tools||[]).join(', ')],['maxCallSeconds',c.maxCallSeconds+' ('+Math.round(c.maxCallSeconds/60)+' min)']]],
     ['Voice & model',[['model',c.model],['voice',c.voice]]],
-    ['Integrations',[['notifications.email',c.notifications?.email||'(none — owner gets no email)'],['notifications.sms',c.notifications?.sms||'(none)'],['crm',c.crm?.type||'(none)']]],
+    ['Integrations',[['notifications.email',c.notifications?.email||'(none — owner gets no email)'],['notifications.sms',c.notifications?.sms||'(none)'],['crm',c.crm?.type||'(none)'],['products (services on)',Object.entries(c.products||{}).filter(([,v])=>v.enabled).map(([k,v])=>k+(v.via?' via '+v.via:'')).join(', ')||'(none — voice only)']]],
   ];
   main.innerHTML='<p class="muted">Every per-business lever, live from the tenants table. Change via tenants/'+esc(c.tenantId)+'.json + npm run seed.</p>'+
     groups.map(([g,rows])=>'<h3 style="margin:18px 0 4px;font-size:15px">'+esc(g)+'</h3><table>'+rows.map(r=>row(r[0],r[1])).join('')+'</table>').join('')+

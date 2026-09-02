@@ -27,6 +27,8 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly openaiSecret: secretsmanager.ISecret;
   readonly bus: events.IEventBus;
   readonly usageTable: dynamodb.ITable;
+  /** Agents read their tenant's row to check the service is enabled and how it is configured. */
+  readonly tenantsTable: dynamodb.ITable;
   /** Caller memory: the email agent recalls facts about the lead's caller. */
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
 }
@@ -70,11 +72,10 @@ export class RuntimeStack extends cdk.Stack {
     // token expiry). Fill after deploy:
     //   aws secretsmanager put-secret-value --secret-id <arn> \
     //     --secret-string '{"COMPOSIO_API_KEY":"ak_..."}'
-    // Flip the send path with: cdk deploy -c emailSendVia=composio
+    // Which broker a tenant uses is tenant data: `products.emailResponder.via`.
     const composioSecret = new secretsmanager.Secret(this, 'ComposioSecret', {
       description: 'Composio project API key ({"COMPOSIO_API_KEY": ...})',
     });
-    const emailSendVia = (this.node.tryGetContext('emailSendVia') as string | undefined) ?? 'vault';
 
     const emailAgent = new agentcore.Runtime(this, 'EmailResponder', {
       runtimeName: `${prefix.replace(/-/g, '_')}_email_responder`,
@@ -90,16 +91,16 @@ export class RuntimeStack extends cdk.Stack {
         COGNITO_CLIENT_ID: props.cognitoClientId,
         COGNITO_TOKEN_URL: props.cognitoTokenUrl,
         WORKLOAD_NAME: props.workloadName,
-        OWNER_USER_ID: 'wesley',
         GOOGLE_PROVIDER_NAME: props.googleProviderName,
         OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
         USAGE_TABLE: props.usageTable.tableName,
+        TENANTS_TABLE: props.tenantsTable.tableName,
         COMPOSIO_SECRET_ARN: composioSecret.secretArn,
-        EMAIL_SEND_VIA: emailSendVia,
         ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
       },
     });
     composioSecret.grantRead(emailAgent.role);
+    props.tenantsTable.grantReadData(emailAgent.role);
     new cdk.CfnOutput(this, 'composioSecretArn', { value: composioSecret.secretArn });
 
     // The agent's own credentials: read the vault token for its workload, read
@@ -174,10 +175,12 @@ export class RuntimeStack extends cdk.Stack {
         BROWSER_ID: browser.browserId,
         OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
         USAGE_TABLE: props.usageTable.tableName,
+        TENANTS_TABLE: props.tenantsTable.tableName,
       },
     });
     browser.grantUse(backOffice.role);
     props.usageTable.grantWriteData(backOffice.role);
+    props.tenantsTable.grantReadData(backOffice.role);
     // grantUse only grants Start/Stop/UpdateBrowserStream — the automation-stream
     // WebSocket needs ConnectBrowserAutomationStream, on both the browser ARN and
     // its session subresources.

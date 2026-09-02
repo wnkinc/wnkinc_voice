@@ -1,22 +1,22 @@
 ---
 name: new-tenant
-description: Onboard a new business (tenant) onto the platform — config row, secrets, OAuth consents, policy scope. Pure data plus one Cedar edit; no new code. Use when adding a second (or Nth) business.
+description: Onboard a new business (tenant) onto the platform — config row, secrets, OAuth consents, service flags. Pure data, zero deploys, no code. Use when adding a second (or Nth) business.
 ---
 
 # Onboard a tenant
 
-A tenant is data: a config row keyed by their phone number, their credentials in the vault, and their id admitted by Policy. The tenant id threads everything — pick it once, lowercase, short (like `wnk`).
+A tenant is data: a config row keyed by their phone number and their credentials under tenant-named keys. Onboarding is zero-deploy — no stack, policy, or env change; if a step below seems to need one, something is misfiled. The tenant id threads everything — pick it once, lowercase, short (like `wnk`).
 
 ## Steps
 
 1. **Number + trunk**: buy/assign the Twilio number and attach it to the Elastic SIP trunk (Origination `sip:proj_…@sip.api.openai.com;transport=tls`). The webhook routes by CALLED number, so this is what makes calls reach the right tenant.
-2. **Config**: create `tenants/<id>.json` (copy `tenants/example.json`; schema = `TenantConfigSchema` in `packages/shared/src/types.ts`). `phoneNumber` is the called number in E.164; `maxCallSeconds` ≤ 840 (Lambda ceiling); local overrides can use `tenants/*.local.json` (gitignored).
+2. **Config**: create `tenants/<id>.json` (copy `tenants/example.json`; schema = `TenantConfigSchema` in `packages/shared/src/types.ts`). `phoneNumber` is the called number in E.164; `maxCallSeconds` ≤ 840 (Lambda ceiling); `products` says which services are on (`emailResponder.enabled` + `via`, `backOffice.enabled`) — everything defaults to off and agents refuse a tenant whose flag is off. Local overrides can use `tenants/*.local.json` (gitignored).
 3. **Seed**: `TENANTS_TABLE=<tenantsTableName output> AWS_REGION=us-west-2 npm run seed -- tenants/<id>.json`.
-4. **CRM secret** (if `crm` is set): the voice stack creates `wnkinc-voice-dev/crm/<id>` placeholders only for ids listed in `lib/voice-stack.ts` (`for (const tenantId of ['wnk'])`) — add the id there, deploy, then `aws secretsmanager put-secret-value` with the real token. Watch for the name-collision-with-deleted-secret error; force-delete the old one if recreating.
-5. **Policy**: the voice agent's Cedar permit guards `context.input.tenant_id == "wnk"` in `lib/policy-stack.ts`. Add the new id (e.g. `["wnk", "<id>"].contains(context.input.tenant_id)`) — or, once tenants are plural enough, replace the literal with a claims-vs-input match. Without this, the receptionist's record_lead is DENIED for the new tenant.
-6. **OAuth consents** (if the tenant's owner connects Gmail etc.): run the 3LO flow (`scripts/connect-google.ts <userId>`) with a user id namespaced to the tenant.
+4. **CRM secret** (if `crm` is set): `aws secretsmanager create-secret --name wnkinc-voice-dev/crm/<id> --secret-string '{"HUBSPOT_TOKEN":"pat-..."}' --region us-west-2`. The voice stack grants the prefix, so nothing to deploy. (Recreating a recently deleted name collides — force-delete the old one first.)
+5. **Policy**: nothing. The voice agent's Cedar permit requires tenant context to be *present*, not a specific id — the voice Lambda resolved the tenant from the signed webhook, and that is the trust boundary.
+6. **Gmail consent** (if `products.emailResponder.enabled`): `via: "vault"` → `npx tsx scripts/connect-google.ts <id>` (the vault user id is `ownerUserId(<id>)`); `via: "composio"` → `npx tsx scripts/connect-composio.mts <id>`.
 7. **Memory**: nothing to do — actor ids are `<tenantId>_<phone>`, so the new tenant's caller memory is isolated by construction.
-8. **Verify**: call the new number; check the webhook log resolved the tenant (`"msg":"incoming call"` → correct `to`); run `scripts/test-policy.mts` if you touched Cedar; confirm a lead lands with the right `tenantId`.
+8. **Verify**: call the new number; check the webhook log resolved the tenant (`"msg":"incoming call"` → correct `to`); confirm a lead lands with the right `tenantId` and, if enabled, the owner gets the email.
 
 ## Pre-flight
 

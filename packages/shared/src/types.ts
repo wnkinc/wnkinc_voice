@@ -36,6 +36,20 @@ export const TenantConfigSchema = z.object({
 
   /** CRM adapter. Credentials live in Secrets Manager at `<CRM_SECRET_PREFIX><tenantId>`. */
   crm: z.object({ type: z.literal('hubspot') }).optional(),
+
+  /**
+   * Platform services this tenant has turned on. Every agent checks its own
+   * flag before acting and refuses otherwise (fail closed). Adding a service
+   * adds a key here; onboarding a tenant sets the keys — nothing else.
+   */
+  products: z.object({
+    emailResponder: z.object({
+      enabled: z.boolean().default(false),
+      /** Who brokers the owner's Gmail credential: our Identity vault or Composio. */
+      via: z.enum(['vault', 'composio']).default('vault'),
+    }).prefault({}),
+    backOffice: z.object({ enabled: z.boolean().default(false) }).prefault({}),
+  }).prefault({}),
 });
 export type TenantConfig = z.infer<typeof TenantConfigSchema>;
 export type TenantConfigInput = z.input<typeof TenantConfigSchema>;

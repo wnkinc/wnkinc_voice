@@ -76,19 +76,26 @@ export class VoiceStack extends cdk.Stack {
       },
     });
 
-    // Per-tenant CRM credentials at `${prefix}/crm/<tenantId>`.
+    // Per-tenant CRM credentials at `${prefix}/crm/<tenantId>`. The secrets are
+    // onboarding data, created by `aws secretsmanager create-secret` per tenant
+    // (see the new-tenant skill) — this stack only grants the prefix.
     const crmSecretPrefix = `${prefix}/crm/`;
     const crmSecretArnPattern = `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${crmSecretPrefix}*`;
-    for (const tenantId of ['wnk']) {
-      new secretsmanager.Secret(this, `CrmSecret-${tenantId}`, {
-        secretName: `${crmSecretPrefix}${tenantId}`,
-        description: `CRM credentials for tenant ${tenantId}`,
-        generateSecretString: {
-          secretStringTemplate: JSON.stringify({ HUBSPOT_TOKEN: 'REPLACE_ME' }),
-          generateStringKey: '_placeholder',
-        },
-      });
-    }
+
+    // MIGRATION SHIM — delete this block after one deploy. The wnk secret was
+    // created by this stack before secrets became onboarding data. CloudFormation
+    // deletes a removed resource unless the *deployed* template says Retain, so:
+    // deploy once with RETAIN (this), then remove the block and deploy again to
+    // orphan the secret with its real token intact.
+    new secretsmanager.Secret(this, 'CrmSecret-wnk', {
+      secretName: `${crmSecretPrefix}wnk`,
+      description: 'CRM credentials for tenant wnk',
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ HUBSPOT_TOKEN: 'REPLACE_ME' }),
+        generateStringKey: '_placeholder',
+      },
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
 
     this.tenantsTable = new dynamodb.Table(this, 'Tenants', {
       partitionKey: { name: 'phoneNumber', type: dynamodb.AttributeType.STRING },

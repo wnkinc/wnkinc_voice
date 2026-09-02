@@ -14,3 +14,12 @@ export const GOOGLE_GMAIL_SCOPES = [
 ];
 
 export const GOOGLE_OAUTH_PARAMS = { access_type: 'offline', prompt: 'consent' };
+
+/**
+ * The vault user id a tenant's owner consents under. Derived from the tenant
+ * id so the vault is addressed by tenant by construction — the consent flow,
+ * the email agent, and the pre-flight check all go through this one function.
+ */
+export function ownerUserId(tenantId: string): string {
+  return `${tenantId}_owner`;
+}

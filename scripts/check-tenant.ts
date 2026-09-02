@@ -4,14 +4,15 @@
  *
  *   npx tsx scripts/check-tenant.ts [tenantId]      (default: wnk)
  *
- * Checks config file <-> seeded table drift, secrets, Cedar scope, notification
- * wiring, and the owner's Google connection. Exit code 1 if any hard check fails.
+ * Checks config file <-> seeded table drift, secrets, enabled services,
+ * notification wiring, and the owner's Google connection. Exit code 1 if any
+ * hard check fails. Onboarding is data-only: nothing here asks for a deploy.
  */
 import { GetSecretValueCommand, ResourceNotFoundException, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { BedrockAgentCoreClient, GetResourceOauth2TokenCommand, GetWorkloadAccessTokenForUserIdCommand } from '@aws-sdk/client-bedrock-agentcore';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { dynamoStore, GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS, TenantConfigSchema } from '@wnk/shared';
+import { dynamoStore, GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS, ownerUserId, TenantConfigSchema } from '@wnk/shared';
 
 const REGION = 'us-west-2';
 const PREFIX = 'wnkinc-voice-dev';
@@ -56,24 +57,28 @@ if (cfg?.crm) {
     if (!token || token.startsWith('REPLACE')) bad('CRM secret', 'still a placeholder — put-secret-value the real token');
     else ok('CRM secret', 'real token present');
   } catch (err) {
-    if (err instanceof ResourceNotFoundException) bad('CRM secret', `missing — add "${tenantId}" to the crm secret list in voice-stack.ts and deploy`);
+    if (err instanceof ResourceNotFoundException) bad('CRM secret', `missing — create it: aws secretsmanager create-secret --name ${PREFIX}/crm/${tenantId} --secret-string '{"HUBSPOT_TOKEN":"pat-..."}' --region ${REGION}`);
     else bad('CRM secret', String(err).slice(0, 120));
   }
 } else ok('CRM', 'not configured (crm: none)');
 
-// 4. Cedar scope (source check — deployed policy can lag until cdk deploy)
-const policySrc = readFileSync('packages/infrastructure/lib/policy-stack.ts', 'utf8');
-if (policySrc.includes(`"${tenantId}"`)) ok('Cedar tenant guard', 'tenant id appears in policy-stack.ts (deploy wnk-policy-dev if changed)');
-else bad('Cedar tenant guard', `"${tenantId}" not in policy-stack.ts — the voice agent's record_lead will be DENIED for this tenant`);
+// 4. Services this tenant has turned on (Cedar admits any tenant with context present; no per-tenant policy)
+if (cfg) {
+  const on = Object.entries(cfg.products).filter(([, v]) => v.enabled).map(([k, v]) => `${k}${'via' in v ? ` via ${v.via}` : ''}`);
+  ok('services', on.length ? on.join(', ') : 'none enabled — voice receptionist only');
+}
 
 // 5. Notifications
 if (cfg && !cfg.notifications.email && !cfg.notifications.sms) warn('notifications', 'no email/sms — the owner gets no notifier alerts (email agent still emails the Gmail owner)');
 else if (cfg) ok('notifications', [cfg.notifications.email, cfg.notifications.sms].filter(Boolean).join(', '));
 
-// 6. Google connection (owner's vault token for the email agent)
-try {
+// 6. Owner's Gmail credential for the email responder, per the tenant's chosen broker
+const email = cfg?.products.emailResponder;
+if (!email?.enabled) ok('Google connection', 'not needed (email responder off)');
+else if (email.via === 'composio') console.log(`  ○ Composio: Gmail connected account for user "${tenantId}" (if missing: npx tsx scripts/connect-composio.mts ${tenantId})`);
+else try {
   const ac = new BedrockAgentCoreClient({ region: REGION });
-  const { workloadAccessToken } = await ac.send(new GetWorkloadAccessTokenForUserIdCommand({ workloadName: `${PREFIX}-email-responder`, userId: 'wesley' }));
+  const { workloadAccessToken } = await ac.send(new GetWorkloadAccessTokenForUserIdCommand({ workloadName: `${PREFIX}-email-responder`, userId: ownerUserId(tenantId) }));
   const res = await ac.send(new GetResourceOauth2TokenCommand({
     workloadIdentityToken: workloadAccessToken,
     resourceCredentialProviderName: `${PREFIX.replace(/-/g, '_')}_google`,
@@ -82,7 +87,7 @@ try {
     customParameters: GOOGLE_OAUTH_PARAMS,
   })).catch((err) => ({ accessToken: undefined, err: String(err) }));
   if (res.accessToken) ok('Google connection', 'vault has a live token (email agent can send)');
-  else warn('Google connection', 'no vault token — run: npx tsx scripts/connect-google.ts');
+  else warn('Google connection', `no vault token for ${ownerUserId(tenantId)} — run: npx tsx scripts/connect-google.ts ${tenantId}`);
 } catch (err) {
   warn('Google connection', `check failed: ${String(err).slice(0, 100)}`);
 }

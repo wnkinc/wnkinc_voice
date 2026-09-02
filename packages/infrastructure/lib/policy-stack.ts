@@ -56,10 +56,13 @@ when {
   principal.getTag("client_id") == "${adminClientId}"
 };`);
 
-    // Voice agent: exactly its two platform tools, and only for the provisioned
-    // tenant. (When tenants multiply, the tenant guard becomes a claims-vs-input
-    // match instead of a literal.)
-    policy('voice_agent_tools', 'The voice agent may record leads and notify the owner for tenant wnk', `
+    // Voice agent: exactly its two platform tools. The tenant guard asserts
+    // PRESENCE, not identity: the agent's M2M token carries no tenant claim, so
+    // Cedar cannot prove entitlement — the voice Lambda is the trusted party that
+    // resolves the tenant from the signed webhook's called number. Keeping the
+    // check here means a call with no tenant context is refused at the Gateway,
+    // and onboarding a tenant never touches policy.
+    policy('voice_agent_tools', 'The voice agent may record leads and notify the owner, with tenant context present', `
 permit(
   principal is AgentCore::OAuthUser,
   action in [AgentCore::Action::"voice___record_lead", AgentCore::Action::"voice___notify_owner"],
@@ -68,7 +71,8 @@ permit(
 when {
   principal.hasTag("client_id") &&
   principal.getTag("client_id") == "${voiceClientId}" &&
-  context.input.tenant_id == "wnk"
+  context.input has tenant_id &&
+  context.input.tenant_id != ""
 };`);
 
     // Email agent: read-only CRM context. No creates, no voice tools — default

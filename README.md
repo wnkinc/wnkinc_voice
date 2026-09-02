@@ -127,7 +127,8 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `notifications.email` / `.sms` | Where the notifier delivers |
 | `maxCallSeconds` (default 600, max 840) | Agent is asked to wrap up, then the call is hung up |
 | `active` | `false` → calls rejected with SIP 603 |
-| `crm` | `{ "type": "hubspot" }` enables CRM sync + caller recognition; token in Secrets Manager at `<stack>/crm/<tenantId>` |
+| `crm` | `{ "type": "hubspot" }` enables CRM sync + caller recognition; token in Secrets Manager at `<stack>/crm/<tenantId>` (create it with `aws secretsmanager create-secret`; the stack only grants the prefix) |
+| `products` | Which platform services are on for this tenant: `emailResponder: { enabled, via: "vault" \| "composio" }`, `backOffice: { enabled }`. Default all off; agents refuse to act for a tenant whose flag is off. |
 
 Unknown numbers are rejected with SIP 404.
 

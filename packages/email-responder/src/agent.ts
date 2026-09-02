@@ -3,8 +3,13 @@
  *
  * Triggered (via trigger.ts) by `lead.recorded`: enriches the lead with HubSpot
  * context through the Gateway (MCP), drafts a follow-up with OpenAI, and sends
- * it from the owner's own Gmail using the 3LO token in the Identity vault.
+ * it from the owner's own Gmail — via the 3LO token in the Identity vault or
+ * via Composio, whichever the tenant's `products.emailResponder.via` says.
  * v1 emails the OWNER (leads from phone calls carry no email address).
+ *
+ * Tenancy: the payload's tenantId selects the row; the row says whether this
+ * service is on and how it sends. No tenant, unknown tenant, or service off
+ * means nothing is sent.
  *
  * Credentials the agent holds: none. Cognito mints its Gateway JWT, the vault
  * hands it a scoped Google token, and the OpenAI key comes from Secrets Manager.
@@ -16,7 +21,7 @@ import {
 } from '@aws-sdk/client-bedrock-agentcore';
 import { CognitoIdentityProviderClient, DescribeUserPoolClientCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { callerMemory, GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS, recordUsage } from '@wnk/shared';
+import { callerMemory, dynamoStore, GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS, ownerUserId, recordUsage, requireTenant } from '@wnk/shared';
 import { composioGmail } from '@wnk/shared/composio';
 import * as http from 'node:http';
 
@@ -30,6 +35,7 @@ const env = (name: string): string => {
   return v;
 };
 const REGION = process.env.AWS_REGION ?? 'us-west-2';
+const store = dynamoStore();
 
 interface LeadEvent {
   lead?: { callerName?: string; phone?: string; reason?: string; preferredCallbackTime?: string; notes?: string };
@@ -72,11 +78,11 @@ async function callGatewayTool(token: string, name: string, args: unknown): Prom
 
 // ---- Identity vault (Google) ------------------------------------------------
 
-async function googleAccessToken(): Promise<string> {
+async function googleAccessToken(userId: string): Promise<string> {
   const agentcore = new BedrockAgentCoreClient({ region: REGION });
   const { workloadAccessToken } = await agentcore.send(new GetWorkloadAccessTokenForUserIdCommand({
     workloadName: env('WORKLOAD_NAME'),
-    userId: env('OWNER_USER_ID'),
+    userId,
   }));
   const res = await agentcore.send(new GetResourceOauth2TokenCommand({
     workloadIdentityToken: workloadAccessToken,
@@ -157,9 +163,16 @@ async function sendAsOwner(googleToken: string, subject: string, body: string): 
 
 // ---- The agent --------------------------------------------------------------
 
-async function processLead(event: LeadEvent): Promise<{ ok: boolean; sentTo: string; subject: string }> {
+async function processLead(event: LeadEvent): Promise<{ ok: boolean; sentTo?: string; subject?: string; skipped?: string }> {
+  const tenant = await requireTenant(store, event.tenantId);
+  const tenantId = tenant.tenantId;
+  const service = tenant.products.emailResponder;
+  if (!service.enabled) {
+    console.log(JSON.stringify({ msg: 'email responder not enabled for tenant; skipping', tenantId, callId: event.callId }));
+    return { ok: true, skipped: 'email responder not enabled for this tenant' };
+  }
   const lead = event.lead ?? {};
-  console.log(JSON.stringify({ msg: 'lead received', lead, callId: event.callId }));
+  console.log(JSON.stringify({ msg: 'lead received', lead, tenantId, callId: event.callId }));
 
   let crmContext = '';
   if (lead.phone) {
@@ -171,9 +184,9 @@ async function processLead(event: LeadEvent): Promise<{ ok: boolean; sentTo: str
       console.warn(JSON.stringify({ msg: 'hubspot context unavailable; continuing', err: String(err) }));
     }
     // Platform caller memory (facts + preferences extracted from past calls).
-    if (process.env.MEMORY_ID && event.tenantId) {
+    if (process.env.MEMORY_ID) {
       try {
-        const memories = await callerMemoryRecall(event.tenantId, lead.phone);
+        const memories = await callerMemoryRecall(tenantId, lead.phone);
         if (memories.length) crmContext += `\n\nPlatform memory about this caller:\n${memories.map((m) => `- ${m}`).join('\n')}`;
         console.log(JSON.stringify({ msg: 'caller memory recalled', records: memories.length }));
       } catch (err) {
@@ -183,17 +196,17 @@ async function processLead(event: LeadEvent): Promise<{ ok: boolean; sentTo: str
   }
 
   const draft = await draftEmail(lead, crmContext);
-  const tenantId = event.tenantId ?? 'wnk';
-  // EMAIL_SEND_VIA=composio: their vault + verified OAuth app carry the Google
-  // credential (no 7-day expiry, no unverified screen). Default: our vault.
+  // via=composio: their vault + verified OAuth app carry the Google credential
+  // (no 7-day expiry, no unverified screen). via=vault: our Identity vault, the
+  // token the owner consented under ownerUserId(tenantId).
   let sentTo: string;
-  if (process.env.EMAIL_SEND_VIA === 'composio') {
+  if (service.via === 'composio') {
     sentTo = await composioGmail.sendAsOwner(tenantId, draft.subject, draft.body);
   } else {
-    const googleToken = await googleAccessToken();
+    const googleToken = await googleAccessToken(ownerUserId(tenantId));
     sentTo = await sendAsOwner(googleToken, draft.subject, draft.body);
   }
-  console.log(JSON.stringify({ msg: 'email sent', sentTo, subject: draft.subject, via: process.env.EMAIL_SEND_VIA ?? 'vault' }));
+  console.log(JSON.stringify({ msg: 'email sent', sentTo, subject: draft.subject, via: service.via }));
   await recordUsage(tenantId, 'emails_sent', 1, event.callId);
   if (draftTokens > 0) await recordUsage(tenantId, 'llm_tokens', draftTokens, event.callId);
   return { ok: true, sentTo, subject: draft.subject };
