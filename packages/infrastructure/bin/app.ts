@@ -24,6 +24,7 @@ const voice = new VoiceStack(app, 'wnk-voice-dev', {
   prefix,
   env,
   sesFromEmail: process.env.SES_FROM_EMAIL ?? '',
+  alarmEmail: process.env.ALARM_EMAIL,
   gateway: gatewayUrl
     ? {
         gatewayUrl,
@@ -70,6 +71,7 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   bus: voice.bus,
   usageTable: voice.usageTable,
   tenantsTable: voice.tenantsTable,
+  alarmTopic: voice.alarmTopic,
   callerMemory,
 });
 

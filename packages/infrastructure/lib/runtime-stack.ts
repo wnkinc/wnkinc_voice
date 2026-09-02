@@ -8,6 +8,9 @@ import { MEMORY_USE_ACTIONS } from './memory-stack.js';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import type * as sns from 'aws-cdk-lib/aws-sns';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import { dlqAlarm, errorAlarm } from './alarms.js';
 import { Construct } from 'constructs';
 import { buildSync } from 'esbuild';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -29,6 +32,7 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly usageTable: dynamodb.ITable;
   /** Agents read their tenant's row to check the service is enabled and how it is configured. */
   readonly tenantsTable: dynamodb.ITable;
+  readonly alarmTopic: sns.ITopic;
   /** Caller memory: the email agent recalls facts about the lead's caller. */
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
 }
@@ -132,7 +136,10 @@ export class RuntimeStack extends cdk.Stack {
       resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${props.cognitoUserPoolId}`],
     }));
 
-    // lead.recorded -> trigger Lambda -> InvokeAgentRuntime
+    // lead.recorded -> trigger Lambda -> InvokeAgentRuntime. The trigger throws
+    // on an agent failure, so Lambda retries it twice and then parks the event
+    // here; the alarm on this queue is how a lost lead email gets noticed.
+    const triggerDlq = new sqs.Queue(this, 'EmailTriggerDlq', { retentionPeriod: cdk.Duration.days(14) });
     const triggerFn = new NodejsFunction(this, 'EmailTrigger', {
       functionName: `${prefix}-email-trigger`,
       description: 'Invokes the email responder runtime for each lead.recorded event',
@@ -142,6 +149,8 @@ export class RuntimeStack extends cdk.Stack {
       architecture: lambda.Architecture.ARM_64,
       timeout: cdk.Duration.minutes(5),
       environment: { EMAIL_AGENT_RUNTIME_ARN: emailAgent.agentRuntimeArn },
+      tracing: lambda.Tracing.ACTIVE,
+      deadLetterQueue: triggerDlq,
       bundling: { format: OutputFormat.ESM, target: 'node22' },
     });
     triggerFn.addToRolePolicy(new iam.PolicyStatement({
@@ -152,8 +161,10 @@ export class RuntimeStack extends cdk.Stack {
       eventBus: props.bus,
       description: 'Route lead.recorded to the email responder agent',
       eventPattern: { source: ['wnkinc.voice'], detailType: ['lead.recorded'] },
-      targets: [new targets.LambdaFunction(triggerFn, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1) })],
+      targets: [new targets.LambdaFunction(triggerFn, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: triggerDlq })],
     });
+    dlqAlarm(this, 'EmailTriggerDlqAlarm', triggerDlq, props.alarmTopic, 'Email responder: a lead email was not sent after retries');
+    errorAlarm(this, 'EmailTriggerErrors', triggerFn, props.alarmTopic, 'Email responder trigger');
 
     // ---- Back-office agent: Runtime + AgentCore Browser -----------------------
 

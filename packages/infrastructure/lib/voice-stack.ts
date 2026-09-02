@@ -11,7 +11,10 @@ import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as sns from 'aws-cdk-lib/aws-sns';
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import { dlqAlarm, errorAlarm } from './alarms.js';
 import { Construct } from 'constructs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +31,8 @@ export interface VoiceStackProps extends cdk.StackProps {
   readonly sesFromEmail?: string;
   /** Ceiling on simultaneous calls (SQS scaling config minimum is 2). */
   readonly sessionMaxConcurrency?: number;
+  /** Where alarms page. Optional: the topic exists either way; the email is the first subscriber. */
+  readonly alarmEmail?: string;
   /**
    * Gateway wiring for the session Lambda's tool calls. `gatewayUrl` comes from
    * cdk.json context (a stable string) rather than a stack reference — the
@@ -58,6 +63,8 @@ export class VoiceStack extends cdk.Stack {
   /** Usage metering records: (tenantId, timestamp#meter) -> units. */
   readonly usageTable: dynamodb.Table;
   readonly openaiSecret: secretsmanager.Secret;
+  /** Every alarm in every stack pages this topic. */
+  readonly alarmTopic: sns.Topic;
   /** Gateway Lambda target: record_lead + notify_owner as platform tools. */
   readonly gatewayToolsFn: NodejsFunction;
 
@@ -131,9 +138,18 @@ export class VoiceStack extends cdk.Stack {
 
     this.bus = new events.EventBus(this, 'Events', { eventBusName: `${prefix}-events` });
 
+    // One topic for every alarm on the platform. Subscribe an email at deploy
+    // (ALARM_EMAIL) or add subscribers in the console — operator data, not code.
+    this.alarmTopic = new sns.Topic(this, 'Alarms', { topicName: `${prefix}-alarms`, displayName: 'WNK platform alarms' });
+    if (props.alarmEmail) this.alarmTopic.addSubscription(new subs.EmailSubscription(props.alarmEmail));
+
     // Call jobs wait here until the session Lambda finishes the call. Visibility
     // must cover the Lambda timeout; repeated failures land in the DLQ.
     const sessionDlq = new sqs.Queue(this, 'SessionDlq', { retentionPeriod: cdk.Duration.days(14) });
+    // Where an event-driven Lambda's message lands after Lambda's async retries
+    // are exhausted (notifier, CRM sync), and where EventBridge parks an event it
+    // could not deliver at all. Anything here is a lost notification or sync.
+    const eventsDlq = new sqs.Queue(this, 'EventsDlq', { retentionPeriod: cdk.Duration.days(14) });
     const sessionQueue = new sqs.Queue(this, 'SessionQueue', {
       visibilityTimeout: cdk.Duration.seconds(960),
       retentionPeriod: cdk.Duration.hours(1), // a call older than an hour is over
@@ -155,7 +171,7 @@ export class VoiceStack extends cdk.Stack {
       LOG_LEVEL: 'info',
     };
 
-    const fn = (id: string, entryFile: string, opts: { description: string; timeout: cdk.Duration; env?: Record<string, string> }) => {
+    const fn = (id: string, entryFile: string, opts: { description: string; timeout: cdk.Duration; env?: Record<string, string>; deadLetterQueue?: sqs.IQueue }) => {
       const fnName = `${prefix}-${id}`;
       const logGroup = new logs.LogGroup(this, `${id}-logs`, {
         logGroupName: `/aws/lambda/${fnName}`,
@@ -173,6 +189,8 @@ export class VoiceStack extends cdk.Stack {
         timeout: opts.timeout,
         environment: { ...commonEnv, ...(opts.env ?? {}) },
         logGroup,
+        tracing: lambda.Tracing.ACTIVE, // X-Ray: one trace from webhook through queue, call, events, and agents
+        deadLetterQueue: opts.deadLetterQueue,
         bundling: {
           format: OutputFormat.ESM,
           target: 'node22',
@@ -236,6 +254,7 @@ export class VoiceStack extends cdk.Stack {
     }));
 
     const notifierFn = fn('notifier', 'notifier.ts', {
+      deadLetterQueue: eventsDlq,
       description: 'Turns lead.recorded / owner.notify events into email + SMS',
       timeout: cdk.Duration.seconds(30),
       env: { SES_FROM_EMAIL: sesFromEmail },
@@ -246,6 +265,7 @@ export class VoiceStack extends cdk.Stack {
     notifierFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['sns:Publish'], resources: ['*'] }));
 
     const crmSyncFn = fn('crm-sync', 'crm-sync.ts', {
+      deadLetterQueue: eventsDlq,
       description: 'Syncs leads and call transcripts into the tenant CRM (HubSpot)',
       timeout: cdk.Duration.seconds(30),
     });
@@ -257,6 +277,7 @@ export class VoiceStack extends cdk.Stack {
     this.gatewayToolsFn = new NodejsFunction(this, 'gateway-tools', {
       functionName: `${prefix}-gateway-tools`,
       description: 'Gateway Lambda target: record_lead + notify_owner',
+      tracing: lambda.Tracing.ACTIVE,
       entry: path.resolve(here, '../../lambda/src/tools.ts'),
       handler: 'handler',
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -279,14 +300,26 @@ export class VoiceStack extends cdk.Stack {
       eventBus: this.bus,
       description: 'Route lead + owner notifications to the notifier',
       eventPattern: { source: [EVENT_SOURCE], detailType: ['lead.recorded', 'owner.notify'] },
-      targets: [new targets.LambdaFunction(notifierFn, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1) })],
+      targets: [new targets.LambdaFunction(notifierFn, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: eventsDlq })],
     });
     new events.Rule(this, 'CrmRule', {
       eventBus: this.bus,
       description: 'Route leads + call transcripts to the CRM sync',
       eventPattern: { source: [EVENT_SOURCE], detailType: ['lead.recorded', 'call.ended'] },
-      targets: [new targets.LambdaFunction(crmSyncFn, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1) })],
+      targets: [new targets.LambdaFunction(crmSyncFn, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: eventsDlq })],
     });
+
+    // ---- Alarms ---------------------------------------------------------------
+    // Two questions, answered by CloudWatch: is anything failing right now
+    // (function errors), and did anything fail for good (dead-letter queues).
+
+    dlqAlarm(this, 'SessionDlqAlarm', sessionDlq, this.alarmTopic, 'Voice: a call job failed 3 times');
+    dlqAlarm(this, 'EventsDlqAlarm', eventsDlq, this.alarmTopic, 'Events: a notification or CRM sync was lost');
+    errorAlarm(this, 'WebhookErrors', webhookFn, this.alarmTopic, 'Voice webhook');
+    errorAlarm(this, 'SessionErrors', sessionFn, this.alarmTopic, 'Voice session');
+    errorAlarm(this, 'NotifierErrors', notifierFn, this.alarmTopic, 'Notifier');
+    errorAlarm(this, 'CrmSyncErrors', crmSyncFn, this.alarmTopic, 'CRM sync');
+    errorAlarm(this, 'GatewayToolsErrors', this.gatewayToolsFn, this.alarmTopic, 'Gateway tools');
 
     // ---- HTTP API -------------------------------------------------------------
 

@@ -21,7 +21,7 @@ import {
 } from '@aws-sdk/client-bedrock-agentcore';
 import { CognitoIdentityProviderClient, DescribeUserPoolClientCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { callerMemory, dynamoStore, GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS, ownerUserId, recordUsage, requireTenant } from '@wnk/shared';
+import { callerMemory, dynamoStore, GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS, ownerUserId, recordUsage, requireTenant, traceContextFromHeaders, type TraceContext } from '@wnk/shared';
 import { composioGmail } from '@wnk/shared/composio';
 import * as http from 'node:http';
 
@@ -163,16 +163,18 @@ async function sendAsOwner(googleToken: string, subject: string, body: string): 
 
 // ---- The agent --------------------------------------------------------------
 
-async function processLead(event: LeadEvent): Promise<{ ok: boolean; sentTo?: string; subject?: string; skipped?: string }> {
+async function processLead(event: LeadEvent, trace: TraceContext): Promise<{ ok: boolean; sentTo?: string; subject?: string; skipped?: string }> {
   const tenant = await requireTenant(store, event.tenantId);
   const tenantId = tenant.tenantId;
+  // Every log line of this run carries the ids a Logs Insights query joins on.
+  const ctx = { tenantId, callId: event.callId, traceId: trace.traceId };
   const service = tenant.products.emailResponder;
   if (!service.enabled) {
-    console.log(JSON.stringify({ msg: 'email responder not enabled for tenant; skipping', tenantId, callId: event.callId }));
+    console.log(JSON.stringify({ msg: 'email responder not enabled for tenant; skipping', ...ctx }));
     return { ok: true, skipped: 'email responder not enabled for this tenant' };
   }
   const lead = event.lead ?? {};
-  console.log(JSON.stringify({ msg: 'lead received', lead, tenantId, callId: event.callId }));
+  console.log(JSON.stringify({ msg: 'lead received', lead, ...ctx }));
 
   let crmContext = '';
   if (lead.phone) {
@@ -206,7 +208,7 @@ async function processLead(event: LeadEvent): Promise<{ ok: boolean; sentTo?: st
     const googleToken = await googleAccessToken(ownerUserId(tenantId));
     sentTo = await sendAsOwner(googleToken, draft.subject, draft.body);
   }
-  console.log(JSON.stringify({ msg: 'email sent', sentTo, subject: draft.subject, via: service.via }));
+  console.log(JSON.stringify({ msg: 'email sent', sentTo, subject: draft.subject, via: service.via, ...ctx }));
   await recordUsage(tenantId, 'emails_sent', 1, event.callId);
   if (draftTokens > 0) await recordUsage(tenantId, 'llm_tokens', draftTokens, event.callId);
   return { ok: true, sentTo, subject: draft.subject };
@@ -225,13 +227,14 @@ const server = http.createServer((req, res) => {
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
       void (async () => {
+        const trace = traceContextFromHeaders(req.headers);
         try {
           const payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as LeadEvent;
-          const result = await processLead(payload);
+          const result = await processLead(payload, trace);
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify(result));
         } catch (err) {
-          console.error(JSON.stringify({ msg: 'invocation failed', err: String(err) }));
+          console.error(JSON.stringify({ msg: 'invocation failed', err: String(err), ...trace }));
           res.writeHead(500, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: String(err) }));
         }

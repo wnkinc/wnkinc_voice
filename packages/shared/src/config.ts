@@ -1,5 +1,6 @@
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import OpenAI from 'openai';
+import { traceIdOf } from './trace.js';
 
 // ---- Environment ------------------------------------------------------------
 
@@ -88,7 +89,10 @@ export function createLogger(ctx: Record<string, unknown> = {}): Logger {
   const emit = (level: Level, msg: string, data?: Record<string, unknown>) => {
     const min = process.env.LOG_LEVEL ?? 'info';
     if (min === 'silent' || LEVELS[level] < (LEVELS[min as Level] ?? LEVELS.info)) return;
-    const line: Record<string, unknown> = { level, msg, ts: new Date().toISOString(), ...ctx };
+    // The X-Ray trace id of the current Lambda invocation, so a Logs Insights
+    // query by traceId finds every line from every function that touched a request.
+    const traceId = traceIdOf(process.env._X_AMZN_TRACE_ID);
+    const line: Record<string, unknown> = { level, msg, ts: new Date().toISOString(), ...(traceId ? { traceId } : {}), ...ctx };
     for (const [k, v] of Object.entries(data ?? {})) {
       line[k] = v instanceof Error ? { name: v.name, message: v.message, stack: v.stack } : v;
     }

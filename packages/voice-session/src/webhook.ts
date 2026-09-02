@@ -3,7 +3,7 @@ import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import type OpenAI from 'openai';
 import { APIError, InvalidWebhookSignatureError } from 'openai/error';
 import { buildAcceptConfig, enabledTools } from './agent.js';
-import { createLogger, createOpenAI, env, getOpenAISecrets, type Logger, type OpenAISecrets } from '@wnk/shared';
+import { createLogger, createOpenAI, currentXrayHeader, env, getOpenAISecrets, type Logger, type OpenAISecrets } from '@wnk/shared';
 import { crmForTenant } from './crm-sync.js';
 import type { CrmAdapter } from './hubspot.js';
 import { identifyParties } from './sip.js';
@@ -154,7 +154,14 @@ export function sqsSessionStarter(queueUrl = env.sessionQueueUrl): WebhookDeps['
   const sqs = new SQSClient({});
   return async (job) => {
     if (!queueUrl) throw new Error('SESSION_QUEUE_URL not set');
-    await sqs.send(new SendMessageCommand({ QueueUrl: queueUrl, MessageBody: JSON.stringify(job) }));
+    // AWSTraceHeader links the session Lambda's trace to the webhook's, so one
+    // X-Ray trace covers accept -> queue -> the whole call.
+    const trace = currentXrayHeader();
+    await sqs.send(new SendMessageCommand({
+      QueueUrl: queueUrl,
+      MessageBody: JSON.stringify(job),
+      ...(trace ? { MessageSystemAttributes: { AWSTraceHeader: { DataType: 'String', StringValue: trace } } } : {}),
+    }));
   };
 }
 

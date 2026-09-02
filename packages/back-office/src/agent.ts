@@ -10,7 +10,7 @@
  */
 import { BedrockAgentCoreClient, StartBrowserSessionCommand, StopBrowserSessionCommand } from '@aws-sdk/client-bedrock-agentcore';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { dynamoStore, recordUsage, requireTenant } from '@wnk/shared';
+import { dynamoStore, recordUsage, requireTenant, traceContextFromHeaders, type TraceContext } from '@wnk/shared';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { HttpRequest } from '@smithy/protocol-http';
 import { SignatureV4 } from '@smithy/signature-v4';
@@ -148,17 +148,18 @@ interface Task { question?: string; url?: string; tenantId?: string }
 
 const store = dynamoStore();
 
-async function processTask(task: Task): Promise<{ ok: boolean; answer: string; title: string; url: string }> {
+async function processTask(task: Task, trace: TraceContext): Promise<{ ok: boolean; answer: string; title: string; url: string }> {
   if (!task.question || !task.url) throw new Error('payload needs { question, url, tenantId }');
   const tenant = await requireTenant(store, task.tenantId);
   if (!tenant.products.backOffice.enabled) throw new Error(`back office is not enabled for tenant "${tenant.tenantId}"`);
   const tenantId = tenant.tenantId;
-  console.log(JSON.stringify({ msg: 'task received', tenantId, question: task.question, url: task.url }));
+  const ctx = { tenantId, traceId: trace.traceId };
+  console.log(JSON.stringify({ msg: 'task received', ...ctx, question: task.question, url: task.url }));
   const page = await browsePage(task.url);
   console.log(JSON.stringify({ msg: 'page fetched', title: page.title, chars: page.text.length }));
   answerTokens = 0;
   const result = await answer(task.question, page, task.url);
-  console.log(JSON.stringify({ msg: 'answered' }));
+  console.log(JSON.stringify({ msg: 'answered', ...ctx }));
   await recordUsage(tenantId, 'browser_tasks', 1, task.url);
   if (answerTokens > 0) await recordUsage(tenantId, 'llm_tokens', answerTokens, task.url);
   return { ok: true, answer: result, title: page.title, url: task.url };
@@ -175,11 +176,12 @@ const server = http.createServer((req, res) => {
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
       void (async () => {
+        const trace = traceContextFromHeaders(req.headers);
         try {
-          const result = await processTask(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as Task);
+          const result = await processTask(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as Task, trace);
           res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result));
         } catch (err) {
-          console.error(JSON.stringify({ msg: 'task failed', err: String(err) }));
+          console.error(JSON.stringify({ msg: 'task failed', err: String(err), ...trace }));
           res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: false, error: String(err) }));
         }
       })();

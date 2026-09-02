@@ -1,5 +1,6 @@
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { env, type Logger } from './config.js';
+import { currentXrayHeader } from './trace.js';
 import type { VoiceEvent } from './types.js';
 
 export interface EventPublisher {
@@ -13,8 +14,10 @@ export function eventBridgePublisher(): EventPublisher {
   return {
     async publish(event) {
       const { type, ...detail } = event;
+      // TraceHeader carries the X-Ray trace to the rule targets, so the
+      // notifier / CRM sync / email trigger appear in the same trace as the call.
       const res = await client.send(new PutEventsCommand({
-        Entries: [{ EventBusName: env.eventBusName, Source: env.eventSource, DetailType: type, Detail: JSON.stringify(detail) }],
+        Entries: [{ EventBusName: env.eventBusName, Source: env.eventSource, DetailType: type, Detail: JSON.stringify(detail), TraceHeader: currentXrayHeader() }],
       }));
       if (res.FailedEntryCount) throw new Error(`EventBridge rejected ${type}: ${JSON.stringify(res.Entries)}`);
     },

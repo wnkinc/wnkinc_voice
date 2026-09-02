@@ -65,8 +65,11 @@ call). One deployment serves many businesses.
 npm install
 npm test
 npx cdk bootstrap                           # once per account/region
-SES_FROM_EMAIL=alerts@yourdomain.com npm run deploy
+SES_FROM_EMAIL=alerts@yourdomain.com ALARM_EMAIL=you@yourdomain.com npm run deploy
 ```
+
+`ALARM_EMAIL` subscribes an address to the alarm topic (confirm the SNS email once). Every
+stack's alarms page that topic: dead-letter queues holding anything, and Lambda errors.
 
 Outputs (printed by `npm run deploy`, or `aws cloudformation describe-stacks --stack-name wnk-voice-dev`): `webhookUrl`, `openaiSecretArn`, `tenantsTableName`, `callsTableName`, `leadsTableName`, `eventBusName`, `sessionQueueUrl`, `sessionFunctionName`.
 
@@ -160,6 +163,24 @@ Unknown numbers are rejected with SIP 404.
    becomes visible again (after the queue's visibility timeout) and the call is retried.
    There is no mid-call re-attach: if an invocation dies, the call drops and the caller
    calls back. A message received 3 times without completing goes to the DLQ.
+
+## Operating: traces, alarms, dead letters
+
+Every Lambda runs with X-Ray active, and the trace is carried by hand across the seams X-Ray
+doesn't cross on its own: the SQS message to the session Lambda (`AWSTraceHeader`), the
+EventBridge event (`TraceHeader`), and the `InvokeAgentRuntime` call (`traceParent` plus
+`baggage` with `tenant_id` and `call_id`). Every log line carries `traceId`, `tenantId`, and
+`callId` where known, so one Logs Insights query across the log groups reconstructs a call:
+
+```
+fields @timestamp, @log, msg, tenantId, callId
+| filter callId = "rtc_..." or traceId = "..."
+| sort @timestamp
+```
+
+Failures after retries land in a dead-letter queue (session jobs, notifier/CRM events, email
+trigger), and each queue has an alarm. The email trigger throws on a non-2xx from the agent,
+so a lost lead email is a retried, dead-lettered, alarmed event rather than a log line.
 
 ## Operating the session Lambda
 

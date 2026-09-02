@@ -10,3 +10,4 @@ export * from './rates.js';
 export * from './usage.js';
 export * from './google-oauth.js';
 export * from './tenant.js';
+export * from './trace.js';
