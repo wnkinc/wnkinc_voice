@@ -73,8 +73,13 @@ export const TenantConfigSchema = z.object({
   /** Hard cap; the agent is asked to wrap up and the call is hung up after this. The session Lambda's 15-minute timeout is the ceiling. */
   maxCallSeconds: z.number().int().positive().max(840).default(600),
 
-  /** CRM adapter. Credentials live in Secrets Manager at `<CRM_SECRET_PREFIX><tenantId>`. */
-  crm: z.object({ type: z.literal('hubspot') }).optional(),
+  /**
+   * CRM. `via: composio` (the target state) means the owner consented in
+   * HubSpot through Composio and the credential lives in Composio's vault under
+   * this tenant id. `via: token` is the legacy private-app token in Secrets
+   * Manager at `<CRM_SECRET_PREFIX><tenantId>`, removed at the cutover.
+   */
+  crm: z.object({ type: z.literal('hubspot'), via: z.enum(['token', 'composio']).default('token') }).optional(),
 
   /**
    * Humans allowed to talk to this tenant's assistant, with the channel

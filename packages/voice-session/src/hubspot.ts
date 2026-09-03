@@ -3,28 +3,9 @@
  * Hidden behind CrmAdapter so a second CRM is a second file.
  */
 
-export interface CrmContact {
-  id: string;
-  firstName?: string;
-  lastName?: string;
-  phone?: string;
-}
+import { HUBSPOT_NOTE_TO_CONTACT, HUBSPOT_TASK_TO_CONTACT, htmlToText, textToHtml, type CrmAdapter, type CrmContact } from '@wnk/shared';
+export { nextBusinessMorning, type CrmAdapter, type CrmContact, type CrmNote } from '@wnk/shared';
 
-export interface CrmNote {
-  body: string;
-  at: string; // ISO
-}
-
-export interface CrmAdapter {
-  findContactByPhone(phone: string): Promise<CrmContact | undefined>;
-  lastNote(contactId: string): Promise<CrmNote | undefined>;
-  upsertContact(input: { phone: string; firstName?: string; lastName?: string }): Promise<CrmContact>;
-  addNote(contactId: string, body: string, at?: Date): Promise<void>;
-  addTask(contactId: string, task: { subject: string; body: string; dueAt: Date }): Promise<void>;
-}
-
-const NOTE_TO_CONTACT = 202;
-const TASK_TO_CONTACT = 204;
 
 export function hubspotAdapter(token: string, fetchImpl: typeof fetch = fetch, baseUrl = 'https://api.hubapi.com'): CrmAdapter {
   async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -74,7 +55,7 @@ export function hubspotAdapter(token: string, fetchImpl: typeof fetch = fetch, b
       });
       const n = res.results[0]?.properties;
       if (!n?.hs_note_body) return undefined;
-      return { body: n.hs_note_body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(), at: n.hs_timestamp ?? '' };
+      return { body: htmlToText(n.hs_note_body), at: n.hs_timestamp ?? '' };
     },
 
     async upsertContact(input) {
@@ -94,8 +75,8 @@ export function hubspotAdapter(token: string, fetchImpl: typeof fetch = fetch, b
 
     async addNote(contactId, body, at = new Date()) {
       await api('POST', '/crm/v3/objects/notes', {
-        properties: { hs_timestamp: at.toISOString(), hs_note_body: toHtml(body) },
-        associations: assoc(contactId, NOTE_TO_CONTACT),
+        properties: { hs_timestamp: at.toISOString(), hs_note_body: textToHtml(body) },
+        associations: assoc(contactId, HUBSPOT_NOTE_TO_CONTACT),
       });
     },
 
@@ -105,40 +86,14 @@ export function hubspotAdapter(token: string, fetchImpl: typeof fetch = fetch, b
         properties: {
           hs_timestamp: task.dueAt.toISOString(),
           hs_task_subject: task.subject,
-          hs_task_body: toHtml(task.body),
+          hs_task_body: textToHtml(task.body),
           hs_task_status: 'NOT_STARTED',
           hs_task_priority: 'MEDIUM',
           hs_task_type: 'TODO',
           ...(owner ? { hubspot_owner_id: owner } : {}),
         },
-        associations: assoc(contactId, TASK_TO_CONTACT),
+        associations: assoc(contactId, HUBSPOT_TASK_TO_CONTACT),
       });
     },
   };
-}
-
-function toHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
-}
-
-/** Next weekday at `hour`:00 in the tenant's timezone (for follow-up task due dates). */
-export function nextBusinessMorning(now: Date, timeZone: string, hour = 9): Date {
-  for (let i = 0; i < 8; i++) {
-    const d = new Date(now.getTime() + i * 86_400_000);
-    const off = tzOffsetMs(d, timeZone);
-    const local = new Date(d.getTime() + off);
-    const dow = local.getUTCDay();
-    if (dow === 0 || dow === 6) continue;
-    const candidate = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), hour) - off);
-    if (candidate.getTime() > now.getTime()) return candidate;
-  }
-  return new Date(now.getTime() + 86_400_000);
-}
-
-function tzOffsetMs(date: Date, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
-  }).formatToParts(date);
-  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
-  return Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second')) - date.getTime();
 }
