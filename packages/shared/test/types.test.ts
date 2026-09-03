@@ -69,7 +69,7 @@ describe('people and the People index', () => {
     ] });
     const rows = await store.syncPeople(t);
     expect(rows.map((r) => r.channelId).sort()).toEqual(['sms:+15555550111', 'telegram:42', 'telegram:7']);
-    expect(await store.getPerson('telegram:7')).toEqual({ channelId: 'telegram:7', tenantId: 't1', name: 'Sam', role: 'employee' });
+    expect(await store.getPerson('telegram:7')).toEqual({ channelId: 'telegram:7', tenantId: 't1', tenantPhone: '+15555550100', name: 'Sam', role: 'employee' });
 
     await store.syncPeople(TenantConfigSchema.parse({ ...minimal, people: [{ name: 'Wes', role: 'owner', telegramId: 42 }] }));
     expect(await store.getPerson('telegram:7')).toBeUndefined();

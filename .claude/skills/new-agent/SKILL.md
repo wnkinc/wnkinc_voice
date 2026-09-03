@@ -5,6 +5,13 @@ description: Scaffold a new agent (a new surface/system) on AgentCore Runtime â€
 
 # Add a new agent
 
+**Harness first.** If the behavior is "a model with a prompt, tools, memory, and limits", it is an
+AgentCore harness: a `CfnHarness` in `lib/runtime-stack.ts` (see the assistant), invoked from Step
+Functions with the optimized `arn:aws:states:::bedrockagentcore:invokeHarness` state, reaching the
+Gateway AS the tenant through the tenant's `gatewayOauthProviderArn` (tools override per
+invocation). Zero agent code. Reach for a Runtime agent (below) only when configuration isn't
+enough: custom code between model and tools, a non-loop pattern, bidirectional streaming.
+
 An agent = a `packages/<name>/` folder (behavior) + wiring in `packages/infrastructure/` (hosting, identity, grants). Follow the email-responder as the worked example; back-office shows the Browser variant.
 
 ## Steps

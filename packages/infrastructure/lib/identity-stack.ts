@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import type * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
 import * as path from 'node:path';
@@ -13,6 +14,8 @@ export interface IdentityStackProps extends cdk.StackProps {
   readonly prefix: string;
   /** Secrets Manager name of the Google OAuth client (GOOGLE_OAUTH_CLIENT_ID/_SECRET). */
   readonly googleOauthSecretName: string;
+  /** The platform OpenAI key ({"OPENAI_API_KEY": ...}); the assistant harness reads it from the vault. */
+  readonly openaiSecret: secretsmanager.ISecret;
 }
 
 /**
@@ -26,11 +29,19 @@ export interface IdentityStackProps extends cdk.StackProps {
  */
 export class IdentityStack extends cdk.Stack {
   readonly googleProvider: agentcore.OAuth2CredentialProvider;
+  /** API key provider holding the OpenAI key; harnesses reference it by ARN. */
+  readonly openaiProvider: agentcore.ApiKeyCredentialProvider;
   readonly emailResponderIdentity: agentcore.WorkloadIdentity;
 
   constructor(scope: Construct, id: string, props: IdentityStackProps) {
     super(scope, id, props);
     const { prefix, googleOauthSecretName } = props;
+
+    // Provider names appear in ARNs the harness validates with [a-zA-Z0-9-.]+ — no underscores.
+    this.openaiProvider = new agentcore.ApiKeyCredentialProvider(this, 'OpenAi', {
+      apiKeyCredentialProviderName: `${prefix}-openai`,
+      apiKey: cdk.SecretValue.secretsManager(props.openaiSecret.secretArn, { jsonField: 'OPENAI_API_KEY' }),
+    });
 
     // Google 3LO: employees consent once ("Connect Gmail"); tokens live in the
     // vault. The provider's callbackUrl output must be added to the Google OAuth
@@ -83,6 +94,7 @@ export class IdentityStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'emailResponderWorkloadName', { value: this.emailResponderIdentity.workloadIdentityName });
     new cdk.CfnOutput(this, 'googleProviderArn', { value: this.googleProvider.credentialProviderArn });
+    new cdk.CfnOutput(this, 'openaiProviderArn', { value: this.openaiProvider.credentialProviderArn });
     new cdk.CfnOutput(this, 'googleCallbackUrl', { value: this.googleProvider.callbackUrl ?? '' });
   }
 }

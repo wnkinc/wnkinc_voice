@@ -57,7 +57,7 @@ export interface Store {
 
 function peopleRecords(tenant: TenantConfig): PersonRecord[] {
   return tenant.people.flatMap((p) =>
-    personChannelKeys(p).map((channelId) => ({ channelId, tenantId: tenant.tenantId, name: p.name, role: p.role })));
+    personChannelKeys(p).map((channelId) => ({ channelId, tenantId: tenant.tenantId, tenantPhone: tenant.phoneNumber, name: p.name, role: p.role })));
 }
 
 function buildLead(input: NewLead): Lead {

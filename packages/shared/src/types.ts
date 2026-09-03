@@ -30,6 +30,8 @@ export function personChannelKeys(p: Person): string[] {
 export interface PersonRecord {
   channelId: string;
   tenantId: string;
+  /** The tenant row's key, so one GetItem reaches the tenant from a person. */
+  tenantPhone: string;
   name: string;
   role: Person['role'];
 }
@@ -50,6 +52,13 @@ export const TenantConfigSchema = z.object({
    * missing; the secret stays in Cognito (agents fetch it through IAM).
    */
   cognitoClientId: z.string().min(1).optional(),
+  /**
+   * AgentCore Identity OAuth2 credential provider wrapping that client
+   * (client-credentials against Cognito). The assistant harness is handed
+   * this per invocation so it reaches the Gateway AS the tenant. Minted by
+   * the seed next to the client.
+   */
+  gatewayOauthProviderArn: z.string().min(1).optional(),
 
   businessName: z.string().min(1),
   description: z.string().optional(),

@@ -13,7 +13,6 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
-import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import { dlqAlarm, errorAlarm, failedExecutionsAlarm } from './alarms.js';
 import { Construct } from 'constructs';
 import { buildSync } from 'esbuild';
@@ -31,6 +30,10 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly workloadName: string;
   readonly googleProviderName: string;
   readonly openaiSecret: secretsmanager.ISecret;
+  /** Identity API key provider holding the OpenAI key; the assistant harness reads the key from the vault. */
+  readonly openaiProviderArn: string;
+  /** The Gateway the assistant harness attaches per invocation (as the tenant). */
+  readonly gatewayId: string;
   /** Composio API key (voice stack owns it; the tools Lambda reads it too). */
   readonly composioSecret: secretsmanager.ISecret;
   readonly bus: events.IEventBus;
@@ -207,18 +210,19 @@ export class RuntimeStack extends cdk.Stack {
     }));
     props.openaiSecret.grantRead(backOffice.role);
 
-    // ---- My Assistant: Telegram -> API Gateway -> Step Functions -> Runtime --
+    // ---- My Assistant: Telegram -> API Gateway -> Step Functions -> harness --
     //
-    // No Lambda anywhere on this path. API Gateway starts the workflow directly
-    // with Telegram's update as input; the workflow drops anything that is not a
-    // private text message, looks the sender up in the People table, ends
-    // silently for a stranger, and invokes the agent for a known person. The
-    // agent delivers its own reply (Telegram wants the bot token in the URL
-    // path, which no managed HTTP target can supply).
+    // No code on this path. The assistant is an AgentCore HARNESS: model,
+    // default prompt, memory, and limits are configuration below. Per
+    // invocation the workflow passes the message, a prompt built from the
+    // tenant row, and the tenant's Gateway OAuth provider, so the harness calls
+    // tools AS the tenant's own client and the Gateway interceptor attributes
+    // every call. The reply leaves through an EventBridge API destination
+    // (Telegram wants the bot token in the URL path, which no managed HTTP
+    // target can inject — but a destination's endpoint can carry it).
 
     // Bot token (set by hand, see README) plus a generated secret path segment
     // for the webhook URL — Telegram's recommended way to authenticate posts.
-    // Neither is in git, the CDK context, or a synth-time env var.
     const telegramSecret = new secretsmanager.Secret(this, 'TelegramSecret', {
       description: 'Telegram bot: {"TELEGRAM_BOT_TOKEN": <from BotFather>, "WEBHOOK_PATH": <generated>}',
       generateSecretString: {
@@ -229,97 +233,174 @@ export class RuntimeStack extends cdk.Stack {
       },
     });
 
-    const assistant = new agentcore.Runtime(this, 'Assistant', {
-      runtimeName: `${prefix.replace(/-/g, '_')}_assistant`,
-      description: "My Assistant: a tenant's own people chat about their business, with Gateway tools",
-      agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromCodeAsset({
-        path: bundleAgent('assistant'),
-        runtime: agentcore.AgentCoreRuntime.NODE_22,
-        entrypoint: ['index.js'],
-      }),
-      environmentVariables: {
-        GATEWAY_URL: props.gatewayUrl,
-        COGNITO_USER_POOL_ID: props.cognitoUserPoolId,
-        GATEWAY_SCOPE: 'gateway/assistant',
-        COGNITO_TOKEN_URL: props.cognitoTokenUrl,
-        OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
-        TELEGRAM_SECRET_ARN: telegramSecret.secretArn,
-        USAGE_TABLE: props.usageTable.tableName,
-        TENANTS_TABLE: props.tenantsTable.tableName,
-        ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
-      },
+    const gatewayArn = agentcoreArn(`gateway/${props.gatewayId}`);
+
+    // The harness's execution role: the documented sample, scoped to what it
+    // touches — the OpenAI key provider, ANY tenant's Gateway OAuth provider
+    // (minted per tenant by the seed), and the platform Memory instance.
+    const harnessRole = new iam.Role(this, 'AssistantHarnessRole', {
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
+      description: 'Execution role for the My Assistant harness',
     });
-    props.tenantsTable.grantReadData(assistant.role);
-    props.usageTable.grantWriteData(assistant.role);
-    props.openaiSecret.grantRead(assistant.role);
-    telegramSecret.grantRead(assistant.role);
+    harnessRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['ecr-public:GetAuthorizationToken', 'sts:GetServiceBearerToken', 'xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets',
+        'logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams', 'logs:DescribeLogGroups', 'logs:PutResourcePolicy'],
+      resources: ['*'],
+    }));
+    harnessRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['cloudwatch:PutMetricData'], resources: ['*'], conditions: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } },
+    }));
+    harnessRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:GetWorkloadAccessToken', 'bedrock-agentcore:GetWorkloadAccessTokenForJWT', 'bedrock-agentcore:GetResourceApiKey', 'bedrock-agentcore:GetResourceOauth2Token'],
+      resources: [
+        agentcoreArn('workload-identity-directory/default'),
+        agentcoreArn('workload-identity-directory/default/workload-identity/*'),
+        agentcoreArn('token-vault/default'),
+        props.openaiProviderArn,
+        agentcoreArn('token-vault/default/oauth2credentialprovider/*'),
+      ],
+    }));
+    harnessRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:bedrock-agentcore-identity!*`],
+    }));
+    harnessRole.addToPolicy(new iam.PolicyStatement({ actions: ['bedrock-agentcore:InvokeGateway'], resources: [gatewayArn] }));
     if (props.callerMemory) {
-      assistant.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      harnessRole.addToPolicy(new iam.PolicyStatement({
         actions: MEMORY_USE_ACTIONS,
         resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
       }));
     }
-    assistant.role.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: ['cognito-idp:DescribeUserPoolClient'],
-      resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${props.cognitoUserPoolId}`],
-    }));
 
-    // The workflow. Input is Telegram's Update object.
-    const senderKey = "States.Format('telegram:{}', States.JsonToString($.message.from.id))";
-    const lookup = new tasks.DynamoGetItem(this, 'LookupPerson', {
-      table: props.peopleTable,
-      key: { channelId: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt(senderKey)) },
-      resultPath: '$.person',
+    const harness = new agentcore.CfnHarness(this, 'AssistantHarness', {
+      harnessName: `${prefix.replace(/-/g, '_')}_assistant`,
+      executionRoleArn: harnessRole.roleArn,
+      model: { openAiModelConfig: { modelId: process.env.ASSISTANT_MODEL ?? 'gpt-5-mini', apiKeyArn: props.openaiProviderArn, apiFormat: 'responses', maxTokens: 1200 } },
+      systemPrompt: [{ text: 'You are My Assistant for a small business. Be brief and plain. The per-invocation prompt names the business and the person.' }],
+      // No default Gateway tool: the workflow passes the TENANT's provider per invocation.
+      allowedTools: ['@wnkgateway/*'], // never the built-in shell/file tools
+      memory: props.callerMemory ? { agentCoreMemoryConfiguration: { arn: props.callerMemory.memoryArn } } : { disabled: {} },
+      maxIterations: 8,
+      timeoutSeconds: 120,
     });
-    const buildPayload = new sfn.Pass(this, 'BuildPayload', {
-      parameters: {
-        'tenantId.$': '$.person.Item.tenantId.S',
-        person: { 'name.$': '$.person.Item.name.S', 'role.$': '$.person.Item.role.S' },
-        'channelId.$': senderKey,
-        channel: { type: 'telegram', 'chatId.$': '$.message.chat.id' },
-        'text.$': '$.message.text',
+    harness.node.addDependency(harnessRole);
+
+    // ---- Reply path: EventBridge -> API destination -> Bot API sendMessage ----
+    // The destination's endpoint carries the bot token, resolved from the
+    // secret at deploy (same trick as the webhook route). Telegram ignores the
+    // connection's dummy header. A rejected message (e.g. over 4096 chars)
+    // lands in the DLQ and alarms.
+    const connection = new events.Connection(this, 'TelegramConnection', {
+      description: 'Telegram Bot API (auth is in the URL path; header is a placeholder)',
+      authorization: events.Authorization.apiKey('x-wnk-connection', cdk.SecretValue.unsafePlainText('none')),
+    });
+    const telegramSend = new events.ApiDestination(this, 'TelegramSend', {
+      connection,
+      endpoint: `https://api.telegram.org/bot${telegramSecret.secretValueFromJson('TELEGRAM_BOT_TOKEN').unsafeUnwrap()}/sendMessage`,
+      httpMethod: events.HttpMethod.POST,
+      rateLimitPerSecond: 20,
+    });
+    const replyDlq = new sqs.Queue(this, 'TelegramReplyDlq', { retentionPeriod: cdk.Duration.days(14) });
+    new events.Rule(this, 'TelegramReplyRule', {
+      eventBus: props.bus,
+      description: 'Deliver assistant replies to Telegram',
+      eventPattern: { source: ['wnkinc.assistant'], detailType: ['telegram.reply'] },
+      targets: [new targets.ApiDestination(telegramSend, {
+        event: events.RuleTargetInput.fromObject({ chat_id: events.EventField.fromPath('$.detail.chatId'), text: events.EventField.fromPath('$.detail.text') }),
+        deadLetterQueue: replyDlq,
+        retryAttempts: 3,
+        maxEventAge: cdk.Duration.minutes(10),
+      })],
+    });
+    dlqAlarm(this, 'TelegramReplyDlqAlarm', replyDlq, props.alarmTopic, 'Assistant (Telegram): a reply was not delivered');
+
+    // ---- The workflow (JSONata). Input is Telegram's Update object. -----------
+    const q = (expr: string) => `{% ${expr} %}`;
+    const prompt = [
+      "'You are My Assistant for ' & $tenant.businessName.S & ', chatting with ' & $person.name.S & ' (' & $person.role.S & ') who works there. '",
+      "($exists($tenant.description.S) ? 'About the business: ' & $tenant.description.S & ' ' : '')",
+      "($exists($tenant.services.L) and $count($tenant.services.L) > 0 ? 'Services: ' & $join($tenant.services.L.S, ', ') & '. ' : '')",
+      "($exists($tenant.hours.S) ? 'Hours: ' & $tenant.hours.S & '. ' : '')",
+      "'This is a chat: be brief and plain, no markdown. Use your tools to look things up or record things; say what you did and what you found. Never invent records. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 3000 characters.'",
+    ].join(' & ');
+    const definition = {
+      QueryLanguage: 'JSONata',
+      StartAt: 'IsPrivateText',
+      States: {
+        IsPrivateText: {
+          Type: 'Choice',
+          Choices: [{ Condition: q("$exists($states.input.message.text) and $exists($states.input.message.from.id) and $states.input.message.chat.type = 'private'"), Next: 'LookupPerson' }],
+          Default: 'Ignored',
+        },
+        Ignored: { Type: 'Succeed' },
+        LookupPerson: {
+          Type: 'Task', Resource: 'arn:aws:states:::dynamodb:getItem',
+          Arguments: { TableName: props.peopleTable.tableName, Key: { channelId: { S: q("'telegram:' & $string($states.input.message.from.id)") } } },
+          Assign: { person: q('$states.result.Item') }, Output: q('$states.input'), Next: 'KnownSender',
+        },
+        KnownSender: { Type: 'Choice', Choices: [{ Condition: q('$exists($person)'), Next: 'LookupTenant' }], Default: 'UnknownSender' },
+        UnknownSender: { Type: 'Succeed' },
+        LookupTenant: {
+          Type: 'Task', Resource: 'arn:aws:states:::dynamodb:getItem',
+          Arguments: { TableName: props.tenantsTable.tableName, Key: { phoneNumber: { S: q('$person.tenantPhone.S') } } },
+          Assign: { tenant: q('$states.result.Item') }, Output: q('$states.input'), Next: 'AssistantEnabled',
+        },
+        AssistantEnabled: {
+          Type: 'Choice',
+          Choices: [{ Condition: q('$exists($tenant) and $tenant.products.M.assistant.M.enabled.BOOL = true and $exists($tenant.gatewayOauthProviderArn.S)'), Next: 'Invoke' }],
+          Default: 'Ignored',
+        },
+        Invoke: {
+          Type: 'Task', Resource: 'arn:aws:states:::bedrockagentcore:invokeHarness',
+          Arguments: {
+            HarnessArn: harness.attrArn,
+            // One session per chat (ids must be >= 33 chars); one actor per person, tenant-prefixed for memory isolation.
+            RuntimeSessionId: q("'telegram-chat-' & $string($states.input.message.chat.id) & '-000000000000000000000000000000'"),
+            ActorId: q("$tenant.tenantId.S & '_telegram_' & $string($states.input.message.from.id)"),
+            Messages: [{ Role: 'user', Content: [{ Text: q('$states.input.message.text') }] }],
+            SystemPrompt: [{ Text: q(prompt) }],
+            Tools: [{ Type: 'agentcore_gateway', Name: 'wnkgateway', Config: { AgentCoreGateway: { GatewayArn: gatewayArn, OutboundAuth: { Oauth: { ProviderArn: q('$tenant.gatewayOauthProviderArn.S'), Scopes: ['gateway/assistant'], GrantType: 'CLIENT_CREDENTIALS' } } } } }],
+            AllowedTools: ['@wnkgateway/*'],
+            TimeoutSeconds: 120,
+          },
+          Retry: [{ ErrorEquals: ['BedrockAgentCore.ThrottlingException'], IntervalSeconds: 5, MaxAttempts: 2, BackoffRate: 2 }],
+          Assign: { reply: q('$states.result.Output.Message.Content[0].Text'), usage: q('$states.result.Usage') },
+          Output: q('$states.input'), Next: 'Reply',
+        },
+        Reply: {
+          Type: 'Task', Resource: 'arn:aws:states:::events:putEvents',
+          Arguments: { Entries: [{
+            EventBusName: props.bus.eventBusName, Source: 'wnkinc.assistant', DetailType: 'telegram.reply',
+            Detail: q("$string({'tenantId': $tenant.tenantId.S, 'chatId': $states.input.message.chat.id, 'text': $reply})"),
+          }] },
+          Output: q('$states.input'), Next: 'Usage',
+        },
+        Usage: {
+          Type: 'Task', Resource: 'arn:aws:states:::dynamodb:putItem',
+          Arguments: { TableName: props.usageTable.tableName, Item: {
+            tenantId: { S: q('$tenant.tenantId.S') },
+            sk: { S: q("$now() & '#llm_tokens#' & $uuid()") },
+            meter: { S: 'llm_tokens' },
+            units: { N: q('$string($usage.TotalTokens)') },
+            ref: { S: q("'telegram:' & $string($states.input.message.chat.id)") },
+          } },
+          End: true,
+        },
       },
-      resultPath: '$.payload',
-    });
-    const invoke = new tasks.CallAwsService(this, 'InvokeAssistant', {
-      service: 'bedrockagentcore',
-      action: 'invokeAgentRuntime',
-      iamAction: 'bedrock-agentcore:InvokeAgentRuntime',
-      iamResources: [assistant.agentRuntimeArn, `${assistant.agentRuntimeArn}/runtime-endpoint/*`],
-      parameters: {
-        AgentRuntimeArn: assistant.agentRuntimeArn,
-        Qualifier: 'DEFAULT',
-        // One Runtime session per chat: the agent keeps the thread in memory between turns. Ids must be >= 33 chars.
-        'RuntimeSessionId.$': "States.Format('telegram-chat-{}-000000000000000000000000000000', States.JsonToString($.message.chat.id))",
-        ContentType: 'application/json',
-        Accept: 'application/json',
-        'Payload.$': 'States.JsonToString($.payload)',
-      },
-      resultSelector: { 'statusCode.$': '$.StatusCode', 'body.$': '$.Response' },
-      resultPath: '$.result',
-    });
-    invoke.addRetry({ errors: ['States.ALL'], interval: cdk.Duration.seconds(5), maxAttempts: 2, backoffRate: 2 });
-    const agentOk = new sfn.Choice(this, 'AgentReplied')
-      .when(sfn.Condition.numberEquals('$.result.statusCode', 200), new sfn.Succeed(this, 'Replied'))
-      .otherwise(new sfn.Fail(this, 'AgentError', { error: 'AssistantReturnedError', causePath: '$.result.body' }));
-    const definition = new sfn.Choice(this, 'IsPrivateText')
-      .when(
-        sfn.Condition.and(
-          sfn.Condition.isPresent('$.message.text'),
-          sfn.Condition.isPresent('$.message.from.id'),
-          sfn.Condition.isPresent('$.message.chat.type'),
-          sfn.Condition.stringEquals('$.message.chat.type', 'private'),
-        ),
-        lookup.next(new sfn.Choice(this, 'KnownSender')
-          .when(sfn.Condition.isPresent('$.person.Item'), buildPayload.next(invoke).next(agentOk))
-          .otherwise(new sfn.Succeed(this, 'UnknownSender'))),
-      )
-      .otherwise(new sfn.Succeed(this, 'Ignored'));
+    };
     const workflow = new sfn.StateMachine(this, 'TelegramWorkflow', {
       stateMachineName: `${prefix}-telegram`,
-      definitionBody: sfn.DefinitionBody.fromChainable(definition),
+      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(definition)),
       timeout: cdk.Duration.minutes(5),
     });
+    props.peopleTable.grantReadData(workflow);
+    props.tenantsTable.grantReadData(workflow);
+    props.usageTable.grantWriteData(workflow);
+    props.bus.grantPutEventsTo(workflow);
+    workflow.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:InvokeHarness', 'bedrock-agentcore:InvokeAgentRuntime'],
+      resources: [harness.attrArn, `${harness.attrArn}/*`],
+    }));
     failedExecutionsAlarm(this, 'TelegramWorkflowFailed', workflow, props.alarmTopic, 'Assistant (Telegram)');
 
     // Telegram posts here; API Gateway starts an execution and answers 200 at
@@ -336,7 +417,7 @@ export class RuntimeStack extends cdk.Stack {
       }),
     });
 
-    new cdk.CfnOutput(this, 'assistantRuntimeArn', { value: assistant.agentRuntimeArn });
+    new cdk.CfnOutput(this, 'assistantHarnessArn', { value: harness.attrArn });
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'telegramWorkflowArn', { value: workflow.stateMachineArn });
     new cdk.CfnOutput(this, 'emailAgentRuntimeArn', { value: emailAgent.agentRuntimeArn });
