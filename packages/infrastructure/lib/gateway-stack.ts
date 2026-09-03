@@ -135,6 +135,49 @@ export class GatewayStack extends cdk.Stack {
         },
       ]),
     });
+    // CRM tools on the same Lambda: HubSpot through Composio, the tenant id
+    // (from the interceptor) selecting the credential. Tenant fields are
+    // declared so validation accepts them but never required of the caller.
+    const tenantProps = {
+      tenant_id: { type: agentcore.SchemaDefinitionType.STRING, description: 'Set by the Gateway from the caller identity' },
+      tenant_phone: { type: agentcore.SchemaDefinitionType.STRING, description: 'Set by the Gateway from the caller identity' },
+    };
+    const str = (description: string) => ({ type: agentcore.SchemaDefinitionType.STRING, description });
+    this.gateway.addLambdaTarget('CrmTools', {
+      gatewayTargetName: 'crm',
+      description: "The business's CRM: contacts and notes",
+      lambdaFunction: props.voiceToolsFn,
+      toolSchema: agentcore.ToolSchema.fromInline([
+        {
+          name: 'search_contacts',
+          description: 'Find CRM contacts by name, email, or phone number. Returns id, name, phone, email for each match.',
+          inputSchema: {
+            type: agentcore.SchemaDefinitionType.OBJECT,
+            properties: { query: str('Name, email, or phone number to search for'), limit: { type: agentcore.SchemaDefinitionType.INTEGER, description: 'Max results (default 5, max 20)' }, ...tenantProps },
+            required: ['query'],
+          },
+        },
+        {
+          name: 'get_contact',
+          description: 'Read one CRM contact by id, with the most recent note about them.',
+          inputSchema: { type: agentcore.SchemaDefinitionType.OBJECT, properties: { contact_id: str('The contact id from search_contacts'), ...tenantProps }, required: ['contact_id'] },
+        },
+        {
+          name: 'create_contact',
+          description: 'Create a CRM contact (or fill in missing names on the existing contact with that phone number).',
+          inputSchema: {
+            type: agentcore.SchemaDefinitionType.OBJECT,
+            properties: { phone: str('Phone number'), first_name: str('First name'), last_name: str('Last name'), ...tenantProps },
+            required: ['phone'],
+          },
+        },
+        {
+          name: 'add_note',
+          description: 'Add a timestamped note to a CRM contact.',
+          inputSchema: { type: agentcore.SchemaDefinitionType.OBJECT, properties: { contact_id: str('The contact id'), body: str('Plain-text note'), ...tenantProps }, required: ['contact_id', 'body'] },
+        },
+      ]),
+    });
     props.voiceToolsFn.grantInvoke(this.gateway.role);
 
     // Vended application logs -> CloudWatch, so tool-call failures are debuggable.

@@ -1,7 +1,7 @@
 /**
  * Phase-1 proof: talk to the AgentCore Gateway as an MCP client.
  *
- *   npx tsx scripts/test-gateway.ts [search query] [clientId|machine] [scope]
+ *   npx tsx scripts/test-gateway.ts [search query] [clientId|machine] [scope] [tool]
  *
  * Gets a client-credentials JWT from Cognito, then: initialize -> tools/list ->
  * tools/call hubspot___searchContacts. Reads stack outputs + the client secret
@@ -36,6 +36,7 @@ async function mcp(url: string, token: string, body: object): Promise<unknown> {
 const query = process.argv[2] ?? 'Jordan';
 const clientArg = process.argv[3] ?? 'machine';
 const scope = process.argv[4] ?? 'gateway/invoke';
+const tool = process.argv[5] ?? 'hubspot___searchContacts';
 
 const userPoolId = stackOutput('wnk-auth-dev', 'userPoolId');
 const clientId = clientArg === 'machine' ? stackOutput('wnk-auth-dev', 'machineClientId') : clientArg;
@@ -66,7 +67,7 @@ const call = await mcp(gatewayUrl, access_token, {
   jsonrpc: '2.0',
   id: 3,
   method: 'tools/call',
-  params: { name: 'hubspot___searchContacts', arguments: { query, limit: 3 } },
+  params: { name: tool, arguments: { query, limit: 3 } },
 });
-console.log('searchContacts result:');
+console.log(`${tool} result:`);
 console.log(JSON.stringify(call, null, 2).slice(0, 2500));

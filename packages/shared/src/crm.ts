@@ -9,6 +9,7 @@ export interface CrmContact {
   firstName?: string;
   lastName?: string;
   phone?: string;
+  email?: string;
 }
 
 export interface CrmNote {
@@ -17,6 +18,9 @@ export interface CrmNote {
 }
 
 export interface CrmAdapter {
+  /** Free-text search over the CRM's default searchable contact fields (name, email, phone). */
+  searchContacts(query: string, limit?: number): Promise<CrmContact[]>;
+  getContact(contactId: string): Promise<CrmContact | undefined>;
   findContactByPhone(phone: string): Promise<CrmContact | undefined>;
   lastNote(contactId: string): Promise<CrmNote | undefined>;
   upsertContact(input: { phone: string; firstName?: string; lastName?: string }): Promise<CrmContact>;

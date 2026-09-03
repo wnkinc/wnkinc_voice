@@ -125,7 +125,7 @@ when {
     policy('email_scope_tools', 'A client acting as the email agent may read CRM context', `
 permit(
   principal is AgentCore::OAuthUser,
-  action in [AgentCore::Action::"hubspot___searchContacts", AgentCore::Action::"hubspot___getContact"],
+  action in [AgentCore::Action::"crm___search_contacts", AgentCore::Action::"crm___get_contact"],
   resource == AgentCore::Gateway::"${gatewayArn}"
 )
 when {
@@ -136,10 +136,10 @@ when {
 permit(
   principal is AgentCore::OAuthUser,
   action in [
-    AgentCore::Action::"hubspot___searchContacts",
-    AgentCore::Action::"hubspot___getContact",
-    AgentCore::Action::"hubspot___createContact",
-    AgentCore::Action::"hubspot___createNote"
+    AgentCore::Action::"crm___search_contacts",
+    AgentCore::Action::"crm___get_contact",
+    AgentCore::Action::"crm___create_contact",
+    AgentCore::Action::"crm___add_note"
   ],
   resource == AgentCore::Gateway::"${gatewayArn}"
 )

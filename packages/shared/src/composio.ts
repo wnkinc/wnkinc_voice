@@ -149,11 +149,13 @@ export interface CrmTransport {
 const unwrap = <T>(d: unknown): T => ((d as { response_data?: unknown })?.response_data ?? d) as T;
 
 type HsContact = { id: string; properties?: Record<string, string | null> };
+const CONTACT_PROPS = ['firstname', 'lastname', 'phone', 'mobilephone', 'email'];
 const toContact = (r: HsContact): CrmContact => ({
   id: r.id,
   firstName: r.properties?.firstname ?? undefined,
   lastName: r.properties?.lastname ?? undefined,
   phone: r.properties?.phone ?? r.properties?.mobilephone ?? undefined,
+  email: r.properties?.email ?? undefined,
 });
 
 const assoc = (contactId: string, typeId: number) => [
@@ -168,12 +170,23 @@ export function crmAdapterOn(t: CrmTransport): CrmAdapter {
       .catch(() => undefined));
 
   const adapter: CrmAdapter = {
+    async searchContacts(query, limit = 5) {
+      const d = await t.execute('HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', { query, limit, properties: CONTACT_PROPS });
+      return (unwrap<{ results?: HsContact[] }>(d).results ?? []).map(toContact);
+    },
+
+    async getContact(contactId) {
+      const d = await t.execute('HUBSPOT_READ_CONTACT', { contactId, properties: CONTACT_PROPS }).catch(() => undefined);
+      const r = d ? unwrap<HsContact>(d) : undefined;
+      return r?.id ? toContact(r) : undefined;
+    },
+
     async findContactByPhone(phone) {
       const digits = phone.replace(/\D/g, '');
       const eq = (propertyName: string, value: string) => ({ filters: [{ propertyName, operator: 'EQ', value }] });
       const d = await t.execute('HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', {
         filterGroups: [eq('phone', phone), eq('mobilephone', phone), eq('hs_searchable_calculated_phone_number', digits)],
-        properties: ['firstname', 'lastname', 'phone', 'mobilephone'],
+        properties: CONTACT_PROPS,
         limit: 1,
       });
       const first = unwrap<{ results?: HsContact[] }>(d).results?.[0];

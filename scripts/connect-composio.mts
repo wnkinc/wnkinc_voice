@@ -18,7 +18,7 @@ if (toolkit !== 'gmail' && toolkit !== 'hubspot') throw new Error(`unknown toolk
 
 if (!process.env.COMPOSIO_API_KEY && !process.env.COMPOSIO_SECRET_ARN) {
   process.env.COMPOSIO_SECRET_ARN = execFileSync('aws', [
-    'cloudformation', 'describe-stacks', '--stack-name', 'wnk-runtime-dev',
+    'cloudformation', 'describe-stacks', '--stack-name', 'wnk-voice-dev',
     '--query', "Stacks[0].Outputs[?OutputKey=='composioSecretArn'].OutputValue | [0]",
     '--output', 'text', '--region', 'us-west-2',
   ], { encoding: 'utf8' }).trim();

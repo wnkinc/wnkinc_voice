@@ -113,6 +113,8 @@ describe('webhook handler', () => {
 
 describe('caller recognition', () => {
   const crm = (delayMs: number) => ({
+    searchContacts: async () => [],
+    getContact: async () => undefined,
     findContactByPhone: async () => { await new Promise((r) => setTimeout(r, delayMs)); return { id: '42', firstName: 'Jordan' }; },
     lastNote: async () => ({ body: 'Door replacement', at: '2026-08-21T23:53:00Z' }),
     upsertContact: async () => { throw new Error('unused'); },

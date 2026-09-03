@@ -72,6 +72,7 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   workloadName: identity.emailResponderIdentity.workloadIdentityName,
   googleProviderName: `${prefix.replace(/-/g, '_')}_google`,
   openaiSecret: voice.openaiSecret,
+  composioSecret: voice.composioSecret,
   bus: voice.bus,
   usageTable: voice.usageTable,
   tenantsTable: voice.tenantsTable,

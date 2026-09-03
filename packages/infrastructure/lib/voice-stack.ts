@@ -69,6 +69,8 @@ export class VoiceStack extends cdk.Stack {
   /** Usage metering records: (tenantId, timestamp#meter) -> units. */
   readonly usageTable: dynamodb.Table;
   readonly openaiSecret: secretsmanager.Secret;
+  /** Composio project API key ({"COMPOSIO_API_KEY": ...}): the SaaS credential broker every tenant's Gmail/HubSpot goes through. */
+  readonly composioSecret: secretsmanager.Secret;
   /** Every alarm in every stack pages this topic. */
   readonly alarmTopic: sns.Topic;
   /** Gateway Lambda target: record_lead + notify_owner as platform tools. */
@@ -299,9 +301,16 @@ export class VoiceStack extends cdk.Stack {
 
     // Gateway Lambda target: the voice tools as shared platform tools. Lives in
     // this stack (it owns the tables and bus); the gateway stack registers it.
+    // Composio: Gmail + HubSpot credential broker (their verified OAuth apps;
+    // tokens in their vault keyed by our tenant id). Fill after deploy:
+    //   aws secretsmanager put-secret-value --secret-id <arn> --secret-string '{"COMPOSIO_API_KEY":"ak_..."}'
+    this.composioSecret = new secretsmanager.Secret(this, 'ComposioSecret', {
+      description: 'Composio project API key ({"COMPOSIO_API_KEY": ...})',
+    });
+
     this.gatewayToolsFn = new NodejsFunction(this, 'gateway-tools', {
       functionName: `${prefix}-gateway-tools`,
-      description: 'Gateway Lambda target: record_lead + notify_owner',
+      description: 'Gateway Lambda target: voice tools (record_lead, notify_owner) and CRM tools via Composio',
       tracing: lambda.Tracing.ACTIVE,
       entry: path.resolve(here, '../../lambda/src/tools.ts'),
       handler: 'handler',
@@ -310,13 +319,17 @@ export class VoiceStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(15),
       environment: {
         LEADS_TABLE: this.leadsTable.tableName,
+        TENANTS_TABLE: this.tenantsTable.tableName,
         EVENT_BUS_NAME: this.bus.eventBusName,
         EVENT_SOURCE,
+        COMPOSIO_SECRET_ARN: this.composioSecret.secretArn,
         LOG_LEVEL: 'info',
       },
       bundling: { format: OutputFormat.ESM, target: 'node22', banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" },
     });
     this.leadsTable.grantWriteData(this.gatewayToolsFn);
+    this.tenantsTable.grantReadData(this.gatewayToolsFn);
+    this.composioSecret.grantRead(this.gatewayToolsFn);
     this.bus.grantPutEventsTo(this.gatewayToolsFn);
 
     // Runs before every Gateway tool dispatch, after the Gateway has verified
@@ -386,6 +399,7 @@ export class VoiceStack extends cdk.Stack {
     /** Register this for `realtime.call.incoming` at platform.openai.com -> Settings -> Webhooks. */
     new cdk.CfnOutput(this, 'webhookUrl', { value: `${api.apiEndpoint}/openai/webhook` });
     new cdk.CfnOutput(this, 'openaiSecretArn', { value: this.openaiSecret.secretArn });
+    new cdk.CfnOutput(this, 'composioSecretArn', { value: this.composioSecret.secretArn });
     new cdk.CfnOutput(this, 'apiEndpoint', { value: api.apiEndpoint });
     new cdk.CfnOutput(this, 'tenantsTableName', { value: this.tenantsTable.tableName });
     new cdk.CfnOutput(this, 'peopleTableName', { value: this.peopleTable.tableName });

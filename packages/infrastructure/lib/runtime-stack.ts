@@ -34,6 +34,8 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly workloadName: string;
   readonly googleProviderName: string;
   readonly openaiSecret: secretsmanager.ISecret;
+  /** Composio API key (voice stack owns it; the tools Lambda reads it too). */
+  readonly composioSecret: secretsmanager.ISecret;
   readonly bus: events.IEventBus;
   readonly usageTable: dynamodb.ITable;
   /** Agents read their tenant's row to check the service is enabled and how it is configured. */
@@ -84,14 +86,8 @@ export class RuntimeStack extends cdk.Stack {
     };
     const dist = bundleAgent('email-responder');
 
-    // Composio: Gmail credential broker (their verified OAuth app; no 7-day
-    // token expiry). Fill after deploy:
-    //   aws secretsmanager put-secret-value --secret-id <arn> \
-    //     --secret-string '{"COMPOSIO_API_KEY":"ak_..."}'
-    // Which broker a tenant uses is tenant data: `products.emailResponder.via`.
-    const composioSecret = new secretsmanager.Secret(this, 'ComposioSecret', {
-      description: 'Composio project API key ({"COMPOSIO_API_KEY": ...})',
-    });
+    // Which broker a tenant's Gmail uses is tenant data: `products.emailResponder.via`.
+    const composioSecret = props.composioSecret;
 
     const emailAgent = new agentcore.Runtime(this, 'EmailResponder', {
       runtimeName: `${prefix.replace(/-/g, '_')}_email_responder`,
@@ -120,7 +116,6 @@ export class RuntimeStack extends cdk.Stack {
     composioSecret.grantRead(emailAgent.role);
     props.tenantsTable.grantReadData(emailAgent.role);
     props.callsTable.grantReadWriteData(emailAgent.role);
-    new cdk.CfnOutput(this, 'composioSecretArn', { value: composioSecret.secretArn });
 
     // The agent's own credentials: read the vault token for its workload, read
     // the OpenAI key, and read the Cognito client secret for Gateway JWTs.

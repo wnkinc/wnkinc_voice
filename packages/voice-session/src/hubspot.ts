@@ -35,6 +35,16 @@ export function hubspotAdapter(token: string, fetchImpl: typeof fetch = fetch, b
       .catch(() => undefined));
 
   return {
+    async searchContacts(query, limit = 5) {
+      const res = await api<{ results: Array<{ id: string; properties: Record<string, string | null> }> }>('POST', '/crm/v3/objects/contacts/search', {
+        query, limit, properties: ['firstname', 'lastname', 'phone', 'mobilephone', 'email'],
+      });
+      return res.results.map(toContact);
+    },
+    async getContact(contactId) {
+      return api<{ id: string; properties: Record<string, string | null> }>('GET', `/crm/v3/objects/contacts/${contactId}?properties=firstname,lastname,phone,mobilephone,email`)
+        .then(toContact).catch(() => undefined);
+    },
     async findContactByPhone(phone) {
       const digits = phone.replace(/\D/g, '');
       const eq = (propertyName: string, value: string) => ({ filters: [{ propertyName, operator: 'EQ', value }] });

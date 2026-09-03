@@ -13,7 +13,8 @@ import type { GatewayTool, TenantConfig } from '@wnk/shared';
 
 /** Tool-name prefix (Gateway target) -> the tenant config that turns it on. */
 const TARGET_ENABLED: Record<string, (t: TenantConfig) => boolean> = {
-  hubspot: (t) => t.crm?.type === 'hubspot',
+  crm: (t) => t.crm?.type === 'hubspot',
+  hubspot: (t) => t.crm?.type === 'hubspot', // legacy OpenAPI target; removed at the cutover
 };
 
 const INJECTED: Record<string, (t: TenantConfig) => string> = {

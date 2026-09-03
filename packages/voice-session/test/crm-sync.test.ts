@@ -9,6 +9,8 @@ function fakeCrm(existing?: { id: string; firstName?: string }): CrmAdapter & { 
   const tasks: string[] = [];
   return {
     notes, tasks,
+    searchContacts: vi.fn(async () => (existing ? [existing] : [])),
+    getContact: vi.fn(async () => existing),
     findContactByPhone: vi.fn(async () => existing),
     lastNote: vi.fn(async () => undefined),
     upsertContact: vi.fn(async (i) => existing ?? { id: 'new-1', firstName: i.firstName }),
