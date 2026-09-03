@@ -48,7 +48,8 @@ call). One deployment serves many businesses.
 | `packages/voice-session/src/sip.ts` | Caller/called number extraction from SIP headers |
 | `packages/shared/src/types.ts` | `TenantConfig` schema (zod) and record/event types |
 | `packages/shared/src/config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger |
-| `packages/infrastructure/lib/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) plus the Telegram workflow and reply path |
+| `packages/email-responder/src/responder.ts` | Lambda: `lead.recorded` → CRM context via the Gateway (as the tenant) → OpenAI draft → owner's Gmail via Composio |
+| `packages/infrastructure/lib/runtime-stack.ts` | The email responder's rule + Lambda, and My Assistant as an AgentCore **harness** (configuration, no agent code) plus the Telegram workflow and reply path |
 | `packages/infrastructure/` | CDK app: `bin/app.ts` + `lib/voice-stack.ts` (NodejsFunction bundles the Lambdas) |
 | `scripts/seed-tenant.ts` | Upsert tenant JSON into the Tenants table |
 | `tenants/example.json` | Example tenant config |
@@ -134,7 +135,7 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `active` | `false` → calls rejected with SIP 603 |
 | `crm` | `{ "type": "hubspot", "via": "composio" }` enables CRM sync, caller recognition, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
 | `cognitoClientId` | The tenant's Gateway identity, minted by the seed; every agent calls the Gateway as this client |
-| `products` | Which platform services are on for this tenant: `emailResponder: { enabled, via: "vault" \| "composio" }`, `assistant: { enabled }`. Default all off; agents refuse to act for a tenant whose flag is off. |
+| `products` | Which platform services are on for this tenant: `emailResponder: { enabled }`, `assistant: { enabled }`. The email responder sends from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default all off; agents refuse to act for a tenant whose flag is off. |
 
 Unknown numbers are rejected with SIP 404.
 
@@ -170,9 +171,8 @@ Unknown numbers are rejected with SIP 404.
 ## Operating: traces, alarms, dead letters
 
 Every Lambda runs with X-Ray active, and the trace is carried by hand across the seams X-Ray
-doesn't cross on its own: the SQS message to the session Lambda (`AWSTraceHeader`), the
-EventBridge event (`TraceHeader`), and the `InvokeAgentRuntime` call (`traceParent` plus
-`baggage` with `tenant_id` and `call_id`). Every log line carries `traceId`, `tenantId`, and
+doesn't cross on its own: the SQS message to the session Lambda (`AWSTraceHeader`) and the
+EventBridge event (`TraceHeader`). Every log line carries `traceId`, `tenantId`, and
 `callId` where known, so one Logs Insights query across the log groups reconstructs a call:
 
 ```
@@ -189,8 +189,8 @@ mark; it is not exactly-once. Anything that costs money or reaches a customer ir
 should get a pending → completed ledger with reconciliation instead.
 
 Failures after retries land in a dead-letter queue (session jobs, notifier/CRM events, email
-trigger), and each queue has an alarm. The email trigger throws on a non-2xx from the agent,
-so a lost lead email is a retried, dead-lettered, alarmed event rather than a log line.
+responder), and each queue has an alarm. The email responder throws on any failure, so a lost
+lead email is a retried, dead-lettered, alarmed event rather than a log line.
 
 ## Operating the session Lambda
 

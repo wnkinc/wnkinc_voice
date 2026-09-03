@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { ownerUserId } from '../src/google-oauth.js';
 import { memoryStore } from '../src/store.js';
 import { requireTenant } from '../src/tenant.js';
 import { TenantConfigSchema } from '../src/types.js';
@@ -9,24 +8,15 @@ const minimal = { tenantId: 't1', phoneNumber: '+15555550100', businessName: 'T1
 describe('TenantConfigSchema.products', () => {
   it('defaults every service to off (fail closed)', () => {
     const t = TenantConfigSchema.parse(minimal);
-    expect(t.products).toEqual({ emailResponder: { enabled: false, via: 'vault' }, assistant: { enabled: false } });
+    expect(t.products).toEqual({ emailResponder: { enabled: false }, assistant: { enabled: false } });
   });
 
   it('fills defaults inside a partially specified service', () => {
     const t = TenantConfigSchema.parse({ ...minimal, products: { emailResponder: { enabled: true } } });
-    expect(t.products.emailResponder).toEqual({ enabled: true, via: 'vault' });
+    expect(t.products.emailResponder).toEqual({ enabled: true });
     expect(t.products.assistant.enabled).toBe(false);
   });
 
-  it('rejects an unknown credential broker', () => {
-    expect(() => TenantConfigSchema.parse({ ...minimal, products: { emailResponder: { enabled: true, via: 'carrier-pigeon' } } })).toThrow();
-  });
-});
-
-describe('ownerUserId', () => {
-  it('namespaces the vault user by tenant', () => {
-    expect(ownerUserId('acme')).toBe('acme_owner');
-  });
 });
 
 describe('requireTenant', () => {

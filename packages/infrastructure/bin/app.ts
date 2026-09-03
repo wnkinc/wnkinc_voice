@@ -38,7 +38,6 @@ const voice = new VoiceStack(app, 'wnk-voice-dev', {
 const identity = new IdentityStack(app, 'wnk-identity-dev', {
   prefix,
   env,
-  googleOauthSecretName: `${prefix}/oauth/google`,
   openaiSecret: voice.openaiSecret,
 });
 const policy = new PolicyStack(app, 'wnk-policy-dev', {
@@ -62,8 +61,6 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   gatewayUrl: gateway.gateway.gatewayUrl ?? '',
   cognitoUserPoolId: auth.userPool.userPoolId,
   cognitoTokenUrl: auth.tokenUrl,
-  workloadName: identity.emailResponderIdentity.workloadIdentityName,
-  googleProviderName: `${prefix.replace(/-/g, '_')}_google`,
   openaiSecret: voice.openaiSecret,
   composioSecret: voice.composioSecret,
   openaiProviderArn: identity.openaiProvider.credentialProviderArn,

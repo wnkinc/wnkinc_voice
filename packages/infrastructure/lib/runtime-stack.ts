@@ -15,8 +15,6 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { dlqAlarm, errorAlarm, failedExecutionsAlarm } from './alarms.js';
 import { Construct } from 'constructs';
-import { buildSync } from 'esbuild';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,8 +25,6 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly gatewayUrl: string;
   readonly cognitoUserPoolId: string;
   readonly cognitoTokenUrl: string;
-  readonly workloadName: string;
-  readonly googleProviderName: string;
   readonly openaiSecret: secretsmanager.ISecret;
   /** Identity API key provider holding the OpenAI key; the assistant harness reads the key from the vault. */
   readonly openaiProviderArn: string;
@@ -52,128 +48,70 @@ export interface RuntimeStackProps extends cdk.StackProps {
 }
 
 /**
- * Agents hosted on AgentCore Runtime. The email responder is bundled with
- * esbuild (single index.mjs, no Docker) and runs on the managed NODE_22
- * runtime; an EventBridge rule + small trigger Lambda invoke it per lead.
+ * The platform's agents: the email responder (a Lambda on the lead.recorded
+ * rule) and My Assistant (an AgentCore harness driven by Step Functions).
  */
 export class RuntimeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: RuntimeStackProps) {
     super(scope, id, props);
     const { prefix } = props;
 
-    // Bundle an agent at synth time, same pattern NodejsFunction uses for
-    // Lambdas. CJS + .js: the managed NODE_22 runtime requires a .js entrypoint,
-    // and CJS sidesteps type:module ambiguity; the package.json pins that, and
-    // the banner shims import.meta.url (undefined under CJS) for deps.
-    const bundleAgent = (name: string): string => {
-      const dist = path.resolve(here, `../.build/${name}`);
-      rmSync(dist, { recursive: true, force: true });
-      mkdirSync(dist, { recursive: true });
-      writeFileSync(path.join(dist, 'package.json'), JSON.stringify({ type: 'commonjs' }));
-      buildSync({
-        entryPoints: [path.resolve(here, `../../${name}/src/agent.ts`)],
-        outfile: path.join(dist, 'index.js'),
-        bundle: true,
-        platform: 'node',
-        target: 'node22',
-        format: 'cjs',
-        sourcemap: false,
-        logLevel: 'warning',
-        define: { 'import.meta.url': '__importMetaUrl' },
-        banner: { js: "const __importMetaUrl = require('node:url').pathToFileURL(__filename).href;" },
-      });
-      return dist;
-    };
-    const dist = bundleAgent('email-responder');
-
-    // Which broker a tenant's Gmail uses is tenant data: `products.emailResponder.via`.
-    const composioSecret = props.composioSecret;
-
-    const emailAgent = new agentcore.Runtime(this, 'EmailResponder', {
-      runtimeName: `${prefix.replace(/-/g, '_')}_email_responder`,
+    // ---- Email responder: lead.recorded -> Lambda ------------------------------
+    //
+    // A failed invocation is retried by Lambda, then parked in the dead-letter
+    // queue; the alarm on that queue is how a lost lead email gets noticed.
+    const responderDlq = new sqs.Queue(this, 'EmailTriggerDlq', { retentionPeriod: cdk.Duration.days(14) });
+    const responder = new NodejsFunction(this, 'EmailResponderFn', {
+      functionName: `${prefix}-email-responder`,
       description: 'Drafts and sends the owner a follow-up email for each recorded lead',
-      agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromCodeAsset({
-        path: dist,
-        runtime: agentcore.AgentCoreRuntime.NODE_22,
-        entrypoint: ['index.js'], // managed NODE_22 runs the file itself; no interpreter prefix
-      }),
-      environmentVariables: {
-        GATEWAY_URL: props.gatewayUrl,
-        COGNITO_USER_POOL_ID: props.cognitoUserPoolId,
-        GATEWAY_SCOPE: 'gateway/email',
-        COGNITO_TOKEN_URL: props.cognitoTokenUrl,
-        WORKLOAD_NAME: props.workloadName,
-        GOOGLE_PROVIDER_NAME: props.googleProviderName,
-        OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
-        USAGE_TABLE: props.usageTable.tableName,
-        TENANTS_TABLE: props.tenantsTable.tableName,
-        CALLS_TABLE: props.callsTable.tableName,
-        COMPOSIO_SECRET_ARN: composioSecret.secretArn,
-        ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
-      },
-    });
-    composioSecret.grantRead(emailAgent.role);
-    props.tenantsTable.grantReadData(emailAgent.role);
-    props.callsTable.grantReadWriteData(emailAgent.role);
-
-    // The agent's own credentials: read the vault token for its workload, read
-    // the OpenAI key, and read the Cognito client secret for Gateway JWTs.
-    const agentcoreArn = (resource: string) => `arn:aws:bedrock-agentcore:${this.region}:${this.account}:${resource}`;
-    emailAgent.role.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:GetWorkloadAccessTokenForUserId', 'bedrock-agentcore:GetResourceOauth2Token'],
-      resources: [
-        agentcoreArn('workload-identity-directory/default'),
-        agentcoreArn(`workload-identity-directory/default/workload-identity/${props.workloadName}`),
-        agentcoreArn('token-vault/default'),
-        agentcoreArn('token-vault/default/oauth2credentialprovider/*'),
-      ],
-    }));
-    emailAgent.role.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: ['secretsmanager:GetSecretValue'],
-      resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:bedrock-agentcore-identity!*`],
-    }));
-    props.openaiSecret.grantRead(emailAgent.role);
-    props.usageTable.grantWriteData(emailAgent.role);
-    if (props.callerMemory) {
-      emailAgent.role.addToPrincipalPolicy(new iam.PolicyStatement({
-        actions: MEMORY_USE_ACTIONS,
-        resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
-      }));
-    }
-    emailAgent.role.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: ['cognito-idp:DescribeUserPoolClient'],
-      resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${props.cognitoUserPoolId}`],
-    }));
-
-    // lead.recorded -> trigger Lambda -> InvokeAgentRuntime. The trigger throws
-    // on an agent failure, so Lambda retries it twice and then parks the event
-    // here; the alarm on this queue is how a lost lead email gets noticed.
-    const triggerDlq = new sqs.Queue(this, 'EmailTriggerDlq', { retentionPeriod: cdk.Duration.days(14) });
-    const triggerFn = new NodejsFunction(this, 'EmailTrigger', {
-      functionName: `${prefix}-email-trigger`,
-      description: 'Invokes the email responder runtime for each lead.recorded event',
-      entry: path.resolve(here, '../../email-responder/src/trigger.ts'),
+      entry: path.resolve(here, '../../email-responder/src/responder.ts'),
       handler: 'handler',
       runtime: lambda.Runtime.NODEJS_22_X,
       architecture: lambda.Architecture.ARM_64,
       timeout: cdk.Duration.minutes(5),
-      environment: { EMAIL_AGENT_RUNTIME_ARN: emailAgent.agentRuntimeArn },
+      memorySize: 512,
       tracing: lambda.Tracing.ACTIVE,
-      deadLetterQueue: triggerDlq,
-      bundling: { format: OutputFormat.ESM, target: 'node22' },
+      deadLetterQueue: responderDlq,
+      bundling: { format: OutputFormat.ESM, target: 'node22', banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" },
+      environment: {
+        GATEWAY_URL: props.gatewayUrl,
+        COGNITO_USER_POOL_ID: props.cognitoUserPoolId,
+        GATEWAY_SCOPE: 'gateway/email',
+        COGNITO_TOKEN_URL: props.cognitoTokenUrl,
+        OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
+        USAGE_TABLE: props.usageTable.tableName,
+        TENANTS_TABLE: props.tenantsTable.tableName,
+        CALLS_TABLE: props.callsTable.tableName,
+        COMPOSIO_SECRET_ARN: props.composioSecret.secretArn,
+        ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
+      },
     });
-    triggerFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:InvokeAgentRuntime'],
-      resources: [emailAgent.agentRuntimeArn, `${emailAgent.agentRuntimeArn}/runtime-endpoint/*`],
+    // Exactly what it touches: the tenant row, once-markers on the call row,
+    // usage, the two platform secrets, caller memory, and the tenant's Cognito
+    // client secret for its Gateway JWT.
+    props.tenantsTable.grantReadData(responder);
+    props.callsTable.grantReadWriteData(responder);
+    props.usageTable.grantWriteData(responder);
+    props.openaiSecret.grantRead(responder);
+    props.composioSecret.grantRead(responder);
+    if (props.callerMemory) {
+      responder.addToRolePolicy(new iam.PolicyStatement({
+        actions: MEMORY_USE_ACTIONS,
+        resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
+      }));
+    }
+    responder.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cognito-idp:DescribeUserPoolClient'],
+      resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${props.cognitoUserPoolId}`],
     }));
     new events.Rule(this, 'LeadRule', {
       eventBus: props.bus,
-      description: 'Route lead.recorded to the email responder agent',
+      description: 'Route lead.recorded to the email responder',
       eventPattern: { source: ['wnkinc.voice'], detailType: ['lead.recorded'] },
-      targets: [new targets.LambdaFunction(triggerFn, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: triggerDlq })],
+      targets: [new targets.LambdaFunction(responder, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: responderDlq })],
     });
-    dlqAlarm(this, 'EmailTriggerDlqAlarm', triggerDlq, props.alarmTopic, 'Email responder: a lead email was not sent after retries');
-    errorAlarm(this, 'EmailTriggerErrors', triggerFn, props.alarmTopic, 'Email responder trigger');
+    dlqAlarm(this, 'EmailTriggerDlqAlarm', responderDlq, props.alarmTopic, 'Email responder: a lead email was not sent after retries');
+    errorAlarm(this, 'EmailTriggerErrors', responder, props.alarmTopic, 'Email responder');
 
     // ---- My Assistant: Telegram -> API Gateway -> Step Functions -> harness --
     //
@@ -198,6 +136,7 @@ export class RuntimeStack extends cdk.Stack {
       },
     });
 
+    const agentcoreArn = (resource: string) => `arn:aws:bedrock-agentcore:${this.region}:${this.account}:${resource}`;
     const gatewayArn = agentcoreArn(`gateway/${props.gatewayId}`);
 
     // The harness's execution role: the documented sample, scoped to what it
@@ -403,6 +342,6 @@ export class RuntimeStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'assistantHarnessArn', { value: harness.attrArn });
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'telegramWorkflowArn', { value: workflow.stateMachineArn });
-    new cdk.CfnOutput(this, 'emailAgentRuntimeArn', { value: emailAgent.agentRuntimeArn });
+    new cdk.CfnOutput(this, 'emailResponderFunctionName', { value: responder.functionName });
   }
 }

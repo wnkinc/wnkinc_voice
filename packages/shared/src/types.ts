@@ -113,11 +113,8 @@ export const TenantConfigSchema = z.object({
    * adds a key here; onboarding a tenant sets the keys — nothing else.
    */
   products: z.object({
-    emailResponder: z.object({
-      enabled: z.boolean().default(false),
-      /** Who brokers the owner's Gmail credential: our Identity vault or Composio. */
-      via: z.enum(['vault', 'composio']).default('vault'),
-    }).prefault({}),
+    /** Owner follow-up email per lead, sent from the owner's Gmail through Composio. */
+    emailResponder: z.object({ enabled: z.boolean().default(false) }).prefault({}),
     /** Chat assistant for the tenant's own people (Telegram now, SMS later). */
     assistant: z.object({ enabled: z.boolean().default(false) }).prefault({}),
   }).prefault({}),

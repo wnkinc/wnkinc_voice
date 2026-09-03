@@ -16,7 +16,7 @@
     "notifications": { "email": "owner@example.com" },
     "maxCallSeconds": 600,
     "products": {
-      "emailResponder": { "enabled": true, "via": "composio" },
+      "emailResponder": { "enabled": true },
       "assistant": { "enabled": false }
     },
     "people": [

@@ -5,13 +5,12 @@
  *   npx tsx scripts/check-tenant.ts [tenantId]      (default: wnk)
  *
  * Checks config file <-> seeded table drift, secrets, enabled services,
- * notification wiring, and the owner's Google connection. Exit code 1 if any
+ * notification wiring, and the owner's Gmail connection. Exit code 1 if any
  * hard check fails. Onboarding is data-only: nothing here asks for a deploy.
  */
-import { BedrockAgentCoreClient, GetResourceOauth2TokenCommand, GetWorkloadAccessTokenForUserIdCommand } from '@aws-sdk/client-bedrock-agentcore';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { dynamoStore, GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS, ownerUserId, TenantConfigSchema } from '@wnk/shared';
+import { dynamoStore, TenantConfigSchema } from '@wnk/shared';
 
 const REGION = 'us-west-2';
 const PREFIX = 'wnkinc-voice-dev';
@@ -57,7 +56,7 @@ else ok('Gateway identity', cfg.cognitoClientId);
 
 // 4. Services this tenant has turned on (Cedar admits any tenant with context present; no per-tenant policy)
 if (cfg) {
-  const on = Object.entries(cfg.products).filter(([, v]) => v.enabled).map(([k, v]) => `${k}${'via' in v ? ` via ${v.via}` : ''}`);
+  const on = Object.entries(cfg.products).filter(([, v]) => v.enabled).map(([k]) => k);
   ok('services', on.length ? on.join(', ') : 'none enabled — voice receptionist only');
 }
 
@@ -65,25 +64,9 @@ if (cfg) {
 if (cfg && !cfg.notifications.email && !cfg.notifications.sms) warn('notifications', 'no email/sms — the owner gets no notifier alerts (email agent still emails the Gmail owner)');
 else if (cfg) ok('notifications', [cfg.notifications.email, cfg.notifications.sms].filter(Boolean).join(', '));
 
-// 6. Owner's Gmail credential for the email responder, per the tenant's chosen broker
-const email = cfg?.products.emailResponder;
-if (!email?.enabled) ok('Google connection', 'not needed (email responder off)');
-else if (email.via === 'composio') console.log(`  ○ Composio: Gmail connected account for user "${tenantId}" (if missing: npx tsx scripts/connect-composio.mts ${tenantId})`);
-else try {
-  const ac = new BedrockAgentCoreClient({ region: REGION });
-  const { workloadAccessToken } = await ac.send(new GetWorkloadAccessTokenForUserIdCommand({ workloadName: `${PREFIX}-email-responder`, userId: ownerUserId(tenantId) }));
-  const res = await ac.send(new GetResourceOauth2TokenCommand({
-    workloadIdentityToken: workloadAccessToken,
-    resourceCredentialProviderName: `${PREFIX.replace(/-/g, '_')}_google`,
-    scopes: GOOGLE_GMAIL_SCOPES,
-    oauth2Flow: 'USER_FEDERATION',
-    customParameters: GOOGLE_OAUTH_PARAMS,
-  })).catch((err) => ({ accessToken: undefined, err: String(err) }));
-  if (res.accessToken) ok('Google connection', 'vault has a live token (email agent can send)');
-  else warn('Google connection', `no vault token for ${ownerUserId(tenantId)} — run: npx tsx scripts/connect-google.ts ${tenantId}`);
-} catch (err) {
-  warn('Google connection', `check failed: ${String(err).slice(0, 100)}`);
-}
+// 6. Owner's Gmail connected account for the email responder (Composio's vault, under the tenant id)
+if (!cfg?.products.emailResponder.enabled) ok('Gmail connection', 'not needed (email responder off)');
+else console.log(`  ○ Composio: Gmail connected account for user "${tenantId}" (if missing: npx tsx scripts/connect-composio.mts ${tenantId})`);
 
 // 7. Manual reminders (uncheckable from here)
 console.log(`  ○ Twilio: number ${cfg?.phoneNumber ?? '?'} attached to the SIP trunk (verify in Twilio console)`);
