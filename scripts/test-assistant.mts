@@ -6,6 +6,8 @@
  *   npx tsx scripts/test-assistant.mts "who is Sarah?" [tenantId] [name] [role]
  *
  * Repeated runs share a session id, so follow-ups see the thread (memory).
+ * SESSION=<suffix> starts a different session for the same actor, to test
+ * cross-session recall.
  */
 import { BedrockAgentCoreClient, InvokeHarnessCommand } from '@aws-sdk/client-bedrock-agentcore';
 import { execFileSync } from 'node:child_process';
@@ -36,7 +38,7 @@ console.log(`tenant: ${tenantId}  person: ${name} (${role})\n> ${text}`);
 const client = new BedrockAgentCoreClient({ region: REGION });
 const res = await client.send(new InvokeHarnessCommand({
   harnessArn,
-  runtimeSessionId: `test-assistant-${tenantId}-000000000000000000000000000000`,
+  runtimeSessionId: `test-assistant-${tenantId}-${process.env.SESSION ?? 'default'}-000000000000000000000000000`,
   actorId: `${tenantId}_test_${role}`,
   messages: [{ role: 'user', content: [{ text }] }],
   systemPrompt: [{ text: prompt }],

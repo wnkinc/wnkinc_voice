@@ -59,6 +59,14 @@ export const TenantConfigSchema = z.object({
    * the seed next to the client.
    */
   gatewayOauthProviderArn: z.string().min(1).optional(),
+  /**
+   * Minutes to subtract from UTC so that calendar days roll at 3 AM in the
+   * tenant's timezone — the assistant starts a fresh conversation session each
+   * day at that cutoff. COMPUTED by the seed from `timezone` (Step Functions
+   * cannot evaluate IANA zones); reflects DST as of the last seed, so the cutoff
+   * drifts an hour across DST changes until the next re-seed. Not in the file.
+   */
+  sessionDayOffsetMinutes: z.number().int().optional(),
 
   businessName: z.string().min(1),
   description: z.string().optional(),

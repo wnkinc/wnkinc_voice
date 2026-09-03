@@ -38,6 +38,14 @@ export class MemoryStack extends cdk.Stack {
           description: 'Caller preferences (callback times, contact method, tone)',
           namespaces: ['/callers/{actorId}/preferences'],
         }),
+        // One running summary per conversation session (the assistant's daily
+        // sessions); the harness retrieves across all of an actor's sessions
+        // through the parent path, so yesterday's context is recallable today.
+        new ManagedMemoryStrategy(MemoryStrategyType.SUMMARIZATION, {
+          strategyName: 'session_summaries',
+          description: 'Running summary of each conversation session',
+          namespaces: ['/callers/{actorId}/summaries/{sessionId}'],
+        }),
       ],
     });
 

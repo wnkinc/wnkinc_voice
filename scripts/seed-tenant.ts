@@ -71,6 +71,20 @@ async function ensureGatewayOauthProvider(raw: { tenantId?: string; cognitoClien
   console.log(`minted Gateway OAuth provider for ${raw.tenantId}: ${r.credentialProviderArn}`);
 }
 
+/**
+ * Minutes to subtract from UTC so days roll at 3 AM local: 180 minus the
+ * zone's current UTC offset (PDT, -420 -> 600: the day rolls at 10:00Z).
+ * Derived, not stored in the file; recomputed on every seed.
+ */
+export function sessionDayOffsetMinutes(timeZone: string, now = new Date()): number {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(now);
+  const get = (t: string) => Number(parts.find((x) => x.type === t)?.value ?? 0);
+  const localAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'));
+  const utc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), now.getUTCMinutes());
+  const zoneOffset = Math.round((localAsUtc - utc) / 60_000);
+  return 180 - zoneOffset;
+}
+
 /** Write a minted value back next to tenantId, keeping the file's formatting. */
 function writeBack(file: string, tenantId: string, key: string, value: string): void {
   const text = readFileSync(file, 'utf8');
@@ -94,8 +108,10 @@ for (const file of files) {
   for (const raw of list) {
     await ensureGatewayIdentity(raw as { tenantId?: string; cognitoClientId?: string }, file);
     await ensureGatewayOauthProvider(raw as { tenantId?: string; cognitoClientId?: string; gatewayOauthProviderArn?: string }, file);
+    const tz = (raw as { timezone?: string }).timezone ?? 'America/Los_Angeles';
+    (raw as { sessionDayOffsetMinutes?: number }).sessionDayOffsetMinutes = sessionDayOffsetMinutes(tz);
     const t = await store.putTenant(raw as Parameters<typeof store.putTenant>[0]);
     const people = await store.syncPeople(t);
-    console.log(`seeded ${t.tenantId} (${t.phoneNumber}) from ${file}; people: ${people.map((p) => `${p.name}=${p.channelId}`).join(', ') || 'none'}`);
+    console.log(`seeded ${t.tenantId} (${t.phoneNumber}) from ${file}; people: ${people.map((p) => `${p.name}=${p.channelId}`).join(', ') || 'none'}; session day rolls at 3 AM ${t.timezone} (UTC-${t.sessionDayOffsetMinutes}min)`);
   }
 }

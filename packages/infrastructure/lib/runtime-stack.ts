@@ -279,7 +279,22 @@ export class RuntimeStack extends cdk.Stack {
       systemPrompt: [{ text: 'You are My Assistant for a small business. Be brief and plain. The per-invocation prompt names the business and the person.' }],
       // No default Gateway tool: the workflow passes the TENANT's provider per invocation.
       allowedTools: ['@wnkgateway/*'], // never the built-in shell/file tools
-      memory: props.callerMemory ? { agentCoreMemoryConfiguration: { arn: props.callerMemory.memoryArn } } : { disabled: {} },
+      // Attached platform Memory: the harness threads each session's history
+      // from it (surviving microVM expiry) and, per turn, retrieves what is
+      // relevant from every strategy across ALL of the actor's sessions —
+      // facts, preferences, and prior sessions' summaries via the parent path.
+      memory: props.callerMemory ? { agentCoreMemoryConfiguration: {
+        arn: props.callerMemory.memoryArn,
+        messagesCount: 40,
+        retrievalConfig: {
+          '/callers/{actorId}/facts': { topK: 6, relevanceScore: 0.2 },
+          '/callers/{actorId}/preferences': { topK: 4, relevanceScore: 0.2 },
+          '/callers/{actorId}/summaries/': { topK: 3, relevanceScore: 0.2 },
+        },
+      } } : { disabled: {} },
+      // Nothing is lost when the microVM goes (history is in Memory), so keep
+      // idle time — and its memory billing — short.
+      environment: { agentCoreRuntimeEnvironment: { lifecycleConfiguration: { idleRuntimeSessionTimeout: 300 } } },
       maxIterations: 8,
       timeoutSeconds: 120,
     });
@@ -354,8 +369,11 @@ export class RuntimeStack extends cdk.Stack {
           Type: 'Task', Resource: 'arn:aws:states:::bedrockagentcore:invokeHarness',
           Arguments: {
             HarnessArn: harness.attrArn,
-            // One session per chat (ids must be >= 33 chars); one actor per person, tenant-prefixed for memory isolation.
-            RuntimeSessionId: q("'telegram-chat-' & $string($states.input.message.chat.id) & '-000000000000000000000000000000'"),
+            // One session per chat PER DAY: the day rolls at 3 AM tenant-local
+            // (sessionDayOffsetMinutes, computed by the seed; 600 = Pacific if
+            // unset). A new day is a fresh session; Memory carries the rest.
+            // Ids must be >= 33 chars. One actor per person, tenant-prefixed.
+            RuntimeSessionId: q("'telegram-chat-' & $string($states.input.message.chat.id) & '-' & $fromMillis($millis() - ($exists($tenant.sessionDayOffsetMinutes.N) ? $number($tenant.sessionDayOffsetMinutes.N) : 600) * 60000, '[Y0001][M01][D01]') & '-000000000000'"),
             ActorId: q("$tenant.tenantId.S & '_telegram_' & $string($states.input.message.from.id)"),
             Messages: [{ Role: 'user', Content: [{ Text: q('$states.input.message.text') }] }],
             SystemPrompt: [{ Text: q(prompt) }],

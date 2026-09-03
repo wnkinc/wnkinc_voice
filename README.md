@@ -270,7 +270,9 @@ built from the tenant row, and the tenant's Gateway OAuth provider (`gatewayOaut
 minted by the seed), so the harness calls tools as the tenant's own client and the Gateway
 interceptor attributes every call. Cedar scopes the assistant identity to the CRM tools. The harness
 threads the conversation and extracts facts through the platform Memory instance (actor = tenant +
-person), surviving microVM expiry. The reply goes out through an EventBridge API destination whose
+person), surviving microVM expiry. Each person gets a fresh session per day, rolling at 3 AM in the
+tenant's timezone (`sessionDayOffsetMinutes`, computed by the seed; drifts an hour across DST until
+the next seed); facts, preferences, and per-session summaries are retrieved across all prior days. The reply goes out through an EventBridge API destination whose
 endpoint holds the bot token (resolved from the Telegram secret at deploy); failures land in a
 dead-letter queue with an alarm. Replies over Telegram's 4096-character limit fail there — the prompt
 asks for brevity; splitting is deferred until it is actually needed.
