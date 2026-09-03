@@ -12,9 +12,18 @@ export interface GatewayClientConfig {
   clientId: string;
 }
 
+export interface GatewayTool {
+  name: string;
+  description?: string;
+  /** JSON schema of the tool's arguments, as the Gateway publishes it. */
+  inputSchema: { type: 'object'; properties?: Record<string, unknown>; required?: string[] };
+}
+
 export interface GatewayClient {
   /** Call one MCP tool (full name, e.g. `voice___record_lead`); returns the text content. */
   callTool(name: string, args: unknown): Promise<string>;
+  /** The catalog: every tool the caller's identity may see. Policy still decides what it may call. */
+  listTools(): Promise<GatewayTool[]>;
 }
 
 /** Config from the standard env vars, or undefined when the gateway isn't wired. */
@@ -50,25 +59,40 @@ export function gatewayClient(config: GatewayClientConfig): GatewayClient {
     return cached.token;
   };
 
+  const rpc = async <T>(method: string, params: unknown): Promise<T> => {
+    const res = await fetch(config.gatewayUrl, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${await token()}`,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`gateway ${res.status}: ${text.slice(0, 300)}`);
+    const data = text.includes('data:') ? (text.split('\n').filter((l) => l.startsWith('data:')).pop() ?? '').slice(5) : text;
+    const parsed = JSON.parse(data) as { result?: T; error?: { message?: string } };
+    if (parsed.error) throw new Error(`gateway rpc error: ${parsed.error.message}`);
+    return parsed.result as T;
+  };
+
   return {
     async callTool(name, args) {
-      const res = await fetch(config.gatewayUrl, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${await token()}`,
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-        },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
-      });
-      const text = await res.text();
-      if (!res.ok) throw new Error(`gateway ${res.status}: ${text.slice(0, 300)}`);
-      const data = text.includes('data:') ? (text.split('\n').filter((l) => l.startsWith('data:')).pop() ?? '').slice(5) : text;
-      const parsed = JSON.parse(data) as { result?: { isError?: boolean; content?: Array<{ text?: string }> }; error?: { message?: string } };
-      if (parsed.error) throw new Error(`gateway rpc error: ${parsed.error.message}`);
-      const content = parsed.result?.content?.[0]?.text ?? '';
-      if (parsed.result?.isError) throw new Error(`tool ${name} failed: ${content.slice(0, 300)}`);
+      const result = await rpc<{ isError?: boolean; content?: Array<{ text?: string }> }>('tools/call', { name, arguments: args });
+      const content = result?.content?.[0]?.text ?? '';
+      if (result?.isError) throw new Error(`tool ${name} failed: ${content.slice(0, 300)}`);
       return content;
+    },
+    async listTools() {
+      const tools: GatewayTool[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await rpc<{ tools?: GatewayTool[]; nextCursor?: string }>('tools/list', cursor ? { cursor } : {});
+        tools.push(...(page?.tools ?? []));
+        cursor = page?.nextCursor;
+      } while (cursor);
+      return tools;
     },
   };
 }

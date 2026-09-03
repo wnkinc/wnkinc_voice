@@ -48,12 +48,13 @@ const policy = new PolicyStack(app, 'wnk-policy-dev', {
   adminClientId: auth.machineClient.userPoolClientId,
   voiceClientId: auth.voiceClient.userPoolClientId,
   emailClientId: auth.emailClient.userPoolClientId,
+  assistantClientId: auth.assistantClient.userPoolClientId,
 });
 const gateway = new GatewayStack(app, 'wnk-gateway-dev', {
   prefix,
   env,
   userPool: auth.userPool,
-  allowedClients: [auth.machineClient, auth.voiceClient, auth.emailClient],
+  allowedClients: [auth.machineClient, auth.voiceClient, auth.emailClient, auth.assistantClient],
   hubspotProvider: identity.hubspotProvider,
   voiceToolsFn: voice.gatewayToolsFn,
   policyEngineArn: policy.engine.attrPolicyEngineArn,
@@ -64,6 +65,7 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   gatewayUrl: gateway.gateway.gatewayUrl ?? '',
   cognitoUserPoolId: auth.userPool.userPoolId,
   cognitoClientId: auth.emailClient.userPoolClientId,
+  assistantClientId: auth.assistantClient.userPoolClientId,
   cognitoTokenUrl: auth.tokenUrl,
   workloadName: identity.emailResponderIdentity.workloadIdentityName,
   googleProviderName: `${prefix.replace(/-/g, '_')}_google`,
@@ -72,6 +74,8 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   usageTable: voice.usageTable,
   tenantsTable: voice.tenantsTable,
   callsTable: voice.callsTable,
+  peopleTable: voice.peopleTable,
+  api: voice.api,
   alarmTopic: voice.alarmTopic,
   callerMemory,
 });

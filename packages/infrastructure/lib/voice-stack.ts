@@ -67,6 +67,10 @@ export class VoiceStack extends cdk.Stack {
   readonly alarmTopic: sns.Topic;
   /** Gateway Lambda target: record_lead + notify_owner as platform tools. */
   readonly gatewayToolsFn: NodejsFunction;
+  /** Channel identity -> tenant + person: `telegram:<id>` (and `sms:<e164>` later). Seeded from each tenant's `people`. */
+  readonly peopleTable: dynamodb.Table;
+  /** The platform's HTTP API; other stacks add their own routes to it. */
+  readonly api: apigwv2.HttpApi;
 
   constructor(scope: Construct, id: string, props: VoiceStackProps) {
     super(scope, id, props);
@@ -108,6 +112,12 @@ export class VoiceStack extends cdk.Stack {
       partitionKey: { name: 'phoneNumber', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY, // learning stack; flip to RETAIN for real data
+    });
+
+    this.peopleTable = new dynamodb.Table(this, 'People', {
+      partitionKey: { name: 'channelId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
     this.callsTable = new dynamodb.Table(this, 'Calls', {
@@ -325,8 +335,9 @@ export class VoiceStack extends cdk.Stack {
 
     const api = new apigwv2.HttpApi(this, 'Api', {
       apiName: `${prefix}-api`,
-      description: 'OpenAI webhook receiver',
+      description: 'Platform webhooks: OpenAI Realtime (here), Telegram (runtime stack)',
     });
+    this.api = api;
     api.addRoutes({
       path: '/openai/webhook',
       methods: [apigwv2.HttpMethod.POST],
@@ -338,7 +349,9 @@ export class VoiceStack extends cdk.Stack {
     /** Register this for `realtime.call.incoming` at platform.openai.com -> Settings -> Webhooks. */
     new cdk.CfnOutput(this, 'webhookUrl', { value: `${api.apiEndpoint}/openai/webhook` });
     new cdk.CfnOutput(this, 'openaiSecretArn', { value: this.openaiSecret.secretArn });
+    new cdk.CfnOutput(this, 'apiEndpoint', { value: api.apiEndpoint });
     new cdk.CfnOutput(this, 'tenantsTableName', { value: this.tenantsTable.tableName });
+    new cdk.CfnOutput(this, 'peopleTableName', { value: this.peopleTable.tableName });
     new cdk.CfnOutput(this, 'callsTableName', { value: this.callsTable.tableName });
     new cdk.CfnOutput(this, 'leadsTableName', { value: this.leadsTable.tableName });
     new cdk.CfnOutput(this, 'eventBusName', { value: this.bus.eventBusName });

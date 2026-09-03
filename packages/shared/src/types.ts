@@ -3,6 +3,37 @@ import { z } from 'zod';
 /** E.164 phone number, e.g. +15555550100 */
 export const E164 = z.string().regex(/^\+[1-9]\d{6,14}$/, 'must be E.164 (+15555550100)');
 
+export const PersonSchema = z.object({
+  name: z.string().min(1),
+  role: z.enum(['owner', 'employee']),
+  /** Telegram user id (numeric; the bot sees it on every message). */
+  telegramId: z.number().int().positive().optional(),
+  /** Mobile number, the identity for SMS once that channel exists. */
+  phone: E164.optional(),
+});
+export type Person = z.infer<typeof PersonSchema>;
+
+/** Key of a person's row in the People table: `<channel>:<id>`, e.g. `telegram:12345`. */
+export function channelKey(channel: 'telegram' | 'sms', id: string | number): string {
+  return `${channel}:${id}`;
+}
+
+/** Every channel identity a person carries, as People-table keys. */
+export function personChannelKeys(p: Person): string[] {
+  const keys: string[] = [];
+  if (p.telegramId !== undefined) keys.push(channelKey('telegram', p.telegramId));
+  if (p.phone) keys.push(channelKey('sms', p.phone));
+  return keys;
+}
+
+/** One People-table row: a channel identity that resolves to a tenant and a person. */
+export interface PersonRecord {
+  channelId: string;
+  tenantId: string;
+  name: string;
+  role: Person['role'];
+}
+
 /**
  * Per-business receptionist configuration. One item per *called* phone number
  * in the Tenants table; the number is how an inbound call is routed to a tenant.
@@ -38,6 +69,15 @@ export const TenantConfigSchema = z.object({
   crm: z.object({ type: z.literal('hubspot') }).optional(),
 
   /**
+   * Humans allowed to talk to this tenant's assistant, with the channel
+   * identities that prove who they are. Telegram vouches for the user id on
+   * every message; a phone number is the SMS identity (later). The seed script
+   * mirrors each identity into the People table, which is what a channel
+   * workflow looks up — an identity not listed here reaches nothing.
+   */
+  people: z.array(PersonSchema).default([]),
+
+  /**
    * Platform services this tenant has turned on. Every agent checks its own
    * flag before acting and refuses otherwise (fail closed). Adding a service
    * adds a key here; onboarding a tenant sets the keys — nothing else.
@@ -49,6 +89,8 @@ export const TenantConfigSchema = z.object({
       via: z.enum(['vault', 'composio']).default('vault'),
     }).prefault({}),
     backOffice: z.object({ enabled: z.boolean().default(false) }).prefault({}),
+    /** Chat assistant for the tenant's own people (Telegram now, SMS later). */
+    assistant: z.object({ enabled: z.boolean().default(false) }).prefault({}),
   }).prefault({}),
 });
 export type TenantConfig = z.infer<typeof TenantConfigSchema>;

@@ -9,6 +9,7 @@ export const env = {
   get tenantsTable() { return process.env.TENANTS_TABLE ?? ''; },
   get callsTable() { return process.env.CALLS_TABLE ?? ''; },
   get leadsTable() { return process.env.LEADS_TABLE ?? ''; },
+  get peopleTable() { return process.env.PEOPLE_TABLE ?? ''; },
   get eventBusName() { return process.env.EVENT_BUS_NAME ?? ''; },
   get eventSource() { return process.env.EVENT_SOURCE ?? 'wnkinc.voice'; },
   get sessionQueueUrl() { return process.env.SESSION_QUEUE_URL ?? ''; },

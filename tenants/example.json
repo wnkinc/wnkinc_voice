@@ -17,7 +17,12 @@
     "maxCallSeconds": 600,
     "products": {
       "emailResponder": { "enabled": true, "via": "composio" },
-      "backOffice": { "enabled": false }
-    }
+      "backOffice": { "enabled": false },
+      "assistant": { "enabled": false }
+    },
+    "people": [
+      { "name": "Owner Name", "role": "owner", "telegramId": 123456789 },
+      { "name": "Field Tech", "role": "employee", "telegramId": 987654321 }
+    ]
   }
 ]

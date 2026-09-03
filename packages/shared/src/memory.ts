@@ -9,15 +9,29 @@
 import { BedrockAgentCoreClient, CreateEventCommand, RetrieveMemoryRecordsCommand } from '@aws-sdk/client-bedrock-agentcore';
 import type { TranscriptEntry } from './types.js';
 
+export interface MemoryTurn {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
 export interface CallerMemory {
   /** Store a finished call's transcript as a conversational event. */
   recordCall(tenantId: string, callerPhone: string, callId: string, transcript: TranscriptEntry[]): Promise<void>;
   /** Retrieve extracted memories about a caller (facts + preferences). */
   recall(tenantId: string, callerPhone: string, query: string): Promise<string[]>;
+  /** Store one exchange for any actor (e.g. a tenant's own person chatting with the assistant). */
+  recordTurns(actorId: string, sessionId: string, turns: MemoryTurn[]): Promise<void>;
+  /** Retrieve extracted memories for any actor. */
+  recallActor(actorId: string, query: string): Promise<string[]>;
 }
 
 export function callerActorId(tenantId: string, callerPhone: string): string {
   return `${tenantId}_${callerPhone.replace(/\D/g, '')}`;
+}
+
+/** Actor id for one of the tenant's own people on a channel, e.g. `wnk_telegram_12345`. Tenant-prefixed, so isolation is structural. */
+export function personActorId(tenantId: string, channelId: string): string {
+  return `${tenantId}_${channelId.replace(/[^A-Za-z0-9]/g, '_')}`;
 }
 
 /** From the MEMORY_ID env var; undefined when memory isn't wired. */
@@ -28,29 +42,29 @@ export function memoryFromEnv(): CallerMemory | undefined {
 
 export function callerMemory(memoryId: string): CallerMemory {
   const client = new BedrockAgentCoreClient({});
+  const recordTurns = async (actorId: string, sessionId: string, turns: MemoryTurn[]): Promise<void> => {
+    const payload = turns
+      .filter((t) => t.text)
+      .map((t) => ({ conversational: { role: t.role === 'user' ? ('USER' as const) : ('ASSISTANT' as const), content: { text: t.text } } }));
+    if (!payload.length) return;
+    await client.send(new CreateEventCommand({ memoryId, actorId, sessionId, eventTimestamp: new Date(), payload }));
+  };
+  const recallActor = async (actorId: string, query: string): Promise<string[]> => {
+    const res = await client.send(new RetrieveMemoryRecordsCommand({
+      memoryId,
+      namespacePath: `/callers/${actorId}`,
+      searchCriteria: { searchQuery: query, topK: 6 },
+    }));
+    return (res.memoryRecordSummaries ?? [])
+      .map((r) => (r.content && 'text' in r.content ? (r.content.text ?? '') : ''))
+      .filter(Boolean);
+  };
   return {
-    async recordCall(tenantId, callerPhone, callId, transcript) {
-      const payload = transcript
-        .filter((t) => t.role === 'user' || t.role === 'assistant')
-        .map((t) => ({ conversational: { role: t.role === 'user' ? ('USER' as const) : ('ASSISTANT' as const), content: { text: t.text } } }));
-      if (!payload.length) return;
-      await client.send(new CreateEventCommand({
-        memoryId,
-        actorId: callerActorId(tenantId, callerPhone),
-        sessionId: callId,
-        eventTimestamp: new Date(),
-        payload,
-      }));
-    },
-    async recall(tenantId, callerPhone, query) {
-      const res = await client.send(new RetrieveMemoryRecordsCommand({
-        memoryId,
-        namespacePath: `/callers/${callerActorId(tenantId, callerPhone)}`,
-        searchCriteria: { searchQuery: query, topK: 6 },
-      }));
-      return (res.memoryRecordSummaries ?? [])
-        .map((r) => (r.content && 'text' in r.content ? (r.content.text ?? '') : ''))
-        .filter(Boolean);
-    },
+    recordTurns,
+    recallActor,
+    recordCall: (tenantId, callerPhone, callId, transcript) =>
+      recordTurns(callerActorId(tenantId, callerPhone), callId,
+        transcript.filter((t): t is TranscriptEntry & { role: 'user' | 'assistant' } => t.role === 'user' || t.role === 'assistant')),
+    recall: (tenantId, callerPhone, query) => recallActor(callerActorId(tenantId, callerPhone), query),
   };
 }

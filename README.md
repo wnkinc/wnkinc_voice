@@ -47,6 +47,7 @@ call). One deployment serves many businesses.
 | `packages/voice-session/src/sip.ts` | Caller/called number extraction from SIP headers |
 | `packages/shared/src/types.ts` | `TenantConfig` schema (zod) and record/event types |
 | `packages/shared/src/config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger |
+| `packages/assistant/src/` | My Assistant (AgentCore Runtime): `core.ts` one channel-neutral turn with Gateway tools; `telegram.ts` reply delivery; `agent.ts` entrypoint |
 | `packages/infrastructure/` | CDK app: `bin/app.ts` + `lib/voice-stack.ts` (NodejsFunction bundles the Lambdas) |
 | `scripts/seed-tenant.ts` | Upsert tenant JSON into the Tenants table |
 | `tenants/example.json` | Example tenant config |
@@ -106,7 +107,7 @@ Twilio Console → *Elastic SIP Trunking → Trunks → Create*:
 Edit `tenants/example.json` (one object per *called* number) and:
 
 ```bash
-TENANTS_TABLE=<tenantsTableName output> AWS_REGION=us-west-2 npm run seed -- tenants/example.json
+TENANTS_TABLE=<tenantsTableName output> PEOPLE_TABLE=<peopleTableName output> AWS_REGION=us-west-2 npm run seed -- tenants/example.json
 ```
 
 Call the number. The webhook Lambda logs every SIP header on each call
@@ -225,6 +226,51 @@ publisher and `requestHangup()`.
 Tools that need durability (scheduling, follow-ups, approvals) should publish an event
 and return immediately; the worker that consumes the event is where a Temporal workflow
 starts. The `notifier` Lambda is the v1 stand-in for that worker.
+
+## My Assistant (Telegram)
+
+A tenant's own people chat with the platform about their business: look up a customer in the
+CRM, add a note, ask what the receptionist recorded. One Telegram bot serves every tenant; who is
+talking decides the tenant, not which bot.
+
+```
+ person ──Telegram──▶ Bot API webhook ──▶ API Gateway (secret path) ──StartExecution──▶ Step Functions
+                                                                                          │ not a private text? → done
+                                                                                          │ People table GetItem(telegram:<id>)
+                                                                                          │ unknown sender? → done, silently
+                                                                                          ▼
+                                                                          AgentCore Runtime: assistant
+                                                                Gateway tools (per tenant row) · Memory · reply via Bot API
+```
+
+No Lambda on the path. Identity is Telegram's: the Bot API vouches for the sender's user id, the
+People table (seeded from each tenant's `people`) maps it to a tenant and a role, and the workflow
+never invokes the agent for anyone else. The agent trusts the payload's tenant the way the voice
+tools do — written by our own workflow, from an identity the channel proved — then fails closed on
+`products.assistant.enabled`. Tools come from the Gateway catalog, filtered to the targets the
+tenant row enables (`crm.type` for HubSpot); tenant context arguments are injected, never modelled.
+The thread lives in the Runtime session (one per chat); facts persist through AgentCore Memory.
+
+The Telegram-shaped code is the reply (`assistant/src/telegram.ts`); SMS later is a second
+workflow producing the same payload, and the tenant's `people` entries gain a `phone`.
+
+Setup, once:
+
+1. BotFather → `/newbot` → name it *My Assistant*; copy the token.
+2. `aws secretsmanager put-secret-value --secret-id <telegramSecretArn> --secret-string '{"TELEGRAM_BOT_TOKEN":"<token>","WEBHOOK_PATH":"<keep the generated value>"}'`
+   (read the current value first; `WEBHOOK_PATH` is generated at deploy and is the webhook's secret).
+3. `npx tsx scripts/telegram-webhook.mts set`, then `... info` to confirm no `last_error_message`.
+
+Per person: add them to the tenant file's `people` with their Telegram user id (message the bot once
+and read `message.from.id` from the workflow's execution input, or ask @userinfobot), then re-seed.
+Removing them from the file and re-seeding removes their access.
+
+Prove it without Telegram: `npx tsx scripts/test-assistant.mts "who is Sarah?"`.
+
+Failure handling: a failed execution (agent 5xx after retries) raises the workflow alarm; the
+execution's input is the Telegram update, replayable from the console. A duplicate delivery from
+Telegram (only after a lost 200) runs a second turn; the first high-risk tool gets an approval gate
+before it ships, not a once-marker.
 
 ## Cost & scale notes
 

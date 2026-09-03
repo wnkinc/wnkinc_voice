@@ -17,6 +17,7 @@ export class CognitoStack extends cdk.Stack {
   readonly machineClient: cognito.UserPoolClient;
   readonly voiceClient: cognito.UserPoolClient;
   readonly emailClient: cognito.UserPoolClient;
+  readonly assistantClient: cognito.UserPoolClient;
   readonly tokenUrl: string;
   /** Hosted-UI base URL for OAuth flows. */
   readonly authBaseUrl: string;
@@ -69,6 +70,7 @@ export class CognitoStack extends cdk.Stack {
     this.machineClient = m2mClient('Machine', 'machine');
     this.voiceClient = m2mClient('VoiceAgent', 'voice-agent');
     this.emailClient = m2mClient('EmailAgent', 'email-agent');
+    this.assistantClient = m2mClient('AssistantAgent', 'assistant-agent');
 
     this.authBaseUrl = domain.baseUrl();
     this.tokenUrl = `${this.authBaseUrl}/oauth2/token`;

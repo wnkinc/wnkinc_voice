@@ -9,7 +9,7 @@ const minimal = { tenantId: 't1', phoneNumber: '+15555550100', businessName: 'T1
 describe('TenantConfigSchema.products', () => {
   it('defaults every service to off (fail closed)', () => {
     const t = TenantConfigSchema.parse(minimal);
-    expect(t.products).toEqual({ emailResponder: { enabled: false, via: 'vault' }, backOffice: { enabled: false } });
+    expect(t.products).toEqual({ emailResponder: { enabled: false, via: 'vault' }, backOffice: { enabled: false }, assistant: { enabled: false } });
   });
 
   it('fills defaults inside a partially specified service', () => {
@@ -54,5 +54,30 @@ describe('once-markers', () => {
     expect(await store.isDone('c1', 'notify:lead:L1')).toBe(true);
     expect(await store.markDone('c1', 'notify:lead:L1')).toBe(false);
     expect(await store.isDone('c2', 'notify:lead:L1')).toBe(false);
+  });
+});
+
+describe('people and the People index', () => {
+  it('defaults to nobody', () => {
+    expect(TenantConfigSchema.parse(minimal).people).toEqual([]);
+  });
+  it('mirrors each channel identity into one index row and drops the ones removed', async () => {
+    const store = memoryStore([]);
+    const t = TenantConfigSchema.parse({ ...minimal, people: [
+      { name: 'Wes', role: 'owner', telegramId: 42, phone: '+15555550111' },
+      { name: 'Sam', role: 'employee', telegramId: 7 },
+    ] });
+    const rows = await store.syncPeople(t);
+    expect(rows.map((r) => r.channelId).sort()).toEqual(['sms:+15555550111', 'telegram:42', 'telegram:7']);
+    expect(await store.getPerson('telegram:7')).toEqual({ channelId: 'telegram:7', tenantId: 't1', name: 'Sam', role: 'employee' });
+
+    await store.syncPeople(TenantConfigSchema.parse({ ...minimal, people: [{ name: 'Wes', role: 'owner', telegramId: 42 }] }));
+    expect(await store.getPerson('telegram:7')).toBeUndefined();
+    expect(await store.getPerson('sms:+15555550111')).toBeUndefined();
+    expect(await store.getPerson('telegram:42')).toBeDefined();
+  });
+  it('rejects a person without a name or with a bad role', () => {
+    expect(() => TenantConfigSchema.parse({ ...minimal, people: [{ name: '', role: 'owner' }] })).toThrow();
+    expect(() => TenantConfigSchema.parse({ ...minimal, people: [{ name: 'X', role: 'boss' }] })).toThrow();
   });
 });

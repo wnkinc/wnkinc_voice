@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { env } from './config.js';
-import { TenantConfigSchema, type CallRecord, type CallStatus, type Lead, type TenantConfig, type TenantConfigInput, type ToolCallRecord, type TranscriptEntry } from './types.js';
+import { personChannelKeys, TenantConfigSchema, type CallRecord, type CallStatus, type Lead, type PersonRecord, type TenantConfig, type TenantConfigInput, type ToolCallRecord, type TranscriptEntry } from './types.js';
 
 const CALL_TTL_DAYS = 90;
 
@@ -12,6 +12,13 @@ export type NewLead = Omit<Lead, 'sk' | 'leadId' | 'createdAt'>;
 export interface Store {
   getTenant(phoneNumber: string): Promise<TenantConfig | undefined>;
   putTenant(input: TenantConfigInput): Promise<TenantConfig>;
+  /**
+   * Mirror a tenant's `people` into the People table (one row per channel
+   * identity) and remove rows of this tenant that are no longer listed, so
+   * taking someone off the tenant file takes their access away at the next seed.
+   */
+  syncPeople(tenant: TenantConfig): Promise<PersonRecord[]>;
+  getPerson(channelId: string): Promise<PersonRecord | undefined>;
   /**
    * Atomically claim a call id. Returns false if already claimed (OpenAI retried
    * the webhook). A call whose previous attempt ended `failed` may be re-claimed.
@@ -46,6 +53,11 @@ export interface Store {
   listLeads(tenantId: string, limit?: number): Promise<Lead[]>;
 }
 
+function peopleRecords(tenant: TenantConfig): PersonRecord[] {
+  return tenant.people.flatMap((p) =>
+    personChannelKeys(p).map((channelId) => ({ channelId, tenantId: tenant.tenantId, name: p.name, role: p.role })));
+}
+
 function buildLead(input: NewLead): Lead {
   const leadId = randomUUID();
   const createdAt = new Date().toISOString();
@@ -62,6 +74,7 @@ export function dynamoStore(): Store {
   const tenants = () => table('TENANTS_TABLE', env.tenantsTable);
   const calls = () => table('CALLS_TABLE', env.callsTable);
   const leads = () => table('LEADS_TABLE', env.leadsTable);
+  const people = () => table('PEOPLE_TABLE', env.peopleTable);
 
   const appendList = (callId: string, attr: 'transcript' | 'toolCalls', item: unknown) =>
     db.send(new UpdateCommand({
@@ -80,6 +93,22 @@ export function dynamoStore(): Store {
       const tenant = TenantConfigSchema.parse(input);
       await db.send(new PutCommand({ TableName: tenants(), Item: tenant }));
       return tenant;
+    },
+    async syncPeople(tenant) {
+      const wanted = peopleRecords(tenant);
+      const existing = await db.send(new ScanCommand({
+        TableName: people(), FilterExpression: 'tenantId = :t', ExpressionAttributeValues: { ':t': tenant.tenantId },
+      }));
+      const keep = new Set(wanted.map((p) => p.channelId));
+      for (const item of (existing.Items ?? []) as PersonRecord[]) {
+        if (!keep.has(item.channelId)) await db.send(new DeleteCommand({ TableName: people(), Key: { channelId: item.channelId } }));
+      }
+      for (const p of wanted) await db.send(new PutCommand({ TableName: people(), Item: p }));
+      return wanted;
+    },
+    async getPerson(channelId) {
+      const res = await db.send(new GetCommand({ TableName: people(), Key: { channelId } }));
+      return res.Item as PersonRecord | undefined;
     },
     async claimCall(record) {
       const item: CallRecord = { ...record, status: 'claimed', expiresAt: Math.floor(Date.now() / 1000) + CALL_TTL_DAYS * 86400 };
@@ -192,6 +221,7 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
   const calls = new Map<string, CallRecord>();
   const leads: Lead[] = [];
   const done = new Set<string>();
+  const peopleMap = new Map<string, PersonRecord>();
   const must = (id: string) => {
     const c = calls.get(id);
     if (!c) throw new Error(`unknown call ${id}`);
@@ -219,6 +249,13 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
     async findTenantById(tenantId) {
       return [...tenantMap.values()].find((t) => t.tenantId === tenantId);
     },
+    async syncPeople(tenant) {
+      for (const [k, v] of peopleMap) if (v.tenantId === tenant.tenantId) peopleMap.delete(k);
+      const wanted = peopleRecords(tenant);
+      for (const p of wanted) peopleMap.set(p.channelId, p);
+      return wanted;
+    },
+    getPerson: async (channelId) => peopleMap.get(channelId),
     async listCalls(tenantId, limit = 50) {
       return [...calls.values()].filter((c) => c.tenantId === tenantId)
         .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? '')).slice(0, limit);

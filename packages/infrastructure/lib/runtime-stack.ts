@@ -1,4 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
+import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
+import { HttpStepFunctionsIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
@@ -10,7 +12,9 @@ import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { dlqAlarm, errorAlarm } from './alarms.js';
+import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
+import { dlqAlarm, errorAlarm, failedExecutionsAlarm } from './alarms.js';
 import { Construct } from 'constructs';
 import { buildSync } from 'esbuild';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -24,6 +28,8 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly gatewayUrl: string;
   readonly cognitoUserPoolId: string;
   readonly cognitoClientId: string;
+  /** The assistant's own Gateway identity; Policy tells agents apart by client id. */
+  readonly assistantClientId: string;
   readonly cognitoTokenUrl: string;
   readonly workloadName: string;
   readonly googleProviderName: string;
@@ -34,6 +40,10 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly tenantsTable: dynamodb.ITable;
   /** Once-markers for "already emailed this lead" live on the call row. */
   readonly callsTable: dynamodb.ITable;
+  /** Channel identity -> tenant + person; the Telegram workflow's one lookup. */
+  readonly peopleTable: dynamodb.ITable;
+  /** The platform HTTP API; the Telegram webhook route is added here. */
+  readonly api: apigwv2.IHttpApi;
   readonly alarmTopic: sns.ITopic;
   /** Caller memory: the email agent recalls facts about the lead's caller. */
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
@@ -205,6 +215,136 @@ export class RuntimeStack extends cdk.Stack {
     }));
     props.openaiSecret.grantRead(backOffice.role);
 
+    // ---- My Assistant: Telegram -> API Gateway -> Step Functions -> Runtime --
+    //
+    // No Lambda anywhere on this path. API Gateway starts the workflow directly
+    // with Telegram's update as input; the workflow drops anything that is not a
+    // private text message, looks the sender up in the People table, ends
+    // silently for a stranger, and invokes the agent for a known person. The
+    // agent delivers its own reply (Telegram wants the bot token in the URL
+    // path, which no managed HTTP target can supply).
+
+    // Bot token (set by hand, see README) plus a generated secret path segment
+    // for the webhook URL — Telegram's recommended way to authenticate posts.
+    // Neither is in git, the CDK context, or a synth-time env var.
+    const telegramSecret = new secretsmanager.Secret(this, 'TelegramSecret', {
+      description: 'Telegram bot: {"TELEGRAM_BOT_TOKEN": <from BotFather>, "WEBHOOK_PATH": <generated>}',
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ TELEGRAM_BOT_TOKEN: 'set-me' }),
+        generateStringKey: 'WEBHOOK_PATH',
+        excludePunctuation: true,
+        passwordLength: 40,
+      },
+    });
+
+    const assistant = new agentcore.Runtime(this, 'Assistant', {
+      runtimeName: `${prefix.replace(/-/g, '_')}_assistant`,
+      description: "My Assistant: a tenant's own people chat about their business, with Gateway tools",
+      agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromCodeAsset({
+        path: bundleAgent('assistant'),
+        runtime: agentcore.AgentCoreRuntime.NODE_22,
+        entrypoint: ['index.js'],
+      }),
+      environmentVariables: {
+        GATEWAY_URL: props.gatewayUrl,
+        COGNITO_USER_POOL_ID: props.cognitoUserPoolId,
+        COGNITO_CLIENT_ID: props.assistantClientId,
+        COGNITO_TOKEN_URL: props.cognitoTokenUrl,
+        OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
+        TELEGRAM_SECRET_ARN: telegramSecret.secretArn,
+        USAGE_TABLE: props.usageTable.tableName,
+        TENANTS_TABLE: props.tenantsTable.tableName,
+        ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
+      },
+    });
+    props.tenantsTable.grantReadData(assistant.role);
+    props.usageTable.grantWriteData(assistant.role);
+    props.openaiSecret.grantRead(assistant.role);
+    telegramSecret.grantRead(assistant.role);
+    if (props.callerMemory) {
+      assistant.role.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: MEMORY_USE_ACTIONS,
+        resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
+      }));
+    }
+    assistant.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['cognito-idp:DescribeUserPoolClient'],
+      resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${props.cognitoUserPoolId}`],
+    }));
+
+    // The workflow. Input is Telegram's Update object.
+    const senderKey = "States.Format('telegram:{}', States.JsonToString($.message.from.id))";
+    const lookup = new tasks.DynamoGetItem(this, 'LookupPerson', {
+      table: props.peopleTable,
+      key: { channelId: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt(senderKey)) },
+      resultPath: '$.person',
+    });
+    const buildPayload = new sfn.Pass(this, 'BuildPayload', {
+      parameters: {
+        'tenantId.$': '$.person.Item.tenantId.S',
+        person: { 'name.$': '$.person.Item.name.S', 'role.$': '$.person.Item.role.S' },
+        'channelId.$': senderKey,
+        channel: { type: 'telegram', 'chatId.$': '$.message.chat.id' },
+        'text.$': '$.message.text',
+      },
+      resultPath: '$.payload',
+    });
+    const invoke = new tasks.CallAwsService(this, 'InvokeAssistant', {
+      service: 'bedrockagentcore',
+      action: 'invokeAgentRuntime',
+      iamAction: 'bedrock-agentcore:InvokeAgentRuntime',
+      iamResources: [assistant.agentRuntimeArn, `${assistant.agentRuntimeArn}/runtime-endpoint/*`],
+      parameters: {
+        AgentRuntimeArn: assistant.agentRuntimeArn,
+        Qualifier: 'DEFAULT',
+        // One Runtime session per chat: the agent keeps the thread in memory between turns. Ids must be >= 33 chars.
+        'RuntimeSessionId.$': "States.Format('telegram-chat-{}-000000000000000000000000000000', States.JsonToString($.message.chat.id))",
+        ContentType: 'application/json',
+        Accept: 'application/json',
+        'Payload.$': 'States.JsonToString($.payload)',
+      },
+      resultSelector: { 'statusCode.$': '$.StatusCode', 'body.$': '$.Response' },
+      resultPath: '$.result',
+    });
+    invoke.addRetry({ errors: ['States.ALL'], interval: cdk.Duration.seconds(5), maxAttempts: 2, backoffRate: 2 });
+    const agentOk = new sfn.Choice(this, 'AgentReplied')
+      .when(sfn.Condition.numberEquals('$.result.statusCode', 200), new sfn.Succeed(this, 'Replied'))
+      .otherwise(new sfn.Fail(this, 'AgentError', { error: 'AssistantReturnedError', causePath: '$.result.body' }));
+    const definition = new sfn.Choice(this, 'IsPrivateText')
+      .when(
+        sfn.Condition.and(
+          sfn.Condition.isPresent('$.message.text'),
+          sfn.Condition.isPresent('$.message.from.id'),
+          sfn.Condition.isPresent('$.message.chat.type'),
+          sfn.Condition.stringEquals('$.message.chat.type', 'private'),
+        ),
+        lookup.next(new sfn.Choice(this, 'KnownSender')
+          .when(sfn.Condition.isPresent('$.person.Item'), buildPayload.next(invoke).next(agentOk))
+          .otherwise(new sfn.Succeed(this, 'UnknownSender'))),
+      )
+      .otherwise(new sfn.Succeed(this, 'Ignored'));
+    const workflow = new sfn.StateMachine(this, 'TelegramWorkflow', {
+      stateMachineName: `${prefix}-telegram`,
+      definitionBody: sfn.DefinitionBody.fromChainable(definition),
+      timeout: cdk.Duration.minutes(5),
+    });
+    failedExecutionsAlarm(this, 'TelegramWorkflowFailed', workflow, props.alarmTopic, 'Assistant (Telegram)');
+
+    // Telegram posts here; API Gateway starts an execution and answers 200 at
+    // once (Telegram retries anything slow). The path segment is the secret.
+    new apigwv2.HttpRoute(this, 'TelegramRoute', {
+      httpApi: props.api,
+      routeKey: apigwv2.HttpRouteKey.with(`/telegram/${telegramSecret.secretValueFromJson('WEBHOOK_PATH').unsafeUnwrap()}`, apigwv2.HttpMethod.POST),
+      integration: new HttpStepFunctionsIntegration('TelegramWebhook', {
+        stateMachine: workflow,
+        subtype: apigwv2.HttpIntegrationSubtype.STEPFUNCTIONS_START_EXECUTION,
+        parameterMapping: new apigwv2.ParameterMapping().custom('Input', '$request.body'),
+      }),
+    });
+
+    new cdk.CfnOutput(this, 'assistantRuntimeArn', { value: assistant.agentRuntimeArn });
+    new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
+    new cdk.CfnOutput(this, 'telegramWorkflowArn', { value: workflow.stateMachineArn });
     new cdk.CfnOutput(this, 'emailAgentRuntimeArn', { value: emailAgent.agentRuntimeArn });
     new cdk.CfnOutput(this, 'backOfficeRuntimeArn', { value: backOffice.agentRuntimeArn });
     new cdk.CfnOutput(this, 'browserId', { value: browser.browserId });
