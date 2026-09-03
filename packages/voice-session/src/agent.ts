@@ -4,7 +4,7 @@ import type { CallAcceptParams } from 'openai/resources/realtime/calls';
 import { z } from 'zod';
 import type { Logger } from '@wnk/shared';
 import type { EventPublisher } from '@wnk/shared';
-import { buildInstructions, gatewayClient, gatewayConfigFromEnv } from '@wnk/shared';
+import { buildInstructions, gatewayConfigFromEnv, tenantGatewayClient } from '@wnk/shared';
 import { normalizePhone } from './sip.js';
 import type { Store } from '@wnk/shared';
 import type { CallExtras, CallParty, TenantConfig } from '@wnk/shared';
@@ -43,16 +43,15 @@ export const EndCallArgs = z.object({
 });
 
 // When the Gateway is wired (deployed session Lambda), record_lead and
-// notify_owner execute as shared platform tools through it — same catalog the
-// email responder uses, and where Policy will enforce rules. Without the env
-// (tests, local dev) the original in-process implementations run.
+// notify_owner execute as shared platform tools through it, called AS THE
+// TENANT (its own Cognito client): the Gateway's interceptor supplies tenant
+// context from that identity; this code adds only call context. Without the
+// env (tests, local dev) the original in-process implementations run.
 const gwConfig = gatewayConfigFromEnv();
-const gateway = gwConfig ? gatewayClient(gwConfig) : undefined;
+const gatewayFor = (ctx: CallContext) => (gwConfig ? tenantGatewayClient(gwConfig, ctx.tenant) : undefined);
 
 function toolContext(ctx: CallContext) {
   return {
-    tenant_id: ctx.tenant.tenantId,
-    tenant_phone: ctx.tenant.phoneNumber,
     call_id: ctx.callId,
     caller_phone: ctx.party.from,
   };
@@ -60,6 +59,7 @@ function toolContext(ctx: CallContext) {
 
 export const handlers = {
   async record_lead(args: z.infer<typeof RecordLeadArgs>, ctx: CallContext) {
+    const gateway = gatewayFor(ctx);
     if (gateway) {
       const res = await gateway.callTool('voice___record_lead', { ...args, ...toolContext(ctx) });
       ctx.log.info('lead recorded via gateway');
@@ -80,6 +80,7 @@ export const handlers = {
     return { ok: true, lead_id: lead.leadId, phone_saved: phone ?? null };
   },
   async notify_owner(args: z.infer<typeof NotifyOwnerArgs>, ctx: CallContext) {
+    const gateway = gatewayFor(ctx);
     if (gateway) {
       const res = await gateway.callTool('voice___notify_owner', { ...args, ...toolContext(ctx) });
       ctx.log.info('owner notified via gateway');

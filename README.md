@@ -27,7 +27,7 @@ call). One deployment serves many businesses.
                                        EventBridge bus (wnkinc.voice)
                               lead.recorded · owner.notify · call.ended
                                                     │
-                            Notifier Lambda → SES/SNS   CRM-sync Lambda → HubSpot
+                            Notifier Lambda → SES/SNS   CRM-sync Lambda → HubSpot (via Composio)
                                        (later: rule → Temporal workflow starter)
 ```
 
@@ -41,7 +41,8 @@ call). One deployment serves many businesses.
 | `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
 | `packages/voice-session/src/notifier.ts` | Lambda: EventBridge → SES email / SNS SMS |
 | `packages/voice-session/src/crm-sync.ts` | Lambda: EventBridge → CRM (lead → contact + note + task; call → transcript note) |
-| `packages/voice-session/src/hubspot.ts` | HubSpot REST client behind a small `CrmAdapter` interface |
+| `packages/shared/src/composio.ts` | Composio adapter: Gmail and HubSpot with the tenant id as the only credential our code names (`CrmAdapter` lives in `shared/src/crm.ts`) |
+| `packages/lambda/src/interceptor.ts` | Gateway request interceptor: tenant context from the caller's client identity |
 | `packages/shared/src/store.ts` | DynamoDB (tenants, calls, leads) behind one `Store` interface, plus an in-memory version for tests |
 | `packages/shared/src/events.ts` | EventBridge publisher |
 | `packages/voice-session/src/sip.ts` | Caller/called number extraction from SIP headers |
@@ -131,7 +132,8 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `notifications.email` / `.sms` | Where the notifier delivers |
 | `maxCallSeconds` (default 600, max 840) | Agent is asked to wrap up, then the call is hung up |
 | `active` | `false` → calls rejected with SIP 603 |
-| `crm` | `{ "type": "hubspot" }` enables CRM sync + caller recognition; token in Secrets Manager at `<stack>/crm/<tenantId>` (create it with `aws secretsmanager create-secret`; the stack only grants the prefix) |
+| `crm` | `{ "type": "hubspot", "via": "composio" }` enables CRM sync, caller recognition, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
+| `cognitoClientId` | The tenant's Gateway identity, minted by the seed; every agent calls the Gateway as this client |
 | `products` | Which platform services are on for this tenant: `emailResponder: { enabled, via: "vault" \| "composio" }`, `backOffice: { enabled }`. Default all off; agents refuse to act for a tenant whose flag is off. |
 
 Unknown numbers are rejected with SIP 404.
@@ -200,21 +202,23 @@ Deploying new session code is `npm run deploy`. Because in-flight calls live ins
 invocation, a deploy never interrupts them: running invocations finish on the old code,
 new calls get the new code.
 
-## CRM (HubSpot)
+## CRM (HubSpot through Composio)
 
-Per tenant, opt-in via `crm: { type: "hubspot" }`. Credentials are a JSON secret
-`{"HUBSPOT_TOKEN":"pat-na1-..."}` at `wnkinc-voice-<stack>/crm/<tenantId>` (a HubSpot
-**Service Key** with contacts + companies read/write and owners read). `voice-stack.ts` creates
-the placeholder secret per tenant id listed there.
+Per tenant, opt-in via `crm: { type: "hubspot", via: "composio" }`. The owner approves Composio's
+HubSpot app once; no HubSpot token exists anywhere in the platform. Every CRM call names the tenant
+(Composio `userId` = our tenant id), so the credential is chosen per call.
 
+- **Gateway tools** (`crm___search_contacts`, `get_contact`, `create_contact`, `add_note`) on the
+  platform tools Lambda; the tenant comes from the Gateway interceptor, and a tenant whose row has
+  no CRM gets a refusal, never someone else's CRM.
 - **`lead.recorded`** → contact upserted by phone, note with the lead, follow-up task due the
   next business morning in the tenant's timezone, assigned to the account's first owner.
 - **`call.ended`** → transcript note on the contact, if the caller is already a contact.
 - **Caller recognition** — before accepting, the webhook looks the caller ID up (600 ms budget;
-  skipped if slow). On a hit, the prompt gets a "Caller ID" section with the name and last note,
-  and the agent is told to confirm who it's speaking with before using it.
+  skipped if slow). On a hit, the prompt gets a "Caller ID" section with the name and last note.
 
-A second CRM is another implementation of `CrmAdapter` in a new file plus a `type` value.
+A second CRM is another implementation of `CrmAdapter` in `composio.ts` (or a new adapter file)
+plus a `type` value. Prove a tenant's connection with `npx tsx scripts/test-crm.mts <id> <phone>`.
 
 ## Adding a tool
 
@@ -238,8 +242,8 @@ overwriting anything the caller sent. Tool schemas carry no tenant fields for th
 permits match the scope tag and contain no client or tenant ids. A client no tenant owns is
 refused before any tool runs.
 
-Cutover state: the platform's per-agent clients are still accepted by id (`PLATFORM_CLIENT_IDS`)
-and inject tenant context themselves until every caller acts as its tenant.
+The only client without a tenant is the admin/test one (`PLATFORM_CLIENT_IDS`); it passes through
+and must name the tenant in its arguments itself.
 
 ## My Assistant (Telegram)
 
@@ -262,7 +266,7 @@ People table (seeded from each tenant's `people`) maps it to a tenant and a role
 never invokes the agent for anyone else. The agent trusts the payload's tenant the way the voice
 tools do — written by our own workflow, from an identity the channel proved — then fails closed on
 `products.assistant.enabled`. Tools come from the Gateway catalog, filtered to the targets the
-tenant row enables (`crm.type` for HubSpot); tenant context arguments are injected, never modelled.
+tenant row enables (`crm` for the CRM tools); tenant context is written by the Gateway interceptor from the tenant's identity, never modelled.
 The thread lives in the Runtime session (one per chat); facts persist through AgentCore Memory.
 
 The Telegram-shaped code is the reply (`assistant/src/telegram.ts`); SMS later is a second

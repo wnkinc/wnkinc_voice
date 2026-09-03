@@ -5,7 +5,7 @@ import { APIError, InvalidWebhookSignatureError } from 'openai/error';
 import { buildAcceptConfig, enabledTools } from './agent.js';
 import { createLogger, createOpenAI, currentXrayHeader, env, getOpenAISecrets, type Logger, type OpenAISecrets } from '@wnk/shared';
 import { crmForTenant } from './crm-sync.js';
-import type { CrmAdapter } from './hubspot.js';
+import type { CrmAdapter } from '@wnk/shared';
 import { identifyParties } from './sip.js';
 import { dynamoStore, type Store } from '@wnk/shared';
 import { memoryFromEnv, type CallerMemory } from '@wnk/shared';

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createCrmSyncHandler, splitName, type CrmSyncEvent } from '../src/crm-sync.js';
-import type { CrmAdapter } from '../src/hubspot.js';
+import type { CrmAdapter } from '@wnk/shared';
 import { memoryStore } from '@wnk/shared';
 import { silentLog, TENANT } from './helpers.js';
 

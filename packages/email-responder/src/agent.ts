@@ -1,8 +1,8 @@
 /**
  * Email responder — the first AgentCore Runtime agent.
  *
- * Triggered (via trigger.ts) by `lead.recorded`: enriches the lead with HubSpot
- * context through the Gateway (MCP), drafts a follow-up with OpenAI, and sends
+ * Triggered (via trigger.ts) by `lead.recorded`: enriches the lead with CRM
+ * context through the Gateway (as the tenant's own client), drafts a follow-up with OpenAI, and sends
  * it from the owner's own Gmail — via the 3LO token in the Identity vault or
  * via Composio, whichever the tenant's `products.emailResponder.via` says.
  * v1 emails the OWNER (leads from phone calls carry no email address).
@@ -19,9 +19,8 @@ import {
   GetResourceOauth2TokenCommand,
   GetWorkloadAccessTokenForUserIdCommand,
 } from '@aws-sdk/client-bedrock-agentcore';
-import { CognitoIdentityProviderClient, DescribeUserPoolClientCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { callerMemory, dynamoStore, GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS, ownerUserId, recordUsage, requireTenant, traceContextFromHeaders, type TraceContext } from '@wnk/shared';
+import { callerMemory, dynamoStore, gatewayConfigFromEnv, GOOGLE_GMAIL_SCOPES, GOOGLE_OAUTH_PARAMS, ownerUserId, recordUsage, requireTenant, tenantGatewayClient, traceContextFromHeaders, type TraceContext } from '@wnk/shared';
 import { composioGmail } from '@wnk/shared/composio';
 import * as http from 'node:http';
 
@@ -41,39 +40,6 @@ interface LeadEvent {
   lead?: { leadId?: string; callerName?: string; phone?: string; reason?: string; preferredCallbackTime?: string; notes?: string };
   tenantId?: string;
   callId?: string;
-}
-
-// ---- Gateway (MCP) ----------------------------------------------------------
-
-async function gatewayToken(): Promise<string> {
-  const cognito = new CognitoIdentityProviderClient({ region: REGION });
-  const { UserPoolClient } = await cognito.send(new DescribeUserPoolClientCommand({
-    UserPoolId: env('COGNITO_USER_POOL_ID'),
-    ClientId: env('COGNITO_CLIENT_ID'),
-  }));
-  const res = await fetch(env('COGNITO_TOKEN_URL'), {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/x-www-form-urlencoded',
-      authorization: `Basic ${Buffer.from(`${env('COGNITO_CLIENT_ID')}:${UserPoolClient?.ClientSecret}`).toString('base64')}`,
-    },
-    body: 'grant_type=client_credentials&scope=gateway%2Finvoke',
-  });
-  if (!res.ok) throw new Error(`cognito token: ${res.status}`);
-  return ((await res.json()) as { access_token: string }).access_token;
-}
-
-async function callGatewayTool(token: string, name: string, args: unknown): Promise<string> {
-  const res = await fetch(env('GATEWAY_URL'), {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
-  });
-  const text = await res.text();
-  const data = text.includes('data:') ? (text.split('\n').filter((l) => l.startsWith('data:')).pop() ?? '').slice(5) : text;
-  const parsed = JSON.parse(data) as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
-  if (parsed.result?.isError) throw new Error(`gateway tool ${name} failed: ${parsed.result.content?.[0]?.text}`);
-  return parsed.result?.content?.[0]?.text ?? '';
 }
 
 // ---- Identity vault (Google) ------------------------------------------------
@@ -186,12 +152,16 @@ async function processLead(event: LeadEvent, trace: TraceContext): Promise<{ ok:
 
   let crmContext = '';
   if (lead.phone) {
-    try {
-      const token = await gatewayToken();
-      crmContext = await callGatewayTool(token, 'hubspot___searchContacts', { query: lead.phone.replace(/\D/g, '').slice(-10), limit: 3 });
-      console.log(JSON.stringify({ msg: 'hubspot context fetched' }));
-    } catch (err) {
-      console.warn(JSON.stringify({ msg: 'hubspot context unavailable; continuing', err: String(err) }));
+    // As the tenant (its own Gateway client): the Gateway attributes the call
+    // and the crm tool reaches the tenant's CRM, or refuses if it has none.
+    const gw = gatewayConfigFromEnv();
+    if (gw && tenant.crm) {
+      try {
+        crmContext = await tenantGatewayClient(gw, tenant).callTool('crm___search_contacts', { query: lead.phone, limit: 3 });
+        console.log(JSON.stringify({ msg: 'crm context fetched', ...ctx }));
+      } catch (err) {
+        console.warn(JSON.stringify({ msg: 'crm context unavailable; continuing', err: String(err), ...ctx }));
+      }
     }
     // Platform caller memory (facts + preferences extracted from past calls).
     if (process.env.MEMORY_ID) {

@@ -19,6 +19,6 @@ Tools are data + wiring, not agent code: agents discover them from the catalog. 
 
 ## Platform tools (Lambda target)
 
-1. Handler in `packages/lambda/src/` — the Gateway passes tool args as the event and the tool name in `context.clientContext.custom.bedrockAgentCoreToolName` (`<target>___<tool>`). Business/tenant context (`tenant_id`, `call_id`, …) must be explicit args the CALLING AGENT injects — the model never supplies them (and Cedar can guard them).
+1. Handler in `packages/lambda/src/` — the Gateway passes tool args as the event and the tool name in `context.clientContext.custom.bedrockAgentCoreToolName` (`<target>___<tool>`). Tenant context (`tenant_id`, `tenant_phone`) is written into the args by the Gateway's request interceptor from the caller's identity (declare the fields in the schema, never mark them required); other context (`call_id`, …) is injected by the calling agent. The model never supplies any of it, and Cedar guards `context.input has tenant_id`. SaaS credentials are chosen per call by tenant id (Composio) — never attach a credential to a target.
 2. The Lambda lives in `lib/voice-stack.ts` (it owns the tables/bus it touches); the target registration lives in `lib/gateway-stack.ts` via `addLambdaTarget` with an inline `ToolSchema` + `grantInvoke(gateway.role)`.
 3. Same policy + proof steps as above.

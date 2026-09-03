@@ -11,10 +11,9 @@
  *
  * No re-validation of the token: AWS guarantees the signature, expiry, and
  * scope before invoking an interceptor on a JWT-authorized gateway. What we
- * add is attribution: a client with no tenant row is refused (fail closed),
- * except the platform's own agent clients, which still inject tenant context
- * themselves during the cutover (PLATFORM_CLIENT_IDS; removed once every
- * caller acts as its tenant).
+ * add is attribution: a client with no tenant row is refused (fail closed).
+ * The one exception is the admin/test client (PLATFORM_CLIENT_IDS), which
+ * passes through unchanged and must name the tenant in its arguments itself.
  *
  * Never log the headers: they carry the bearer token.
  */
@@ -69,7 +68,7 @@ const deny = (id: McpRequest['id'], message: string): InterceptorResult => ({
 /**
  * Pure transform: given the request and a way to attribute a client id to a
  * tenant, return what the Gateway should do. `platformClients` are the
- * cutover exception described above.
+ * admin exception described above.
  */
 export async function interceptRequest(
   event: InterceptorEvent,
@@ -91,7 +90,7 @@ export async function interceptRequest(
   const tenant = await lookup(clientId);
   if (!tenant) {
     if (platformClients.has(clientId)) {
-      console.log(JSON.stringify({ msg: 'platform client; tenant context left to the caller (cutover)', clientId, tool: body.params?.name }));
+      console.log(JSON.stringify({ msg: 'admin client; tenant context left to the caller', clientId, tool: body.params?.name }));
       return passThrough(body);
     }
     console.warn(JSON.stringify({ msg: 'no tenant owns this client; refusing', clientId, tool: body.params?.name }));

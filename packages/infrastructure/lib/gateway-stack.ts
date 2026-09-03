@@ -5,10 +5,6 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
-import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const here = path.dirname(fileURLToPath(import.meta.url));
 
 export interface GatewayStackProps extends cdk.StackProps {
   readonly prefix: string;
@@ -17,7 +13,6 @@ export interface GatewayStackProps extends cdk.StackProps {
   readonly allowedScopes: string[];
   /** The voice stack's interceptor: tenant context from the caller's identity, before every dispatch. */
   readonly interceptorFn: lambda.IFunction;
-  readonly hubspotProvider: agentcore.IApiKeyCredentialProvider;
   /** The voice stack's tools Lambda (record_lead / notify_owner). */
   readonly voiceToolsFn: lambda.IFunction;
   /** Policy engine to enforce on every tool call (default deny once attached). */
@@ -25,16 +20,18 @@ export interface GatewayStackProps extends cdk.StackProps {
 }
 
 /**
- * The one MCP tool catalog every agent talks to. Inbound: Cognito JWTs.
- * Outbound: per-target credential providers from the Identity stack — an
- * agent calling `hubspot___searchContacts` never sees the HubSpot token.
+ * The one MCP tool catalog every agent talks to. Inbound: Cognito JWTs,
+ * validated by scope (agents act as their tenant's own client). A request
+ * interceptor writes tenant context into every call from that identity.
+ * Targets are Lambda tools; SaaS credentials are chosen per call by tenant id
+ * (Composio), never attached to a target.
  */
 export class GatewayStack extends cdk.Stack {
   readonly gateway: agentcore.Gateway;
 
   constructor(scope: Construct, id: string, props: GatewayStackProps) {
     super(scope, id, props);
-    const { prefix, userPool, hubspotProvider } = props;
+    const { prefix, userPool } = props;
 
     this.gateway = new agentcore.Gateway(this, 'Gateway', {
       gatewayName: `${prefix}-gateway`,
@@ -73,29 +70,12 @@ export class GatewayStack extends cdk.Stack {
       if (grant.policyDependable) cfnGateway.node.addDependency(grant.policyDependable);
     }
 
-    // HubSpot CRM as MCP tools; auth is the API-key provider as a Bearer header.
-    // NOTE: the CDK default prefix is 'Bearer ' (trailing space) but the service
-    // already joins prefix and key with a space, yielding 'Bearer  <key>' and a
-    // 401 — so the prefix must be given explicitly without the trailing space.
-    const bearerHeader = agentcore.ApiKeyCredentialLocation.header({
-      credentialParameterName: 'Authorization',
-      credentialPrefix: 'Bearer',
-    });
-    this.gateway.addOpenApiTarget('Hubspot', {
-      gatewayTargetName: 'hubspot',
-      description: 'HubSpot CRM: contacts and notes',
-      apiSchema: agentcore.ApiSchema.fromLocalAsset(path.resolve(here, '../assets/hubspot-openapi.json')),
-      credentialProviderConfigurations: [
-        agentcore.GatewayCredentialProvider.fromApiKeyIdentity(hubspotProvider, { credentialLocation: bearerHeader }),
-      ],
-    });
-
     // Voice tools as a Lambda target: record_lead + notify_owner become shared
-    // platform tools. The tenant_* / call_* fields are context injected by the
-    // calling agent, never by the model.
+    // platform tools. tenant_* is written by the Gateway's interceptor from the
+    // caller identity; call_* by the voice agent. The model supplies neither.
     const ctxProps = {
-      tenant_id: { type: agentcore.SchemaDefinitionType.STRING, description: 'Business/tenant id (injected by the caller)' },
-      tenant_phone: { type: agentcore.SchemaDefinitionType.STRING, description: 'Tenant E.164 phone (injected by the caller)' },
+      tenant_id: { type: agentcore.SchemaDefinitionType.STRING, description: 'Set by the Gateway from the caller identity' },
+      tenant_phone: { type: agentcore.SchemaDefinitionType.STRING, description: 'Set by the Gateway from the caller identity' },
       call_id: { type: agentcore.SchemaDefinitionType.STRING, description: 'Originating call id (injected by the caller)' },
       caller_phone: { type: agentcore.SchemaDefinitionType.STRING, description: 'Caller id E.164, if known' },
     };
@@ -117,7 +97,7 @@ export class GatewayStack extends cdk.Stack {
               notes: { type: agentcore.SchemaDefinitionType.STRING, description: 'Anything else useful for the owner' },
               ...ctxProps,
             },
-            required: ['caller_name', 'reason', 'tenant_id', 'tenant_phone', 'call_id'],
+            required: ['caller_name', 'reason', 'call_id'],
           },
         },
         {
@@ -130,7 +110,7 @@ export class GatewayStack extends cdk.Stack {
               urgency: { type: agentcore.SchemaDefinitionType.STRING, description: "'normal' or 'urgent'" },
               ...ctxProps,
             },
-            required: ['summary', 'tenant_id', 'tenant_phone', 'call_id'],
+            required: ['summary', 'call_id'],
           },
         },
       ]),

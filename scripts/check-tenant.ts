@@ -8,7 +8,6 @@
  * notification wiring, and the owner's Google connection. Exit code 1 if any
  * hard check fails. Onboarding is data-only: nothing here asks for a deploy.
  */
-import { GetSecretValueCommand, ResourceNotFoundException, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { BedrockAgentCoreClient, GetResourceOauth2TokenCommand, GetWorkloadAccessTokenForUserIdCommand } from '@aws-sdk/client-bedrock-agentcore';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -47,20 +46,14 @@ if (!seeded) bad('seeded config', `no row in tenants table — run: npm run seed
 else if (fileConfig && JSON.stringify(seeded) !== JSON.stringify(fileConfig)) warn('seeded config', 'table differs from file — re-seed or update the file (git is the source of truth)');
 else ok('seeded config', 'matches the file');
 
-// 3. CRM secret
+// 3. CRM (HubSpot through Composio)
 const cfg = seeded ?? fileConfig;
 if (cfg?.crm) {
-  const sm = new SecretsManagerClient({ region: REGION });
-  try {
-    const s = await sm.send(new GetSecretValueCommand({ SecretId: `${PREFIX}/crm/${tenantId}` }));
-    const token = (JSON.parse(s.SecretString ?? '{}') as { HUBSPOT_TOKEN?: string }).HUBSPOT_TOKEN ?? '';
-    if (!token || token.startsWith('REPLACE')) bad('CRM secret', 'still a placeholder — put-secret-value the real token');
-    else ok('CRM secret', 'real token present');
-  } catch (err) {
-    if (err instanceof ResourceNotFoundException) bad('CRM secret', `missing — create it: aws secretsmanager create-secret --name ${PREFIX}/crm/${tenantId} --secret-string '{"HUBSPOT_TOKEN":"pat-..."}' --region ${REGION}`);
-    else bad('CRM secret', String(err).slice(0, 120));
-  }
+  if (cfg.crm.via !== 'composio') bad('CRM', `crm.via is "${cfg.crm.via}"; the token path is gone — consent via scripts/connect-composio.mts ${tenantId} hubspot and set via: composio`);
+  else ok('CRM', 'hubspot via composio (prove with scripts/test-crm.mts)');
 } else ok('CRM', 'not configured (crm: none)');
+if (!cfg?.cognitoClientId) bad('Gateway identity', 'no cognitoClientId — re-run the seed with COGNITO_USER_POOL_ID/COGNITO_RESOURCE_SERVER_ID set');
+else ok('Gateway identity', cfg.cognitoClientId);
 
 // 4. Services this tenant has turned on (Cedar admits any tenant with context present; no per-tenant policy)
 if (cfg) {

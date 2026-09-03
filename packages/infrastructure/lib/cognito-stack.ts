@@ -14,10 +14,8 @@ export interface CognitoStackProps extends cdk.StackProps {
  */
 export class CognitoStack extends cdk.Stack {
   readonly userPool: cognito.UserPool;
+  /** Admin/test identity: every scope, every tool; must name the tenant itself. Agents act as tenant clients (seeded per tenant). */
   readonly machineClient: cognito.UserPoolClient;
-  readonly voiceClient: cognito.UserPoolClient;
-  readonly emailClient: cognito.UserPoolClient;
-  readonly assistantClient: cognito.UserPoolClient;
   /** The `gateway` resource server id; the seed script reads its scopes to mint tenant clients. */
   readonly resourceServerId: string;
   readonly tokenUrl: string;
@@ -64,9 +62,7 @@ export class CognitoStack extends cdk.Stack {
       scopes: [invokeScope, ...Object.values(agentScopes)],
     });
 
-    // Platform clients: the admin/test identity, and the agents' own identities
-    // during the cutover to per-tenant clients (they still inject tenant context
-    // themselves; the interceptor lets them through by id).
+    // The one platform client: admin/test. Everything else acts as a tenant.
     const m2mClient = (id: string, name: string, scopes: cognito.ResourceServerScope[]) =>
       this.userPool.addClient(id, {
         userPoolClientName: `${prefix}-${name}`,
@@ -78,18 +74,13 @@ export class CognitoStack extends cdk.Stack {
         },
       });
     this.machineClient = m2mClient('Machine', 'machine', [invokeScope, ...Object.values(agentScopes)]);
-    this.voiceClient = m2mClient('VoiceAgent', 'voice-agent', [invokeScope, agentScopes.voice]);
-    this.emailClient = m2mClient('EmailAgent', 'email-agent', [invokeScope, agentScopes.email]);
-    this.assistantClient = m2mClient('AssistantAgent', 'assistant-agent', [invokeScope, agentScopes.assistant]);
     this.resourceServerId = resourceServer.userPoolResourceServerId;
 
     this.authBaseUrl = domain.baseUrl();
     this.tokenUrl = `${this.authBaseUrl}/oauth2/token`;
     new cdk.CfnOutput(this, 'userPoolId', { value: this.userPool.userPoolId });
     new cdk.CfnOutput(this, 'machineClientId', { value: this.machineClient.userPoolClientId });
-    new cdk.CfnOutput(this, 'voiceClientId', { value: this.voiceClient.userPoolClientId });
-    new cdk.CfnOutput(this, 'emailClientId', { value: this.emailClient.userPoolClientId });
-    new cdk.CfnOutput(this, 'assistantClientId', { value: this.assistantClient.userPoolClientId });
+
     new cdk.CfnOutput(this, 'resourceServerId', { value: this.resourceServerId });
     new cdk.CfnOutput(this, 'tokenUrl', { value: this.tokenUrl });
   }

@@ -30,10 +30,15 @@ export interface GatewayClient {
 }
 
 /** Config from the standard env vars, or undefined when the gateway isn't wired. */
+/**
+ * Base config from the standard env vars, or undefined when the gateway isn't
+ * wired. COGNITO_CLIENT_ID is optional: agents act as the TENANT's client
+ * (tenantGatewayClient); only admin scripts set a fixed one.
+ */
 export function gatewayConfigFromEnv(): GatewayClientConfig | undefined {
   const { GATEWAY_URL, COGNITO_TOKEN_URL, COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, GATEWAY_SCOPE } = process.env;
-  if (!GATEWAY_URL || !COGNITO_TOKEN_URL || !COGNITO_USER_POOL_ID || !COGNITO_CLIENT_ID) return undefined;
-  return { gatewayUrl: GATEWAY_URL, tokenUrl: COGNITO_TOKEN_URL, userPoolId: COGNITO_USER_POOL_ID, clientId: COGNITO_CLIENT_ID, scope: GATEWAY_SCOPE };
+  if (!GATEWAY_URL || !COGNITO_TOKEN_URL || !COGNITO_USER_POOL_ID) return undefined;
+  return { gatewayUrl: GATEWAY_URL, tokenUrl: COGNITO_TOKEN_URL, userPoolId: COGNITO_USER_POOL_ID, clientId: COGNITO_CLIENT_ID ?? '', scope: GATEWAY_SCOPE };
 }
 
 const perClient = new Map<string, GatewayClient>();
@@ -59,6 +64,7 @@ export function gatewayClient(config: GatewayClientConfig): GatewayClient {
   let clientSecret: string | undefined;
 
   const token = async (): Promise<string> => {
+    if (!config.clientId) throw new Error('gateway client has no Cognito client id; act as a tenant (tenantGatewayClient) or set COGNITO_CLIENT_ID');
     if (cached && Date.now() < cached.expiresAt - 60_000) return cached.token;
     if (!clientSecret) {
       const cognito = new CognitoIdentityProviderClient({});

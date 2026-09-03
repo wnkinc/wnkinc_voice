@@ -1,6 +1,5 @@
 import type { EventBridgeEvent } from 'aws-lambda';
-import { createLogger, getCrmSecret, type Logger } from '@wnk/shared';
-import { hubspotAdapter, nextBusinessMorning, type CrmAdapter } from './hubspot.js';
+import { createLogger, nextBusinessMorning, type CrmAdapter, type Logger } from '@wnk/shared';
 import { composioCrm } from '@wnk/shared/composio';
 import { dynamoStore, type Store } from '@wnk/shared';
 import type { TenantConfig, VoiceEvent } from '@wnk/shared';
@@ -107,18 +106,10 @@ export function createCrmSyncHandler(deps: CrmSyncDeps) {
   };
 }
 
-const adapters = new Map<string, Promise<CrmAdapter | undefined>>();
-/** Production resolver: the tenant's HubSpot — via Composio's vault, or (legacy) a token from Secrets Manager. */
+/** Production resolver: the tenant's HubSpot through Composio's vault. A tenant not connected through Composio has no CRM. */
 export async function crmForTenant(tenant: TenantConfig): Promise<CrmAdapter | undefined> {
-  if (tenant.crm?.type !== 'hubspot') return undefined;
-  if (tenant.crm.via === 'composio') return composioCrm(tenant.tenantId);
-  let p = adapters.get(tenant.tenantId);
-  if (!p) {
-    p = getCrmSecret(tenant.tenantId).then((s) => (s?.HUBSPOT_TOKEN ? hubspotAdapter(s.HUBSPOT_TOKEN) : undefined));
-    adapters.set(tenant.tenantId, p);
-    p.catch(() => adapters.delete(tenant.tenantId));
-  }
-  return p;
+  if (tenant.crm?.type !== 'hubspot' || tenant.crm.via !== 'composio') return undefined;
+  return composioCrm(tenant.tenantId);
 }
 
 export const handler = createCrmSyncHandler({ store: dynamoStore, crmFor: crmForTenant });

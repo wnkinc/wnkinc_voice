@@ -11,8 +11,6 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 export interface IdentityStackProps extends cdk.StackProps {
   readonly prefix: string;
-  /** Secrets Manager name of the per-tenant CRM secret holding HUBSPOT_TOKEN. */
-  readonly hubspotSecretName: string;
   /** Secrets Manager name of the Google OAuth client (GOOGLE_OAUTH_CLIENT_ID/_SECRET). */
   readonly googleOauthSecretName: string;
 }
@@ -22,23 +20,17 @@ export interface IdentityStackProps extends cdk.StackProps {
  * Agents never hold integration credentials — the Gateway pulls them from here
  * per call.
  *
- * Today: HubSpot via a private-app token (API key provider). Next: a Google
- * OAuth2 provider (3LO) once a Google Cloud OAuth client exists — that flow
- * lets each employee consent once and the vault manages their tokens.
+ * Today: a Google OAuth2 provider (3LO) — each employee consents once and the
+ * vault manages their tokens. SaaS tools reached through Composio (HubSpot,
+ * and Gmail when a tenant chooses it) use Composio's vault instead.
  */
 export class IdentityStack extends cdk.Stack {
-  readonly hubspotProvider: agentcore.ApiKeyCredentialProvider;
   readonly googleProvider: agentcore.OAuth2CredentialProvider;
   readonly emailResponderIdentity: agentcore.WorkloadIdentity;
 
   constructor(scope: Construct, id: string, props: IdentityStackProps) {
     super(scope, id, props);
-    const { prefix, hubspotSecretName, googleOauthSecretName } = props;
-
-    this.hubspotProvider = new agentcore.ApiKeyCredentialProvider(this, 'Hubspot', {
-      apiKeyCredentialProviderName: `${prefix.replace(/-/g, '_')}_hubspot`,
-      apiKey: cdk.SecretValue.secretsManager(hubspotSecretName, { jsonField: 'HUBSPOT_TOKEN' }),
-    });
+    const { prefix, googleOauthSecretName } = props;
 
     // Google 3LO: employees consent once ("Connect Gmail"); tokens live in the
     // vault. The provider's callbackUrl output must be added to the Google OAuth
@@ -90,7 +82,6 @@ export class IdentityStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'oauthReturnUrl', { value: callbackUrl.url });
 
     new cdk.CfnOutput(this, 'emailResponderWorkloadName', { value: this.emailResponderIdentity.workloadIdentityName });
-    new cdk.CfnOutput(this, 'hubspotProviderArn', { value: this.hubspotProvider.credentialProviderArn });
     new cdk.CfnOutput(this, 'googleProviderArn', { value: this.googleProvider.credentialProviderArn });
     new cdk.CfnOutput(this, 'googleCallbackUrl', { value: this.googleProvider.callbackUrl ?? '' });
   }

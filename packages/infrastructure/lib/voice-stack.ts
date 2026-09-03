@@ -39,16 +39,11 @@ export interface VoiceStackProps extends cdk.StackProps {
    * gateway stack consumes this stack's tools Lambda, so a CFN reference in the
    * other direction would be a cycle. Unset: tools run in-process (first deploy).
    */
-  /**
-   * Platform app clients the interceptor lets through WITHOUT tenant attribution
-   * during the cutover (they inject tenant context themselves). Empty once every
-   * caller acts as its tenant's own client.
-   */
+  /** Admin/test app clients the interceptor passes through without tenant attribution (they name the tenant themselves). */
   readonly platformClientIds?: string[];
   readonly gateway?: {
     readonly gatewayUrl: string;
     readonly userPoolId: string;
-    readonly clientId: string;
     readonly tokenUrl: string;
   };
   /** Caller memory (AgentCore Memory): webhook recalls, session writes. */
@@ -95,27 +90,6 @@ export class VoiceStack extends cdk.Stack {
         secretStringTemplate: JSON.stringify({ OPENAI_API_KEY: 'REPLACE_ME', OPENAI_WEBHOOK_SECRET: 'REPLACE_ME' }),
         generateStringKey: '_placeholder',
       },
-    });
-
-    // Per-tenant CRM credentials at `${prefix}/crm/<tenantId>`. The secrets are
-    // onboarding data, created by `aws secretsmanager create-secret` per tenant
-    // (see the new-tenant skill) — this stack only grants the prefix.
-    const crmSecretPrefix = `${prefix}/crm/`;
-    const crmSecretArnPattern = `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${crmSecretPrefix}*`;
-
-    // MIGRATION SHIM — delete this block after one deploy. The wnk secret was
-    // created by this stack before secrets became onboarding data. CloudFormation
-    // deletes a removed resource unless the *deployed* template says Retain, so:
-    // deploy once with RETAIN (this), then remove the block and deploy again to
-    // orphan the secret with its real token intact.
-    new secretsmanager.Secret(this, 'CrmSecret-wnk', {
-      secretName: `${crmSecretPrefix}wnk`,
-      description: 'CRM credentials for tenant wnk',
-      generateSecretString: {
-        secretStringTemplate: JSON.stringify({ HUBSPOT_TOKEN: 'REPLACE_ME' }),
-        generateStringKey: '_placeholder',
-      },
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
     this.tenantsTable = new dynamodb.Table(this, 'Tenants', {
@@ -192,7 +166,6 @@ export class VoiceStack extends cdk.Stack {
       EVENT_BUS_NAME: this.bus.eventBusName,
       EVENT_SOURCE,
       OPENAI_SECRET_ARN: this.openaiSecret.secretArn,
-      CRM_SECRET_PREFIX: crmSecretPrefix,
       NODE_OPTIONS: '--enable-source-maps',
       LOG_LEVEL: 'info',
     };
@@ -237,7 +210,6 @@ export class VoiceStack extends cdk.Stack {
     this.tenantsTable.grantReadData(webhookFn);
     this.callsTable.grantReadWriteData(webhookFn);
     sessionQueue.grantSendMessages(webhookFn);
-    webhookFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [crmSecretArnPattern] }));
 
     const sessionFn = fn('session', 'session.ts', {
       description: 'Holds the OpenAI Realtime WebSocket for one call and runs the tool loop',
@@ -246,7 +218,6 @@ export class VoiceStack extends cdk.Stack {
         ? {
             GATEWAY_URL: props.gateway.gatewayUrl,
             COGNITO_USER_POOL_ID: props.gateway.userPoolId,
-            COGNITO_CLIENT_ID: props.gateway.clientId,
             GATEWAY_SCOPE: 'gateway/voice',
             COGNITO_TOKEN_URL: props.gateway.tokenUrl,
           }
@@ -293,11 +264,10 @@ export class VoiceStack extends cdk.Stack {
 
     const crmSyncFn = fn('crm-sync', 'crm-sync.ts', {
       deadLetterQueue: eventsDlq,
-      description: 'Syncs leads and call transcripts into the tenant CRM (HubSpot)',
+      description: 'Syncs leads and call transcripts into the tenant CRM (HubSpot via Composio)',
       timeout: cdk.Duration.seconds(30),
     });
     this.tenantsTable.grantReadData(crmSyncFn);
-    crmSyncFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [crmSecretArnPattern] }));
 
     // Gateway Lambda target: the voice tools as shared platform tools. Lives in
     // this stack (it owns the tables and bus); the gateway stack registers it.
@@ -330,6 +300,11 @@ export class VoiceStack extends cdk.Stack {
     this.leadsTable.grantWriteData(this.gatewayToolsFn);
     this.tenantsTable.grantReadData(this.gatewayToolsFn);
     this.composioSecret.grantRead(this.gatewayToolsFn);
+    // CRM sync and the webhook's caller recognition reach HubSpot the same way.
+    this.composioSecret.grantRead(crmSyncFn);
+    crmSyncFn.addEnvironment('COMPOSIO_SECRET_ARN', this.composioSecret.secretArn);
+    this.composioSecret.grantRead(webhookFn);
+    webhookFn.addEnvironment('COMPOSIO_SECRET_ARN', this.composioSecret.secretArn);
     this.bus.grantPutEventsTo(this.gatewayToolsFn);
 
     // Runs before every Gateway tool dispatch, after the Gateway has verified
@@ -408,6 +383,5 @@ export class VoiceStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'eventBusName', { value: this.bus.eventBusName });
     new cdk.CfnOutput(this, 'sessionQueueUrl', { value: sessionQueue.queueUrl });
     new cdk.CfnOutput(this, 'sessionFunctionName', { value: sessionFn.functionName });
-    new cdk.CfnOutput(this, 'crmSecretNamePrefix', { value: crmSecretPrefix });
   }
 }

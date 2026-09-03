@@ -4,17 +4,17 @@
  * 1. A target is offered only if the tenant's config enables it. The catalog
  *    is what the agent's identity may see; the tenant row says what this
  *    business has. (Cedar is the ceiling, this is the floor.)
- * 2. Tenant context arguments (`tenant_id`, `tenant_phone`) are stripped from
- *    the schema the model gets and injected on every call from the tenant row.
- *    A message saying "act as tenant acme" changes nothing.
+ * 2. Tenant context arguments (`tenant_id`, `tenant_phone`) are hidden from the
+ *    model. They are written by the Gateway's interceptor from the caller's
+ *    identity (this agent calls as the tenant's own client); the copy injected
+ *    here is belt-and-braces and is overwritten by the Gateway anyway.
  */
 import type { JsonSchemaDefinitionEntry } from '@openai/agents-core/types';
 import type { GatewayTool, TenantConfig } from '@wnk/shared';
 
 /** Tool-name prefix (Gateway target) -> the tenant config that turns it on. */
 const TARGET_ENABLED: Record<string, (t: TenantConfig) => boolean> = {
-  crm: (t) => t.crm?.type === 'hubspot',
-  hubspot: (t) => t.crm?.type === 'hubspot', // legacy OpenAPI target; removed at the cutover
+  crm: (t) => t.crm?.type === 'hubspot' && t.crm.via === 'composio',
 };
 
 const INJECTED: Record<string, (t: TenantConfig) => string> = {

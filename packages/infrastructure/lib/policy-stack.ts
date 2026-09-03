@@ -8,9 +8,7 @@ export interface PolicyStackProps extends cdk.StackProps {
   readonly adminClientId: string;
   /** The gateway's id (from cdk.json context) — tool-specific policies must pin its ARN. */
   readonly gatewayId: string;
-  readonly voiceClientId: string;
-  readonly emailClientId: string;
-  readonly assistantClientId: string;
+
 }
 
 /**
@@ -29,7 +27,7 @@ export class PolicyStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: PolicyStackProps) {
     super(scope, id, props);
-    const { prefix, adminClientId, voiceClientId, emailClientId, assistantClientId } = props;
+    const { prefix, adminClientId } = props;
     const gatewayArn = `arn:aws:bedrock-agentcore:${this.region}:${this.account}:gateway/${props.gatewayId}`;
 
     this.engine = new agentcore.CfnPolicyEngine(this, 'Engine', {
@@ -57,61 +55,13 @@ when {
   principal.getTag("client_id") == "${adminClientId}"
 };`);
 
-    // Voice agent: exactly its two platform tools. The tenant guard asserts
-    // PRESENCE, not identity: the agent's M2M token carries no tenant claim, so
-    // Cedar cannot prove entitlement — the voice Lambda is the trusted party that
-    // resolves the tenant from the signed webhook's called number. Keeping the
-    // check here means a call with no tenant context is refused at the Gateway,
-    // and onboarding a tenant never touches policy.
-    policy('voice_agent_tools', 'The voice agent may record leads and notify the owner, with tenant context present', `
-permit(
-  principal is AgentCore::OAuthUser,
-  action in [AgentCore::Action::"voice___record_lead", AgentCore::Action::"voice___notify_owner"],
-  resource == AgentCore::Gateway::"${gatewayArn}"
-)
-when {
-  principal.hasTag("client_id") &&
-  principal.getTag("client_id") == "${voiceClientId}" &&
-  context.input has tenant_id &&
-  context.input.tenant_id != ""
-};`);
-
-    // Email agent: read-only CRM context. No creates, no voice tools — default
-    // deny covers the rest.
-    policy('email_agent_tools', 'The email agent may read CRM context', `
-permit(
-  principal is AgentCore::OAuthUser,
-  action in [AgentCore::Action::"hubspot___searchContacts", AgentCore::Action::"hubspot___getContact"],
-  resource == AgentCore::Gateway::"${gatewayArn}"
-)
-when {
-  principal.hasTag("client_id") &&
-  principal.getTag("client_id") == "${emailClientId}"
-};`);
-
-    // Assistant: the CRM, read and write. It offers a target to the model only
-    // if the tenant row enables it (assistant/src/tools.ts); this is the ceiling.
-    // No voice tools — those need a live call's context.
-    policy('assistant_agent_tools', 'The assistant may search, read, create CRM contacts and notes', `
-permit(
-  principal is AgentCore::OAuthUser,
-  action in [
-    AgentCore::Action::"hubspot___searchContacts",
-    AgentCore::Action::"hubspot___getContact",
-    AgentCore::Action::"hubspot___createContact",
-    AgentCore::Action::"hubspot___createNote"
-  ],
-  resource == AgentCore::Gateway::"${gatewayArn}"
-)
-when {
-  principal.hasTag("client_id") &&
-  principal.getTag("client_id") == "${assistantClientId}"
-};`);
-
-    // ---- Scope-based permits: the identity says which TENANT (client_id, used
-    // by the interceptor) and which AGENT (scope, used here). No client ids, no
-    // tenant ids in policy — a new tenant never touches this stack. The
-    // client-id permits above remain until every caller acts as its tenant.
+    // ---- Agent permits by scope: the identity says which TENANT (client_id,
+    // mapped by the Gateway interceptor, which runs before policy) and which
+    // AGENT (scope, matched here). No client ids, no tenant ids in policy — a
+    // new tenant never touches this stack. Every permit also requires the
+    // tenant context the interceptor wrote, so a call it refused or skipped
+    // cannot reach a tool.
+    const tenantGuard = `context.input has tenant_id && context.input.tenant_id != ""`;
     policy('voice_scope_tools', 'A client acting as the voice agent may record leads and notify the owner', `
 permit(
   principal is AgentCore::OAuthUser,
@@ -120,7 +70,8 @@ permit(
 )
 when {
   principal.hasTag("scope") &&
-  principal.getTag("scope") like "*gateway/voice*"
+  principal.getTag("scope") like "*gateway/voice*" &&
+  ${tenantGuard}
 };`);
     policy('email_scope_tools', 'A client acting as the email agent may read CRM context', `
 permit(
@@ -130,7 +81,8 @@ permit(
 )
 when {
   principal.hasTag("scope") &&
-  principal.getTag("scope") like "*gateway/email*"
+  principal.getTag("scope") like "*gateway/email*" &&
+  ${tenantGuard}
 };`);
     policy('assistant_scope_tools', 'A client acting as the assistant may search, read, create CRM contacts and notes', `
 permit(
@@ -145,7 +97,8 @@ permit(
 )
 when {
   principal.hasTag("scope") &&
-  principal.getTag("scope") like "*gateway/assistant*"
+  principal.getTag("scope") like "*gateway/assistant*" &&
+  ${tenantGuard}
 };`);
 
     new cdk.CfnOutput(this, 'policyEngineArn', { value: this.engine.attrPolicyEngineArn });

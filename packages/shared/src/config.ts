@@ -16,8 +16,6 @@ export const env = {
   get openaiSecretArn() { return process.env.OPENAI_SECRET_ARN ?? ''; },
   get sesFromEmail() { return process.env.SES_FROM_EMAIL ?? ''; },
   get defaultTenantPhone() { return process.env.DEFAULT_TENANT_PHONE ?? ''; },
-  /** Secrets Manager name prefix for per-tenant CRM credentials, e.g. `wnkinc-voice-dev/crm/`. */
-  get crmSecretPrefix() { return process.env.CRM_SECRET_PREFIX ?? ''; },
 };
 
 // ---- Secrets ----------------------------------------------------------------
@@ -50,23 +48,6 @@ async function loadSecrets(): Promise<OpenAISecrets> {
   return { OPENAI_API_KEY: parsed.OPENAI_API_KEY, OPENAI_WEBHOOK_SECRET: parsed.OPENAI_WEBHOOK_SECRET };
 }
 
-export interface CrmSecrets {
-  HUBSPOT_TOKEN?: string;
-}
-
-/** Per-tenant CRM credentials; undefined if the secret is missing or still a placeholder. */
-export async function getCrmSecret(tenantId: string): Promise<CrmSecrets | undefined> {
-  if (!env.crmSecretPrefix) return undefined;
-  try {
-    const res = await new SecretsManagerClient({}).send(new GetSecretValueCommand({ SecretId: `${env.crmSecretPrefix}${tenantId}` }));
-    const parsed = JSON.parse(res.SecretString ?? '{}') as CrmSecrets;
-    if (!parsed.HUBSPOT_TOKEN || parsed.HUBSPOT_TOKEN.startsWith('REPLACE')) return undefined;
-    return parsed;
-  } catch (err) {
-    if ((err as { name?: string }).name === 'ResourceNotFoundException') return undefined;
-    throw err;
-  }
-}
 
 export function createOpenAI(s: OpenAISecrets): OpenAI {
   return new OpenAI({ apiKey: s.OPENAI_API_KEY, webhookSecret: s.OPENAI_WEBHOOK_SECRET, maxRetries: 1, timeout: 8_000 });

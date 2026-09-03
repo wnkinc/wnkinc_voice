@@ -15,7 +15,7 @@
  */
 import { setDefaultOpenAIKey } from '@openai/agents';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { dynamoStore, gatewayClient, gatewayConfigFromEnv, memoryFromEnv, recordUsage, runtimeServer, type TraceContext } from '@wnk/shared';
+import { dynamoStore, gatewayConfigFromEnv, memoryFromEnv, recordUsage, runtimeServer, tenantGatewayClient, type TraceContext } from '@wnk/shared';
 import { z } from 'zod';
 import { handleTurn, type CoreDeps } from './core.js';
 import { sendTelegramMessage } from './telegram.js';
@@ -54,7 +54,7 @@ const init = (): Promise<void> => (ready ??= (async () => {
 const gatewayConfig = gatewayConfigFromEnv();
 const deps: CoreDeps = {
   store: dynamoStore(),
-  gateway: gatewayConfig ? gatewayClient(gatewayConfig) : undefined,
+  gatewayFor: gatewayConfig ? (tenant) => tenantGatewayClient(gatewayConfig, tenant) : undefined,
   memory: memoryFromEnv(),
   model: process.env.ASSISTANT_MODEL ?? 'gpt-5-mini',
 };

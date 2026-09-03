@@ -4,7 +4,7 @@
  *   npx tsx scripts/test-gateway.ts [search query] [clientId|machine] [scope] [tool]
  *
  * Gets a client-credentials JWT from Cognito, then: initialize -> tools/list ->
- * tools/call hubspot___searchContacts. Reads stack outputs + the client secret
+ * tools/call crm___search_contacts. Reads stack outputs + the client secret
  * via the AWS CLI, so it needs the same credentials as a deploy.
  *
  * Pass a tenant's cognitoClientId (from its tenant file) and an agent scope
@@ -36,7 +36,7 @@ async function mcp(url: string, token: string, body: object): Promise<unknown> {
 const query = process.argv[2] ?? 'Jordan';
 const clientArg = process.argv[3] ?? 'machine';
 const scope = process.argv[4] ?? 'gateway/invoke';
-const tool = process.argv[5] ?? 'hubspot___searchContacts';
+const tool = process.argv[5] ?? 'crm___search_contacts';
 
 const userPoolId = stackOutput('wnk-auth-dev', 'userPoolId');
 const clientId = clientArg === 'machine' ? stackOutput('wnk-auth-dev', 'machineClientId') : clientArg;

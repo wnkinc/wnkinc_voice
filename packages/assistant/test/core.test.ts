@@ -12,12 +12,12 @@ const person = { name: 'Wes', role: 'owner' as const };
 describe('handleTurn fails closed', () => {
   it('refuses an unknown tenant before touching anything', async () => {
     const store = memoryStore([]);
-    await expect(handleTurn({ store, gateway: untouchable, model: 'x' }, { tenantId: 'ghost', person, channelId: 'telegram:1', text: 'hi' }))
+    await expect(handleTurn({ store, gatewayFor: () => untouchable, model: 'x' }, { tenantId: 'ghost', person, channelId: 'telegram:1', text: 'hi' }))
       .rejects.toThrow(/no tenant config/);
   });
   it('stays silent for a tenant whose assistant is off', async () => {
     const store = memoryStore([{ tenantId: 'acme', phoneNumber: '+15555550100', businessName: 'Acme' }]);
-    const out = await handleTurn({ store, gateway: untouchable, model: 'x' }, { tenantId: 'acme', person, channelId: 'telegram:1', text: 'hi' });
+    const out = await handleTurn({ store, gatewayFor: () => untouchable, model: 'x' }, { tenantId: 'acme', person, channelId: 'telegram:1', text: 'hi' });
     expect(out.reply).toBeUndefined();
     expect(out.skipped).toMatch(/not enabled/);
   });

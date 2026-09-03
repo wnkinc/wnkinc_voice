@@ -28,7 +28,8 @@ export interface TurnResult {
 
 export interface CoreDeps {
   store: Store;
-  gateway?: GatewayClient;
+  /** The Gateway as THIS tenant (its own Cognito client); undefined when the gateway isn't wired. */
+  gatewayFor?: (tenant: TenantConfig) => GatewayClient;
   memory?: CallerMemory;
   model: string;
 }
@@ -81,9 +82,10 @@ export async function handleTurn(deps: CoreDeps, payload: TurnPayload): Promise<
   }
   const actorId = personActorId(tenant.tenantId, payload.channelId);
 
-  const catalog = deps.gateway ? await deps.gateway.listTools() : [];
+  const gateway = deps.gatewayFor?.(tenant);
+  const catalog = gateway ? await gateway.listTools() : [];
   const prepared = prepareTools(catalog, tenant);
-  const tools = deps.gateway ? prepared.map((p) => asSdkTool(p, deps.gateway!)) : [];
+  const tools = gateway ? prepared.map((p) => asSdkTool(p, gateway)) : [];
 
   let memories: string[] = [];
   if (deps.memory) {

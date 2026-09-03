@@ -25,12 +25,11 @@ const voice = new VoiceStack(app, 'wnk-voice-dev', {
   env,
   sesFromEmail: process.env.SES_FROM_EMAIL ?? '',
   alarmEmail: process.env.ALARM_EMAIL,
-  platformClientIds: [auth.machineClient, auth.voiceClient, auth.emailClient, auth.assistantClient].map((c) => c.userPoolClientId),
+  platformClientIds: [auth.machineClient.userPoolClientId],
   gateway: gatewayUrl
     ? {
         gatewayUrl,
         userPoolId: auth.userPool.userPoolId,
-        clientId: auth.voiceClient.userPoolClientId,
         tokenUrl: auth.tokenUrl,
       }
     : undefined,
@@ -39,7 +38,6 @@ const voice = new VoiceStack(app, 'wnk-voice-dev', {
 const identity = new IdentityStack(app, 'wnk-identity-dev', {
   prefix,
   env,
-  hubspotSecretName: `${prefix}/crm/wnk`,
   googleOauthSecretName: `${prefix}/oauth/google`,
 });
 const policy = new PolicyStack(app, 'wnk-policy-dev', {
@@ -47,9 +45,6 @@ const policy = new PolicyStack(app, 'wnk-policy-dev', {
   env,
   gatewayId: (app.node.tryGetContext('wnk:gatewayId') as string | undefined) ?? '',
   adminClientId: auth.machineClient.userPoolClientId,
-  voiceClientId: auth.voiceClient.userPoolClientId,
-  emailClientId: auth.emailClient.userPoolClientId,
-  assistantClientId: auth.assistantClient.userPoolClientId,
 });
 const gateway = new GatewayStack(app, 'wnk-gateway-dev', {
   prefix,
@@ -57,7 +52,6 @@ const gateway = new GatewayStack(app, 'wnk-gateway-dev', {
   userPool: auth.userPool,
   allowedScopes: ['gateway/invoke', 'gateway/voice', 'gateway/email', 'gateway/assistant'],
   interceptorFn: voice.gatewayInterceptorFn,
-  hubspotProvider: identity.hubspotProvider,
   voiceToolsFn: voice.gatewayToolsFn,
   policyEngineArn: policy.engine.attrPolicyEngineArn,
 });
@@ -66,8 +60,6 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   env,
   gatewayUrl: gateway.gateway.gatewayUrl ?? '',
   cognitoUserPoolId: auth.userPool.userPoolId,
-  cognitoClientId: auth.emailClient.userPoolClientId,
-  assistantClientId: auth.assistantClient.userPoolClientId,
   cognitoTokenUrl: auth.tokenUrl,
   workloadName: identity.emailResponderIdentity.workloadIdentityName,
   googleProviderName: `${prefix.replace(/-/g, '_')}_google`,

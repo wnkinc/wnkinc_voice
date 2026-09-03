@@ -27,9 +27,6 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly prefix: string;
   readonly gatewayUrl: string;
   readonly cognitoUserPoolId: string;
-  readonly cognitoClientId: string;
-  /** The assistant's own Gateway identity; Policy tells agents apart by client id. */
-  readonly assistantClientId: string;
   readonly cognitoTokenUrl: string;
   readonly workloadName: string;
   readonly googleProviderName: string;
@@ -100,7 +97,6 @@ export class RuntimeStack extends cdk.Stack {
       environmentVariables: {
         GATEWAY_URL: props.gatewayUrl,
         COGNITO_USER_POOL_ID: props.cognitoUserPoolId,
-        COGNITO_CLIENT_ID: props.cognitoClientId,
         GATEWAY_SCOPE: 'gateway/email',
         COGNITO_TOKEN_URL: props.cognitoTokenUrl,
         WORKLOAD_NAME: props.workloadName,
@@ -244,7 +240,6 @@ export class RuntimeStack extends cdk.Stack {
       environmentVariables: {
         GATEWAY_URL: props.gatewayUrl,
         COGNITO_USER_POOL_ID: props.cognitoUserPoolId,
-        COGNITO_CLIENT_ID: props.assistantClientId,
         GATEWAY_SCOPE: 'gateway/assistant',
         COGNITO_TOKEN_URL: props.cognitoTokenUrl,
         OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
