@@ -38,3 +38,17 @@ Service rules learned the hard way:
 
 - Rolling out a risky change? The gateway attach supports `mode: 'LOG_ONLY'` (in `lib/gateway-stack.ts`) to trace decisions without enforcing.
 - If the gateway stack fails deploying with policy-engine permission errors, the gateway role needs `bedrock-agentcore:GetPolicyEngine` + the `*Authorize*` action family, deployed BEFORE the gateway update (already handled via `policyDependable` ordering — keep it).
+
+## Deploy order when a permit names NEW tools
+
+Cedar statements are validated against the schema the Policy engine derives from the gateway's
+current tools. A permit naming a tool whose target does not exist yet fails the policy deploy
+("Failed to update policy definition"), and CDK orders `wnk-policy-dev` BEFORE `wnk-gateway-dev`
+(the gateway consumes the engine ARN). So when a change adds a target AND permits for its tools:
+
+```
+npx cdk deploy wnk-voice-dev wnk-gateway-dev --exclusively --require-approval never
+npx cdk deploy wnk-policy-dev --exclusively --require-approval never
+```
+
+Removing a target is the mirror image: drop its permits (deploy policy) before removing the target.
