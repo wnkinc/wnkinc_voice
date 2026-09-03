@@ -134,7 +134,7 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `active` | `false` → calls rejected with SIP 603 |
 | `crm` | `{ "type": "hubspot", "via": "composio" }` enables CRM sync, caller recognition, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
 | `cognitoClientId` | The tenant's Gateway identity, minted by the seed; every agent calls the Gateway as this client |
-| `products` | Which platform services are on for this tenant: `emailResponder: { enabled, via: "vault" \| "composio" }`, `backOffice: { enabled }`. Default all off; agents refuse to act for a tenant whose flag is off. |
+| `products` | Which platform services are on for this tenant: `emailResponder: { enabled, via: "vault" \| "composio" }`, `assistant: { enabled }`. Default all off; agents refuse to act for a tenant whose flag is off. |
 
 Unknown numbers are rejected with SIP 404.
 

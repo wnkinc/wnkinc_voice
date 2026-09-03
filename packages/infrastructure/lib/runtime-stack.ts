@@ -175,41 +175,6 @@ export class RuntimeStack extends cdk.Stack {
     dlqAlarm(this, 'EmailTriggerDlqAlarm', triggerDlq, props.alarmTopic, 'Email responder: a lead email was not sent after retries');
     errorAlarm(this, 'EmailTriggerErrors', triggerFn, props.alarmTopic, 'Email responder trigger');
 
-    // ---- Back-office agent: Runtime + AgentCore Browser -----------------------
-
-    const browser = new agentcore.BrowserCustom(this, 'Browser', {
-      browserCustomName: `${prefix.replace(/-/g, '_')}_browser`,
-      description: 'Managed browser for back-office research tasks',
-      networkConfiguration: agentcore.BrowserNetworkConfiguration.usingPublicNetwork(),
-    });
-
-    const backOffice = new agentcore.Runtime(this, 'BackOffice', {
-      runtimeName: `${prefix.replace(/-/g, '_')}_back_office`,
-      description: 'Research tasks: drives an AgentCore Browser session and answers questions from pages',
-      agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromCodeAsset({
-        path: bundleAgent('back-office'),
-        runtime: agentcore.AgentCoreRuntime.NODE_22,
-        entrypoint: ['index.js'],
-      }),
-      environmentVariables: {
-        BROWSER_ID: browser.browserId,
-        OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
-        USAGE_TABLE: props.usageTable.tableName,
-        TENANTS_TABLE: props.tenantsTable.tableName,
-      },
-    });
-    browser.grantUse(backOffice.role);
-    props.usageTable.grantWriteData(backOffice.role);
-    props.tenantsTable.grantReadData(backOffice.role);
-    // grantUse only grants Start/Stop/UpdateBrowserStream — the automation-stream
-    // WebSocket needs ConnectBrowserAutomationStream, on both the browser ARN and
-    // its session subresources.
-    backOffice.role.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:ConnectBrowserAutomationStream', 'bedrock-agentcore:GetBrowserSession'],
-      resources: [browser.browserArn, `${browser.browserArn}/*`],
-    }));
-    props.openaiSecret.grantRead(backOffice.role);
-
     // ---- My Assistant: Telegram -> API Gateway -> Step Functions -> harness --
     //
     // No code on this path. The assistant is an AgentCore HARNESS: model,
@@ -439,7 +404,5 @@ export class RuntimeStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'telegramWorkflowArn', { value: workflow.stateMachineArn });
     new cdk.CfnOutput(this, 'emailAgentRuntimeArn', { value: emailAgent.agentRuntimeArn });
-    new cdk.CfnOutput(this, 'backOfficeRuntimeArn', { value: backOffice.agentRuntimeArn });
-    new cdk.CfnOutput(this, 'browserId', { value: browser.browserId });
   }
 }

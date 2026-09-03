@@ -17,7 +17,6 @@
     "maxCallSeconds": 600,
     "products": {
       "emailResponder": { "enabled": true, "via": "composio" },
-      "backOffice": { "enabled": false },
       "assistant": { "enabled": false }
     },
     "people": [

@@ -8,7 +8,7 @@ that decide *how* to change it.
 1. **The smallest amount of custom code that offers multiple services safely
    across multiple tenants.**
 2. **Thin product code on top of thick rented infrastructure.** Managed services
-   (AgentCore Gateway/Identity/Policy/Memory/Runtime/Browser, Cognito, DynamoDB,
+   (AgentCore Gateway/Identity/Policy/Memory/Runtime, Cognito, DynamoDB,
    EventBridge, Composio, OpenAI Realtime, Twilio) carry the enforcement. Custom
    code only resolves tenant identity, threads it through, and fails closed.
 

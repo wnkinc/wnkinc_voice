@@ -9,13 +9,13 @@ const minimal = { tenantId: 't1', phoneNumber: '+15555550100', businessName: 'T1
 describe('TenantConfigSchema.products', () => {
   it('defaults every service to off (fail closed)', () => {
     const t = TenantConfigSchema.parse(minimal);
-    expect(t.products).toEqual({ emailResponder: { enabled: false, via: 'vault' }, backOffice: { enabled: false }, assistant: { enabled: false } });
+    expect(t.products).toEqual({ emailResponder: { enabled: false, via: 'vault' }, assistant: { enabled: false } });
   });
 
   it('fills defaults inside a partially specified service', () => {
     const t = TenantConfigSchema.parse({ ...minimal, products: { emailResponder: { enabled: true } } });
     expect(t.products.emailResponder).toEqual({ enabled: true, via: 'vault' });
-    expect(t.products.backOffice.enabled).toBe(false);
+    expect(t.products.assistant.enabled).toBe(false);
   });
 
   it('rejects an unknown credential broker', () => {
@@ -30,11 +30,11 @@ describe('ownerUserId', () => {
 });
 
 describe('requireTenant', () => {
-  const store = memoryStore([{ ...minimal, products: { backOffice: { enabled: true } } }]);
+  const store = memoryStore([{ ...minimal, products: { assistant: { enabled: true } } }]);
 
   it('returns the tenant row for a known id', async () => {
     const t = await requireTenant(store, 't1');
-    expect(t.products.backOffice.enabled).toBe(true);
+    expect(t.products.assistant.enabled).toBe(true);
   });
 
   it('refuses a missing id instead of defaulting', async () => {

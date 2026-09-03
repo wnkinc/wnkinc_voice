@@ -118,7 +118,6 @@ export const TenantConfigSchema = z.object({
       /** Who brokers the owner's Gmail credential: our Identity vault or Composio. */
       via: z.enum(['vault', 'composio']).default('vault'),
     }).prefault({}),
-    backOffice: z.object({ enabled: z.boolean().default(false) }).prefault({}),
     /** Chat assistant for the tenant's own people (Telegram now, SMS later). */
     assistant: z.object({ enabled: z.boolean().default(false) }).prefault({}),
   }).prefault({}),

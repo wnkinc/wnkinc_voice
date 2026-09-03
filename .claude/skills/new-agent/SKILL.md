@@ -12,7 +12,7 @@ Gateway AS the tenant through the tenant's `gatewayOauthProviderArn` (tools over
 invocation). Zero agent code. Reach for a Runtime agent (below) only when configuration isn't
 enough: custom code between model and tools, a non-loop pattern, bidirectional streaming.
 
-An agent = a `packages/<name>/` folder (behavior) + wiring in `packages/infrastructure/` (hosting, identity, grants). Follow the email-responder as the worked example; back-office shows the Browser variant.
+An agent = a `packages/<name>/` folder (behavior) + wiring in `packages/infrastructure/` (hosting, identity, grants). Follow the email-responder as the worked example.
 
 ## Steps
 

@@ -4,7 +4,7 @@
  * across tenants, compare against the actual Twilio / OpenAI / AWS invoices,
  * and adjust the rates here until they track within ~10%.
  */
-export type Meter = 'voice_minutes' | 'llm_tokens' | 'emails_sent' | 'browser_tasks';
+export type Meter = 'voice_minutes' | 'llm_tokens' | 'emails_sent';
 
 export const RATES: {
   meters: Record<Meter, { rate: number; note: string }>;
@@ -21,16 +21,11 @@ export const RATES: {
     llm_tokens: {
       rate: 0.000002,
       // gpt-5-mini class drafting: blended in/out per token. Tiny next to voice.
-      note: 'Drafting/summarizing tokens (email + back-office agents)',
+      note: 'Drafting/summarizing tokens (email responder + assistant)',
     },
     emails_sent: {
       rate: 0,
       note: 'Informational count; Gmail send costs nothing',
-    },
-    browser_tasks: {
-      rate: 0.02,
-      // AgentCore Browser session ~2-3 min active + Runtime microVM seconds.
-      note: 'One back-office browser task (browser session + runtime)',
     },
   },
   // Shared AWS services (Lambda, DynamoDB, SQS, Gateway, Memory, logs) are

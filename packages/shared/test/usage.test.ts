@@ -14,7 +14,6 @@ const rates = {
     voice_minutes: { rate: 0.1, note: 'v' },
     llm_tokens: { rate: 0.000002, note: 't' },
     emails_sent: { rate: 0, note: 'e' },
-    browser_tasks: { rate: 0.02, note: 'b' },
   },
   monthlyOverhead: 2,
 } as const;
