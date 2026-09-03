@@ -330,7 +330,9 @@ export class RuntimeStack extends cdk.Stack {
       integration: new HttpStepFunctionsIntegration('TelegramWebhook', {
         stateMachine: workflow,
         subtype: apigwv2.HttpIntegrationSubtype.STEPFUNCTIONS_START_EXECUTION,
-        parameterMapping: new apigwv2.ParameterMapping().custom('Input', '$request.body'),
+        // A custom mapping replaces the construct's default one, so the state
+        // machine ARN must be restated alongside the body-as-input mapping.
+        parameterMapping: new apigwv2.ParameterMapping().custom('StateMachineArn', workflow.stateMachineArn).custom('Input', '$request.body'),
       }),
     });
 
