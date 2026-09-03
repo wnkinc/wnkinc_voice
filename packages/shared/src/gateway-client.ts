@@ -9,7 +9,10 @@ export interface GatewayClientConfig {
   gatewayUrl: string;
   tokenUrl: string;
   userPoolId: string;
+  /** The Cognito app client to act as: a tenant's own client (see TenantConfig.cognitoClientId). */
   clientId: string;
+  /** OAuth scope naming the agent (gateway/assistant, gateway/email, gateway/voice); Policy keys on it. */
+  scope?: string;
 }
 
 export interface GatewayTool {
@@ -28,9 +31,27 @@ export interface GatewayClient {
 
 /** Config from the standard env vars, or undefined when the gateway isn't wired. */
 export function gatewayConfigFromEnv(): GatewayClientConfig | undefined {
-  const { GATEWAY_URL, COGNITO_TOKEN_URL, COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID } = process.env;
+  const { GATEWAY_URL, COGNITO_TOKEN_URL, COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, GATEWAY_SCOPE } = process.env;
   if (!GATEWAY_URL || !COGNITO_TOKEN_URL || !COGNITO_USER_POOL_ID || !COGNITO_CLIENT_ID) return undefined;
-  return { gatewayUrl: GATEWAY_URL, tokenUrl: COGNITO_TOKEN_URL, userPoolId: COGNITO_USER_POOL_ID, clientId: COGNITO_CLIENT_ID };
+  return { gatewayUrl: GATEWAY_URL, tokenUrl: COGNITO_TOKEN_URL, userPoolId: COGNITO_USER_POOL_ID, clientId: COGNITO_CLIENT_ID, scope: GATEWAY_SCOPE };
+}
+
+const perClient = new Map<string, GatewayClient>();
+
+/**
+ * A Gateway client acting as the tenant (its own Cognito app client), with the
+ * calling agent's scope from the env config. Cached per client id. Refuses a
+ * tenant that has no client: nothing may act for a tenant the Gateway cannot
+ * attribute.
+ */
+export function tenantGatewayClient(base: GatewayClientConfig, tenant: { tenantId: string; cognitoClientId?: string }): GatewayClient {
+  if (!tenant.cognitoClientId) throw new Error(`tenant "${tenant.tenantId}" has no cognitoClientId; re-run the seed to create its Gateway identity`);
+  let client = perClient.get(tenant.cognitoClientId);
+  if (!client) {
+    client = gatewayClient({ ...base, clientId: tenant.cognitoClientId });
+    perClient.set(tenant.cognitoClientId, client);
+  }
+  return client;
 }
 
 export function gatewayClient(config: GatewayClientConfig): GatewayClient {
@@ -51,7 +72,7 @@ export function gatewayClient(config: GatewayClientConfig): GatewayClient {
         'content-type': 'application/x-www-form-urlencoded',
         authorization: `Basic ${Buffer.from(`${config.clientId}:${clientSecret}`).toString('base64')}`,
       },
-      body: 'grant_type=client_credentials&scope=gateway%2Finvoke',
+      body: `grant_type=client_credentials&scope=${encodeURIComponent(config.scope ?? 'gateway/invoke')}`,
     });
     if (!res.ok) throw new Error(`cognito token endpoint: ${res.status}`);
     const data = (await res.json()) as { access_token: string; expires_in: number };

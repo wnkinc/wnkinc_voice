@@ -32,7 +32,11 @@ should live.
 ## Safety invariants
 
 - Tenant id comes only from unforgeable inputs: signed webhook called-number,
-  verified JWT claim, events on our own bus.
+  verified JWT claim, events on our own bus, or the Gateway interceptor mapping
+  the caller's validated client identity to its tenant.
+- On the tool path, tenant context is written by the Gateway interceptor from
+  the caller's identity, never by the model and not by agent code. An agent
+  acts for a tenant by calling the Gateway as that tenant's own client.
 - Every per-tenant resource is addressed by tenant id in its key.
 - A missing or unknown tenant fails closed.
 - A service acts for a tenant only if that tenant's config enables it.

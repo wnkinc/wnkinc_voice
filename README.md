@@ -227,6 +227,20 @@ Tools that need durability (scheduling, follow-ups, approvals) should publish an
 and return immediately; the worker that consumes the event is where a Temporal workflow
 starts. The `notifier` Lambda is the v1 stand-in for that worker.
 
+## Tenancy on the tool path
+
+Every agent calls the Gateway as the **tenant's own Cognito app client** (`cognitoClientId` on the
+tenant row, minted by the seed script) with the **agent's scope** (`gateway/voice`, `gateway/email`,
+`gateway/assistant`). The Gateway validates the JWT by scope, so onboarding a tenant never changes
+the gateway or its policies. A request interceptor then maps the validated `client_id` to the
+tenant (`byClientId` index) and writes `tenant_id` and `tenant_phone` into every `tools/call`,
+overwriting anything the caller sent. Tool schemas carry no tenant fields for the model; Cedar
+permits match the scope tag and contain no client or tenant ids. A client no tenant owns is
+refused before any tool runs.
+
+Cutover state: the platform's per-agent clients are still accepted by id (`PLATFORM_CLIENT_IDS`)
+and inject tenant context themselves until every caller acts as its tenant.
+
 ## My Assistant (Telegram)
 
 A tenant's own people chat with the platform about their business: look up a customer in the

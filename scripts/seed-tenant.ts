@@ -7,9 +7,48 @@
  * Also mirrors the tenant's `people` into the People table (one row per channel
  * identity) and removes rows this tenant no longer lists — that is how someone
  * gains or loses access to the assistant. No deploy.
+ *
+ * And mints the tenant's Gateway identity if the file has no `cognitoClientId`:
+ * one Cognito app client (client-credentials, every agent scope), written back
+ * into the tenant file so it is committed with the rest of the tenant's data.
+ * Needs COGNITO_USER_POOL_ID and COGNITO_RESOURCE_SERVER_ID (auth stack outputs).
+ * The client secret stays in Cognito; agents read it through IAM.
  */
-import { readFileSync } from 'node:fs';
+import { CognitoIdentityProviderClient, CreateUserPoolClientCommand, DescribeResourceServerCommand } from '@aws-sdk/client-cognito-identity-provider';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dynamoStore } from '@wnk/shared';
+
+async function ensureGatewayIdentity(raw: { tenantId?: string; cognitoClientId?: string }, file: string): Promise<void> {
+  if (raw.cognitoClientId || !raw.tenantId) return;
+  const { COGNITO_USER_POOL_ID: UserPoolId, COGNITO_RESOURCE_SERVER_ID: resourceServerId } = process.env;
+  if (!UserPoolId || !resourceServerId) {
+    console.warn(`${raw.tenantId}: no cognitoClientId and COGNITO_USER_POOL_ID/COGNITO_RESOURCE_SERVER_ID unset; agents cannot act for this tenant until one exists`);
+    return;
+  }
+  const cognito = new CognitoIdentityProviderClient({});
+  const rs = await cognito.send(new DescribeResourceServerCommand({ UserPoolId, Identifier: resourceServerId }));
+  const scopes = (rs.ResourceServer?.Scopes ?? []).map((s) => `${resourceServerId}/${s.ScopeName}`);
+  const created = await cognito.send(new CreateUserPoolClientCommand({
+    UserPoolId,
+    ClientName: `tenant-${raw.tenantId}`,
+    GenerateSecret: true,
+    AllowedOAuthFlowsUserPoolClient: true,
+    AllowedOAuthFlows: ['client_credentials'],
+    AllowedOAuthScopes: scopes,
+  }));
+  const clientId = created.UserPoolClient?.ClientId;
+  if (!clientId) throw new Error(`Cognito returned no client id for tenant ${raw.tenantId}`);
+  raw.cognitoClientId = clientId;
+  // Write it back next to tenantId, keeping the file's formatting.
+  const text = readFileSync(file, 'utf8');
+  const marker = `"tenantId": "${raw.tenantId}"`;
+  if (text.includes(marker) && !text.includes('"cognitoClientId"')) {
+    writeFileSync(file, text.replace(marker, `${marker},\n  "cognitoClientId": "${clientId}"`));
+  } else {
+    console.warn(`add "cognitoClientId": "${clientId}" to ${file} by hand`);
+  }
+  console.log(`minted Gateway identity for ${raw.tenantId}: ${clientId} (scopes: ${scopes.join(' ')})`);
+}
 
 const files = process.argv.slice(2);
 if (!files.length) {
@@ -21,6 +60,7 @@ for (const file of files) {
   const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
   const list = Array.isArray(parsed) ? parsed : [parsed];
   for (const raw of list) {
+    await ensureGatewayIdentity(raw as { tenantId?: string; cognitoClientId?: string }, file);
     const t = await store.putTenant(raw as Parameters<typeof store.putTenant>[0]);
     const people = await store.syncPeople(t);
     console.log(`seeded ${t.tenantId} (${t.phoneNumber}) from ${file}; people: ${people.map((p) => `${p.name}=${p.channelId}`).join(', ') || 'none'}`);

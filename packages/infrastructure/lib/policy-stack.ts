@@ -108,6 +108,46 @@ when {
   principal.getTag("client_id") == "${assistantClientId}"
 };`);
 
+    // ---- Scope-based permits: the identity says which TENANT (client_id, used
+    // by the interceptor) and which AGENT (scope, used here). No client ids, no
+    // tenant ids in policy — a new tenant never touches this stack. The
+    // client-id permits above remain until every caller acts as its tenant.
+    policy('voice_scope_tools', 'A client acting as the voice agent may record leads and notify the owner', `
+permit(
+  principal is AgentCore::OAuthUser,
+  action in [AgentCore::Action::"voice___record_lead", AgentCore::Action::"voice___notify_owner"],
+  resource == AgentCore::Gateway::"${gatewayArn}"
+)
+when {
+  principal.hasTag("scope") &&
+  principal.getTag("scope") like "*gateway/voice*"
+};`);
+    policy('email_scope_tools', 'A client acting as the email agent may read CRM context', `
+permit(
+  principal is AgentCore::OAuthUser,
+  action in [AgentCore::Action::"hubspot___searchContacts", AgentCore::Action::"hubspot___getContact"],
+  resource == AgentCore::Gateway::"${gatewayArn}"
+)
+when {
+  principal.hasTag("scope") &&
+  principal.getTag("scope") like "*gateway/email*"
+};`);
+    policy('assistant_scope_tools', 'A client acting as the assistant may search, read, create CRM contacts and notes', `
+permit(
+  principal is AgentCore::OAuthUser,
+  action in [
+    AgentCore::Action::"hubspot___searchContacts",
+    AgentCore::Action::"hubspot___getContact",
+    AgentCore::Action::"hubspot___createContact",
+    AgentCore::Action::"hubspot___createNote"
+  ],
+  resource == AgentCore::Gateway::"${gatewayArn}"
+)
+when {
+  principal.hasTag("scope") &&
+  principal.getTag("scope") like "*gateway/assistant*"
+};`);
+
     new cdk.CfnOutput(this, 'policyEngineArn', { value: this.engine.attrPolicyEngineArn });
   }
 }

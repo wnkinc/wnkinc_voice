@@ -13,8 +13,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export interface GatewayStackProps extends cdk.StackProps {
   readonly prefix: string;
   readonly userPool: cognito.IUserPool;
-  /** App clients whose JWTs the gateway accepts (machine, voice, email). */
-  readonly allowedClients: cognito.IUserPoolClient[];
+  /** Scopes a JWT must carry. Validation is by scope, not client id, so a new tenant's client needs no deploy. */
+  readonly allowedScopes: string[];
+  /** The voice stack's interceptor: tenant context from the caller's identity, before every dispatch. */
+  readonly interceptorFn: lambda.IFunction;
   readonly hubspotProvider: agentcore.IApiKeyCredentialProvider;
   /** The voice stack's tools Lambda (record_lead / notify_owner). */
   readonly voiceToolsFn: lambda.IFunction;
@@ -39,8 +41,13 @@ export class GatewayStack extends cdk.Stack {
       description: 'WNK agent platform tool catalog',
       authorizerConfiguration: agentcore.GatewayAuthorizer.usingCognito({
         userPool,
-        allowedClients: props.allowedClients,
+        allowedScopes: props.allowedScopes,
       }),
+      // Tenant context comes from WHO is calling, not from what the model
+      // sends: the interceptor maps the validated client_id to a tenant and
+      // writes tenant_id/tenant_phone into every tools/call. Headers are passed
+      // so it can read the token the Gateway already verified.
+      interceptorConfigurations: [agentcore.LambdaInterceptor.forRequest(props.interceptorFn, { passRequestHeaders: true })],
     });
 
     // Attach the Policy engine (no L2 support yet — escape hatch to the L1).

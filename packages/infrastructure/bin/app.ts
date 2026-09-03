@@ -25,6 +25,7 @@ const voice = new VoiceStack(app, 'wnk-voice-dev', {
   env,
   sesFromEmail: process.env.SES_FROM_EMAIL ?? '',
   alarmEmail: process.env.ALARM_EMAIL,
+  platformClientIds: [auth.machineClient, auth.voiceClient, auth.emailClient, auth.assistantClient].map((c) => c.userPoolClientId),
   gateway: gatewayUrl
     ? {
         gatewayUrl,
@@ -54,7 +55,8 @@ const gateway = new GatewayStack(app, 'wnk-gateway-dev', {
   prefix,
   env,
   userPool: auth.userPool,
-  allowedClients: [auth.machineClient, auth.voiceClient, auth.emailClient, auth.assistantClient],
+  allowedScopes: ['gateway/invoke', 'gateway/voice', 'gateway/email', 'gateway/assistant'],
+  interceptorFn: voice.gatewayInterceptorFn,
   hubspotProvider: identity.hubspotProvider,
   voiceToolsFn: voice.gatewayToolsFn,
   policyEngineArn: policy.engine.attrPolicyEngineArn,

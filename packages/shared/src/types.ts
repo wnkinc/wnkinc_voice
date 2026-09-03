@@ -42,6 +42,14 @@ export const TenantConfigSchema = z.object({
   tenantId: z.string().min(1),
   phoneNumber: E164,
   active: z.boolean().default(true),
+  /**
+   * The tenant's own Cognito app client (client-credentials). Every agent acting
+   * for this tenant calls the Gateway as THIS client; the Gateway's request
+   * interceptor maps the validated client_id back to the tenant and injects
+   * tenant context into every tool call. Created by the seed script when
+   * missing; the secret stays in Cognito (agents fetch it through IAM).
+   */
+  cognitoClientId: z.string().min(1).optional(),
 
   businessName: z.string().min(1),
   description: z.string().optional(),

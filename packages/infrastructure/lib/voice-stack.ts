@@ -39,6 +39,12 @@ export interface VoiceStackProps extends cdk.StackProps {
    * gateway stack consumes this stack's tools Lambda, so a CFN reference in the
    * other direction would be a cycle. Unset: tools run in-process (first deploy).
    */
+  /**
+   * Platform app clients the interceptor lets through WITHOUT tenant attribution
+   * during the cutover (they inject tenant context themselves). Empty once every
+   * caller acts as its tenant's own client.
+   */
+  readonly platformClientIds?: string[];
   readonly gateway?: {
     readonly gatewayUrl: string;
     readonly userPoolId: string;
@@ -67,6 +73,8 @@ export class VoiceStack extends cdk.Stack {
   readonly alarmTopic: sns.Topic;
   /** Gateway Lambda target: record_lead + notify_owner as platform tools. */
   readonly gatewayToolsFn: NodejsFunction;
+  /** Gateway REQUEST interceptor: tenant context from the caller's client identity. */
+  readonly gatewayInterceptorFn: NodejsFunction;
   /** Channel identity -> tenant + person: `telegram:<id>` (and `sms:<e164>` later). Seeded from each tenant's `people`. */
   readonly peopleTable: dynamodb.Table;
   /** The platform's HTTP API; other stacks add their own routes to it. */
@@ -112,6 +120,12 @@ export class VoiceStack extends cdk.Stack {
       partitionKey: { name: 'phoneNumber', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY, // learning stack; flip to RETAIN for real data
+    });
+
+    // The Gateway interceptor attributes a validated client_id to its tenant.
+    this.tenantsTable.addGlobalSecondaryIndex({
+      indexName: 'byClientId',
+      partitionKey: { name: 'cognitoClientId', type: dynamodb.AttributeType.STRING },
     });
 
     this.peopleTable = new dynamodb.Table(this, 'People', {
@@ -231,6 +245,7 @@ export class VoiceStack extends cdk.Stack {
             GATEWAY_URL: props.gateway.gatewayUrl,
             COGNITO_USER_POOL_ID: props.gateway.userPoolId,
             COGNITO_CLIENT_ID: props.gateway.clientId,
+            GATEWAY_SCOPE: 'gateway/voice',
             COGNITO_TOKEN_URL: props.gateway.tokenUrl,
           }
         : {},
@@ -304,6 +319,27 @@ export class VoiceStack extends cdk.Stack {
     this.leadsTable.grantWriteData(this.gatewayToolsFn);
     this.bus.grantPutEventsTo(this.gatewayToolsFn);
 
+    // Runs before every Gateway tool dispatch, after the Gateway has verified
+    // the caller's JWT. Reads client_id, looks the tenant up (byClientId GSI),
+    // writes tenant_id/tenant_phone into the arguments. Lives here because it
+    // is the one thing that reads the Tenants table on the tool path.
+    this.gatewayInterceptorFn = new NodejsFunction(this, 'gateway-interceptor', {
+      functionName: `${prefix}-gateway-interceptor`,
+      description: 'Gateway REQUEST interceptor: tenant context from the validated caller identity',
+      tracing: lambda.Tracing.ACTIVE,
+      entry: path.resolve(here, '../../lambda/src/interceptor.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      timeout: cdk.Duration.seconds(5),
+      environment: {
+        TENANTS_TABLE: this.tenantsTable.tableName,
+        PLATFORM_CLIENT_IDS: (props.platformClientIds ?? []).join(','),
+      },
+      bundling: { format: OutputFormat.ESM, target: 'node22', banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" },
+    });
+    this.tenantsTable.grantReadData(this.gatewayInterceptorFn);
+
     // ---- Event routing --------------------------------------------------------
 
     new events.Rule(this, 'NotifyRule', {
@@ -330,6 +366,7 @@ export class VoiceStack extends cdk.Stack {
     errorAlarm(this, 'NotifierErrors', notifierFn, this.alarmTopic, 'Notifier');
     errorAlarm(this, 'CrmSyncErrors', crmSyncFn, this.alarmTopic, 'CRM sync');
     errorAlarm(this, 'GatewayToolsErrors', this.gatewayToolsFn, this.alarmTopic, 'Gateway tools');
+    errorAlarm(this, 'GatewayInterceptorErrors', this.gatewayInterceptorFn, this.alarmTopic, 'Gateway interceptor');
 
     // ---- HTTP API -------------------------------------------------------------
 

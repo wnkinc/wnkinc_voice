@@ -18,6 +18,8 @@ export class CognitoStack extends cdk.Stack {
   readonly voiceClient: cognito.UserPoolClient;
   readonly emailClient: cognito.UserPoolClient;
   readonly assistantClient: cognito.UserPoolClient;
+  /** The `gateway` resource server id; the seed script reads its scopes to mint tenant clients. */
+  readonly resourceServerId: string;
   readonly tokenUrl: string;
   /** Hosted-UI base URL for OAuth flows. */
   readonly authBaseUrl: string;
@@ -45,32 +47,41 @@ export class CognitoStack extends cdk.Stack {
       cognitoDomain: { domainPrefix: `${prefix}-${this.account}` },
     });
 
-    const invokeScope = new cognito.ResourceServerScope({
-      scopeName: 'invoke',
-      scopeDescription: 'Call tools through the AgentCore Gateway',
-    });
+    // Scopes name the AGENT; the app client names the TENANT. A tenant's own
+    // client (created by the seed script, allowed every agent scope) requests
+    // the scope of whichever agent is acting, so a JWT says both "for wnk"
+    // (client_id, mapped by the Gateway interceptor) and "as the assistant"
+    // (scope, matched by Policy). Nothing tenant-specific lives here.
+    const mkScope = (name: string, description: string) => new cognito.ResourceServerScope({ scopeName: name, scopeDescription: description });
+    const invokeScope = mkScope('invoke', 'Call tools through the AgentCore Gateway (admin/test)');
+    const agentScopes = {
+      voice: mkScope('voice', 'Acting as the voice receptionist'),
+      email: mkScope('email', 'Acting as the email responder'),
+      assistant: mkScope('assistant', 'Acting as My Assistant'),
+    };
     const resourceServer = this.userPool.addResourceServer('Gateway', {
       identifier: 'gateway',
-      scopes: [invokeScope],
+      scopes: [invokeScope, ...Object.values(agentScopes)],
     });
 
-    // One app client per agent identity, so Policy can tell them apart by the
-    // JWT's client_id: machine is the all-tools admin/test identity; voice and
-    // email are least-privilege per-agent identities.
-    const m2mClient = (id: string, name: string) =>
+    // Platform clients: the admin/test identity, and the agents' own identities
+    // during the cutover to per-tenant clients (they still inject tenant context
+    // themselves; the interceptor lets them through by id).
+    const m2mClient = (id: string, name: string, scopes: cognito.ResourceServerScope[]) =>
       this.userPool.addClient(id, {
         userPoolClientName: `${prefix}-${name}`,
         generateSecret: true,
         authFlows: {},
         oAuth: {
           flows: { clientCredentials: true },
-          scopes: [cognito.OAuthScope.resourceServer(resourceServer, invokeScope)],
+          scopes: scopes.map((s) => cognito.OAuthScope.resourceServer(resourceServer, s)),
         },
       });
-    this.machineClient = m2mClient('Machine', 'machine');
-    this.voiceClient = m2mClient('VoiceAgent', 'voice-agent');
-    this.emailClient = m2mClient('EmailAgent', 'email-agent');
-    this.assistantClient = m2mClient('AssistantAgent', 'assistant-agent');
+    this.machineClient = m2mClient('Machine', 'machine', [invokeScope, ...Object.values(agentScopes)]);
+    this.voiceClient = m2mClient('VoiceAgent', 'voice-agent', [invokeScope, agentScopes.voice]);
+    this.emailClient = m2mClient('EmailAgent', 'email-agent', [invokeScope, agentScopes.email]);
+    this.assistantClient = m2mClient('AssistantAgent', 'assistant-agent', [invokeScope, agentScopes.assistant]);
+    this.resourceServerId = resourceServer.userPoolResourceServerId;
 
     this.authBaseUrl = domain.baseUrl();
     this.tokenUrl = `${this.authBaseUrl}/oauth2/token`;
@@ -78,6 +89,8 @@ export class CognitoStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'machineClientId', { value: this.machineClient.userPoolClientId });
     new cdk.CfnOutput(this, 'voiceClientId', { value: this.voiceClient.userPoolClientId });
     new cdk.CfnOutput(this, 'emailClientId', { value: this.emailClient.userPoolClientId });
+    new cdk.CfnOutput(this, 'assistantClientId', { value: this.assistantClient.userPoolClientId });
+    new cdk.CfnOutput(this, 'resourceServerId', { value: this.resourceServerId });
     new cdk.CfnOutput(this, 'tokenUrl', { value: this.tokenUrl });
   }
 }
