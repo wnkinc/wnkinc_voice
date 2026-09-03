@@ -18,7 +18,8 @@
     "products": {
       "emailResponder": { "enabled": true, "via": "composio" },
       "backOffice": { "enabled": false },
-      "assistant": { "enabled": false }
+      "assistant": { "enabled": false },
+      "linkedin": { "enabled": false }
     },
     "people": [
       { "name": "Owner Name", "role": "owner", "telegramId": 123456789 },

@@ -280,7 +280,7 @@ export class VoiceStack extends cdk.Stack {
 
     this.gatewayToolsFn = new NodejsFunction(this, 'gateway-tools', {
       functionName: `${prefix}-gateway-tools`,
-      description: 'Gateway Lambda target: voice tools (record_lead, notify_owner) and CRM tools via Composio',
+      description: 'Gateway Lambda target: voice tools (record_lead, notify_owner), CRM and LinkedIn tools via Composio',
       tracing: lambda.Tracing.ACTIVE,
       entry: path.resolve(here, '../../lambda/src/tools.ts'),
       handler: 'handler',

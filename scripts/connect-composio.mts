@@ -1,20 +1,21 @@
 /**
- * Composio consent flow: connect a tenant owner's Gmail or HubSpot to
- * Composio's token vault (their verified OAuth apps). The Composio-side
+ * Composio consent flow: connect a tenant owner's Gmail, HubSpot or LinkedIn
+ * to Composio's token vault (their verified OAuth apps). The Composio-side
  * userId IS our tenantId.
  *
- *   npx tsx scripts/connect-composio.mts [tenantId] [gmail|hubspot]
+ *   npx tsx scripts/connect-composio.mts [tenantId] [gmail|hubspot|linkedin]
  *
  * Reads the API key from the runtime stack's Composio secret (or
  * COMPOSIO_API_KEY env). Prints the connect link, waits for consent, then
- * proves it: Gmail profile, or a HubSpot owners lookup, through the adapter.
+ * proves it: Gmail profile, a HubSpot contact search, or the LinkedIn
+ * profile, through the adapter.
  */
 import { execFileSync } from 'node:child_process';
-import { composioConnect, composioCrm, composioGmail, type ComposioToolkit } from '@wnk/shared/composio';
+import { composioConnect, composioCrm, composioGmail, composioLinkedin, type ComposioToolkit } from '@wnk/shared/composio';
 
 const tenantId = process.argv[2] ?? 'wnk';
 const toolkit = (process.argv[3] ?? 'gmail') as ComposioToolkit;
-if (toolkit !== 'gmail' && toolkit !== 'hubspot') throw new Error(`unknown toolkit ${toolkit}`);
+if (toolkit !== 'gmail' && toolkit !== 'hubspot' && toolkit !== 'linkedin') throw new Error(`unknown toolkit ${toolkit}`);
 
 if (!process.env.COMPOSIO_API_KEY && !process.env.COMPOSIO_SECRET_ARN) {
   process.env.COMPOSIO_SECRET_ARN = execFileSync('aws', [
@@ -33,6 +34,9 @@ console.log(`connected: ${accountId}`);
 
 if (toolkit === 'gmail') {
   console.log(`proof — Gmail profile via adapter: ${await composioGmail.ownerEmail(tenantId)}`);
+} else if (toolkit === 'linkedin') {
+  const me = await composioLinkedin(tenantId).profile();
+  console.log(`proof — LinkedIn profile via adapter: ${me.name}${me.headline ? ` — ${me.headline}` : ''} (${me.email ?? 'no email scope'})`);
 } else {
   const hit = await composioCrm(tenantId).findContactByPhone(process.env.PROOF_PHONE ?? '+10000000000');
   console.log(`proof — HubSpot contact search via adapter: ${hit ? `${hit.firstName ?? ''} ${hit.lastName ?? ''} (${hit.id})` : 'no match (search ran)'}`);

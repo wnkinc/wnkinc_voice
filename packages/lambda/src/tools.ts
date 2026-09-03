@@ -1,6 +1,7 @@
 /**
  * Gateway Lambda target: the platform's tools — voice (record_lead,
- * notify_owner) and CRM (search/get/create contact, add note).
+ * notify_owner), CRM (search/get/create contact, add note) and LinkedIn
+ * (profile, create/get/delete post).
  *
  * The Gateway invokes this function with the tool's arguments as the event and
  * the tool name in the Lambda client context (bedrockAgentCoreToolName, as
@@ -9,13 +10,14 @@
  * identity; call context (call_id, caller_phone) by the voice agent. The model
  * never supplies any of it.
  *
- * CRM tools reach HubSpot through Composio with the tenant id as the only
- * credential our code names (composioCrm); a tenant whose row has no CRM
- * gets a refusal, not someone else's CRM.
+ * CRM and LinkedIn tools reach HubSpot / LinkedIn through Composio with the
+ * tenant id as the only credential our code names (composioCrm,
+ * composioLinkedin); a tenant whose row has not enabled the service gets a
+ * refusal, not someone else's account.
  */
 import type { Context } from 'aws-lambda';
 import { createLogger, dynamoStore, eventBridgePublisher, normalizePhone, type CrmAdapter, type CrmContact, type Store } from '@wnk/shared';
-import { composioCrm } from '@wnk/shared/composio';
+import { composioCrm, composioLinkedin, type LinkedInAdapter } from '@wnk/shared/composio';
 
 const log = createLogger({ fn: 'gateway-tools' });
 const store = dynamoStore();
@@ -29,6 +31,14 @@ export async function crmForTenantId(s: Store, tenantId: string): Promise<CrmAda
   if (tenant.crm?.type !== 'hubspot') throw new Error(`tenant "${tenantId}" has no CRM connected`);
   if (tenant.crm.via !== 'composio') throw new Error(`tenant "${tenantId}" CRM is not connected through Composio yet`);
   return composioCrm(tenantId);
+}
+
+/** The tenant owner's LinkedIn, only if the tenant turned it on — never a default. */
+export async function linkedinForTenantId(s: Store, tenantId: string): Promise<LinkedInAdapter> {
+  const tenant = await s.findTenantById(tenantId);
+  if (!tenant) throw new Error(`no tenant "${tenantId}"`);
+  if (!tenant.products.linkedin.enabled) throw new Error(`tenant "${tenantId}" has not enabled LinkedIn`);
+  return composioLinkedin(tenantId);
 }
 
 const publicContact = (c: CrmContact) => ({
@@ -111,6 +121,35 @@ export async function handler(event: Record<string, unknown>, context: Context):
       const body = String(event.body ?? '').trim();
       if (!contactId || !body) throw new Error('add_note needs contact_id and body');
       await crm.addNote(contactId, body);
+      return { ok: true };
+    }
+    case 'get_profile': {
+      const li = await linkedinForTenantId(store, ctx.tenant_id);
+      const { name, headline, email } = await li.profile();
+      return { profile: { name, headline: headline ?? null, email: email ?? null } };
+    }
+    case 'create_post': {
+      const li = await linkedinForTenantId(store, ctx.tenant_id);
+      const text = String(event.text ?? '').trim();
+      if (!text) throw new Error('create_post needs text');
+      const visibility = event.visibility === 'CONNECTIONS' ? 'CONNECTIONS' : 'PUBLIC';
+      const { urn, raw } = await li.createPost({ text, visibility });
+      // Published either way; a missing id must not read as a failure (a retry would post twice).
+      if (!urn) log.warn('linkedin post created without an id', { raw });
+      log.info('linkedin post created', { urn, visibility });
+      return { ok: true, post_urn: urn ?? null };
+    }
+    case 'get_post': {
+      const li = await linkedinForTenantId(store, ctx.tenant_id);
+      const post = await li.getPost(String(event.post_urn ?? ''));
+      return { post: post ?? null };
+    }
+    case 'delete_post': {
+      const li = await linkedinForTenantId(store, ctx.tenant_id);
+      const postUrn = String(event.post_urn ?? '').trim();
+      if (!postUrn) throw new Error('delete_post needs post_urn');
+      await li.deletePost(postUrn);
+      log.info('linkedin post deleted', { postUrn });
       return { ok: true };
     }
     default:

@@ -1,6 +1,6 @@
 import { memoryStore } from '@wnk/shared';
 import { describe, expect, it } from 'vitest';
-import { crmForTenantId } from '../src/tools.js';
+import { crmForTenantId, linkedinForTenantId } from '../src/tools.js';
 
 const base = { tenantId: 'acme', phoneNumber: '+15555550100', businessName: 'Acme' };
 
@@ -17,5 +17,18 @@ describe('crmForTenantId (fail closed)', () => {
   it('returns an adapter for a Composio-connected tenant', async () => {
     const crm = await crmForTenantId(memoryStore([{ ...base, crm: { type: 'hubspot', via: 'composio' } }]), 'acme');
     expect(typeof crm.searchContacts).toBe('function');
+  });
+});
+
+describe('linkedinForTenantId (fail closed)', () => {
+  it('refuses an unknown tenant', async () => {
+    await expect(linkedinForTenantId(memoryStore([]), 'ghost')).rejects.toThrow(/no tenant/);
+  });
+  it('refuses a tenant that has not enabled LinkedIn (the default)', async () => {
+    await expect(linkedinForTenantId(memoryStore([base]), 'acme')).rejects.toThrow(/not enabled LinkedIn/);
+  });
+  it('returns an adapter for a tenant with LinkedIn on', async () => {
+    const li = await linkedinForTenantId(memoryStore([{ ...base, products: { linkedin: { enabled: true } } }]), 'acme');
+    expect(typeof li.createPost).toBe('function');
   });
 });

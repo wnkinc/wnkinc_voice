@@ -59,6 +59,7 @@ else ok('Gateway identity', cfg.cognitoClientId);
 if (cfg) {
   const on = Object.entries(cfg.products).filter(([, v]) => v.enabled).map(([k, v]) => `${k}${'via' in v ? ` via ${v.via}` : ''}`);
   ok('services', on.length ? on.join(', ') : 'none enabled — voice receptionist only');
+  if (cfg.products.linkedin.enabled) console.log(`  ○ Composio: LinkedIn connected account for user "${tenantId}" (if missing: npx tsx scripts/connect-composio.mts ${tenantId} linkedin)`);
 }
 
 // 5. Notifications

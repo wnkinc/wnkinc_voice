@@ -41,7 +41,7 @@ call). One deployment serves many businesses.
 | `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
 | `packages/voice-session/src/notifier.ts` | Lambda: EventBridge → SES email / SNS SMS |
 | `packages/voice-session/src/crm-sync.ts` | Lambda: EventBridge → CRM (lead → contact + note + task; call → transcript note) |
-| `packages/shared/src/composio.ts` | Composio adapter: Gmail and HubSpot with the tenant id as the only credential our code names (`CrmAdapter` lives in `shared/src/crm.ts`) |
+| `packages/shared/src/composio.ts` | Composio adapter: Gmail, HubSpot and LinkedIn with the tenant id as the only credential our code names (`CrmAdapter` lives in `shared/src/crm.ts`) |
 | `packages/lambda/src/interceptor.ts` | Gateway request interceptor: tenant context from the caller's client identity |
 | `packages/shared/src/store.ts` | DynamoDB (tenants, calls, leads) behind one `Store` interface, plus an in-memory version for tests |
 | `packages/shared/src/events.ts` | EventBridge publisher |
@@ -134,7 +134,7 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `active` | `false` → calls rejected with SIP 603 |
 | `crm` | `{ "type": "hubspot", "via": "composio" }` enables CRM sync, caller recognition, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
 | `cognitoClientId` | The tenant's Gateway identity, minted by the seed; every agent calls the Gateway as this client |
-| `products` | Which platform services are on for this tenant: `emailResponder: { enabled, via: "vault" \| "composio" }`, `backOffice: { enabled }`. Default all off; agents refuse to act for a tenant whose flag is off. |
+| `products` | Which platform services are on for this tenant: `emailResponder: { enabled, via: "vault" \| "composio" }`, `backOffice: { enabled }`, `assistant: { enabled }`, `linkedin: { enabled }`. Default all off; agents refuse to act for a tenant whose flag is off. |
 
 Unknown numbers are rejected with SIP 404.
 
@@ -220,6 +220,18 @@ HubSpot app once; no HubSpot token exists anywhere in the platform. Every CRM ca
 A second CRM is another implementation of `CrmAdapter` in `composio.ts` (or a new adapter file)
 plus a `type` value. Prove a tenant's connection with `npx tsx scripts/test-crm.mts <id> <phone>`.
 
+## LinkedIn (through Composio)
+
+Per tenant, opt-in via `products.linkedin.enabled`. The owner approves Composio's LinkedIn app once
+(`npx tsx scripts/connect-composio.mts <id> linkedin`); the token lives in Composio's vault under the
+tenant id, and every call names the tenant. LinkedIn's member API is publish-only (no feed, inbox, or
+connections), so the whole surface is four Gateway tools on the platform tools Lambda, permitted to
+the assistant scope: `linkedin___get_profile`, `create_post` (published immediately; the tool
+description tells the model to get the exact text approved first), `get_post` (text + reaction
+count), `delete_post`. The author URN comes from the connected account, never from the model.
+Everyone with assistant access posts AS the owner; per-person rules are deferred until a tenant
+needs them.
+
 ## Adding a tool
 
 In `packages/voice-session/src/agent.ts`: add a zod args schema, a handler in `handlers`, and a `tool({...})` entry in
@@ -268,7 +280,7 @@ talking decides the tenant, not which bot.
 configuration in the runtime stack. Per invocation the workflow passes the message, a system prompt
 built from the tenant row, and the tenant's Gateway OAuth provider (`gatewayOauthProviderArn`,
 minted by the seed), so the harness calls tools as the tenant's own client and the Gateway
-interceptor attributes every call. Cedar scopes the assistant identity to the CRM tools. The harness
+interceptor attributes every call. Cedar scopes the assistant identity to the CRM and LinkedIn tools. The harness
 threads the conversation and extracts facts through the platform Memory instance (actor = tenant +
 person), surviving microVM expiry. Each person gets a fresh session per day, rolling at 3 AM in the
 tenant's timezone (`sessionDayOffsetMinutes`, computed by the seed; drifts an hour across DST until

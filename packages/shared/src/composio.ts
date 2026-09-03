@@ -1,7 +1,7 @@
 /**
  * Composio adapter — the ONE file that may import @composio/core or name a
  * Composio tool slug. Composio is our SaaS credential broker (their verified
- * OAuth apps; tokens live in their vault, keyed by our tenantId): code calls
+ * OAuth apps for Gmail, HubSpot, LinkedIn; tokens live in their vault, keyed by our tenantId): code calls
  * these functions, nothing else in the platform knows Composio exists.
  * LLM-facing surfaces get task-shaped Gateway tools that call THIS underneath —
  * never Composio's generic tools directly.
@@ -13,15 +13,22 @@
  * '@wnk/shared/composio' so only bundles that reach SaaS carry the SDK.
  *
  * Config: COMPOSIO_SECRET_ARN (Secrets Manager JSON {"COMPOSIO_API_KEY":...})
- * or COMPOSIO_API_KEY directly (scripts). Optional COMPOSIO_GMAIL_VERSION /
- * COMPOSIO_HUBSPOT_VERSION pin toolkit versions — set in prod; unset skips
- * the pin (dev).
+ * or COMPOSIO_API_KEY directly (scripts). Optional COMPOSIO_<TOOLKIT>_VERSION
+ * (GMAIL, HUBSPOT, LINKEDIN) pins that toolkit's version — set in prod; unset
+ * skips the pin (dev).
  */
 import { Composio } from '@composio/core';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { HUBSPOT_NOTE_TO_CONTACT, HUBSPOT_TASK_TO_CONTACT, htmlToText, textToHtml, type CrmAdapter, type CrmContact } from './crm.js';
 
 const REGION = process.env.AWS_REGION ?? 'us-west-2';
+
+const TOOLKITS = ['gmail', 'hubspot', 'linkedin'] as const;
+export type ComposioToolkit = (typeof TOOLKITS)[number];
+/** The pinned version for a toolkit (COMPOSIO_<TOOLKIT>_VERSION), if any. */
+const pinned = (toolkit: string) => process.env[`COMPOSIO_${toolkit.toUpperCase()}_VERSION`];
+/** Tool slugs are `<TOOLKIT>_<ACTION>`. */
+const toolkitOf = (slug: string) => slug.split('_')[0]!.toLowerCase();
 
 let clientPromise: Promise<Composio> | undefined;
 function client(): Promise<Composio> {
@@ -35,22 +42,18 @@ function client(): Promise<Composio> {
       apiKey = (JSON.parse(secret.SecretString ?? '{}') as { COMPOSIO_API_KEY?: string }).COMPOSIO_API_KEY;
       if (!apiKey) throw new Error('COMPOSIO_API_KEY missing from secret');
     }
-    const versions: Record<string, string> = {};
-    if (process.env.COMPOSIO_GMAIL_VERSION) versions.gmail = process.env.COMPOSIO_GMAIL_VERSION;
-    if (process.env.COMPOSIO_HUBSPOT_VERSION) versions.hubspot = process.env.COMPOSIO_HUBSPOT_VERSION;
+    const versions = Object.fromEntries(TOOLKITS.flatMap((t) => (pinned(t) ? [[t, pinned(t)!]] : [])));
     return new Composio({ apiKey, ...(Object.keys(versions).length ? { toolkitVersions: versions } : {}) });
   })();
   return clientPromise;
 }
-
-const pinned = (slug: string) => (slug.startsWith('GMAIL_') ? process.env.COMPOSIO_GMAIL_VERSION : process.env.COMPOSIO_HUBSPOT_VERSION);
 
 async function execute(slug: string, tenantId: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
   const c = await client();
   const attempt = () => c.tools.execute(slug, {
     userId: tenantId,
     arguments: args,
-    ...(pinned(slug) ? {} : { dangerouslySkipVersionCheck: true }),
+    ...(pinned(toolkitOf(slug)) ? {} : { dangerouslySkipVersionCheck: true }),
   });
   let res = await attempt().catch(async (err: unknown) => {
     // One retry with a short pause: Composio is a hard dependency on the send
@@ -83,8 +86,6 @@ async function sendAsOwner(tenantId: string, subject: string, body: string): Pro
   await execute('GMAIL_SEND_EMAIL', tenantId, { recipient_email: email, subject, body });
   return email;
 }
-
-export type ComposioToolkit = 'gmail' | 'hubspot';
 
 /** Mint the OAuth connect link a tenant owner clicks once at onboarding, per toolkit. */
 async function connectLink(tenantId: string, toolkit: ComposioToolkit = 'gmail'): Promise<{ redirectUrl: string; waitForActive: (timeoutMs?: number) => Promise<string> }> {
@@ -250,4 +251,78 @@ export function composioCrm(tenantId: string): CrmAdapter {
     execute: (slug, args) => execute(slug, tenantId, args),
     proxy: (method, endpoint, body) => proxy(tenantId, method, endpoint, body),
   });
+}
+
+// ---- LinkedIn -----------------------------------------------------------------
+//
+// The owner's personal LinkedIn through Composio's managed OAuth app. LinkedIn's
+// member API is publish-only (no feed, inbox, or connections), so the surface
+// is: who am I, publish a post, read a post back, delete a post. The author
+// URN is resolved from the connected account, never supplied by the model.
+
+export interface LinkedInProfile { id: string; name: string; headline?: string; email?: string }
+export interface LinkedInPost { urn: string; text?: string; visibility?: string; createdAt?: string; reactions?: number }
+export interface LinkedInAdapter {
+  profile(): Promise<LinkedInProfile>;
+  /** Publishes immediately. Returns the post URN (undefined if LinkedIn accepted the post but returned no id). */
+  createPost(input: { text: string; visibility?: 'PUBLIC' | 'CONNECTIONS' }): Promise<{ urn?: string; raw?: unknown }>;
+  getPost(urn: string): Promise<LinkedInPost | undefined>;
+  deletePost(urn: string): Promise<void>;
+}
+export type ComposioExecute = (slug: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+
+/** `urn:li:share:…` / `urn:li:ugcPost:…` as given; a bare id is a share. */
+const asPostUrn = (s: string) => (s.startsWith('urn:li:') ? s : `urn:li:share:${s}`);
+
+export function linkedinAdapterOn(execute: ComposioExecute): LinkedInAdapter {
+  let me: Promise<LinkedInProfile> | undefined;
+  const profile = () => {
+    me ??= execute('LINKEDIN_GET_MY_INFO', {}).then((d) => {
+      const r = unwrap<{ sub?: string; id?: string; name?: string; given_name?: string; family_name?: string; localizedHeadline?: string; headline?: string; email?: string }>(d);
+      const id = r.sub ?? r.id;
+      if (!id) throw new Error('LinkedIn profile returned no member id');
+      return { id, name: r.name ?? [r.given_name, r.family_name].filter(Boolean).join(' '), headline: r.localizedHeadline ?? r.headline, email: r.email };
+    });
+    me.catch(() => { me = undefined; });
+    return me;
+  };
+
+  return {
+    profile,
+
+    async createPost({ text, visibility = 'PUBLIC' }) {
+      const { id } = await profile();
+      const d = await execute('LINKEDIN_CREATE_LINKED_IN_POST', { author: `urn:li:person:${id}`, commentary: text, visibility, lifecycleState: 'PUBLISHED' });
+      const r = unwrap<{ urn?: string; id?: string; post_id?: string; post_urn?: string; share_id?: string }>(d);
+      const urn = r.urn ?? r.post_urn ?? r.id ?? r.post_id ?? r.share_id;
+      return urn ? { urn: asPostUrn(String(urn)) } : { raw: d };
+    },
+
+    async getPost(urn) {
+      const postUrn = asPostUrn(urn);
+      const d = await execute('LINKEDIN_GET_POST_CONTENT', { post_id: postUrn }).catch(() => undefined);
+      if (!d) return undefined;
+      const r = unwrap<{ id?: string; commentary?: string; text?: string; visibility?: string; createdAt?: number | string }>(d);
+      const reactions = await execute('LINKEDIN_LIST_REACTIONS', { entity: postUrn, count: 1 })
+        .then((x) => unwrap<{ paging?: { total?: number }; elements?: unknown[] }>(x))
+        .then((x) => x.paging?.total ?? x.elements?.length)
+        .catch(() => undefined);
+      return {
+        urn: postUrn,
+        text: r.commentary ?? r.text,
+        visibility: r.visibility,
+        createdAt: typeof r.createdAt === 'number' ? new Date(r.createdAt).toISOString() : r.createdAt,
+        reactions,
+      };
+    },
+
+    async deletePost(urn) {
+      await execute('LINKEDIN_DELETE_POST', { post_urn: asPostUrn(urn) });
+    },
+  };
+}
+
+/** The tenant owner's LinkedIn, through Composio's vault, keyed by tenant id. */
+export function composioLinkedin(tenantId: string): LinkedInAdapter {
+  return linkedinAdapterOn((slug, args) => execute(slug, tenantId, args));
 }

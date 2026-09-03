@@ -121,6 +121,12 @@ export const TenantConfigSchema = z.object({
     backOffice: z.object({ enabled: z.boolean().default(false) }).prefault({}),
     /** Chat assistant for the tenant's own people (Telegram now, SMS later). */
     assistant: z.object({ enabled: z.boolean().default(false) }).prefault({}),
+    /**
+     * The owner's LinkedIn (Composio's managed OAuth app; token in Composio's
+     * vault under this tenant id): the assistant's `linkedin___*` tools. Note
+     * every person with assistant access posts AS the owner.
+     */
+    linkedin: z.object({ enabled: z.boolean().default(false) }).prefault({}),
   }).prefault({}),
 });
 export type TenantConfig = z.infer<typeof TenantConfigSchema>;

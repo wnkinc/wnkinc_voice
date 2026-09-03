@@ -158,6 +158,40 @@ export class GatewayStack extends cdk.Stack {
         },
       ]),
     });
+    // LinkedIn tools on the same Lambda: the owner's personal account through
+    // Composio, the tenant id (from the interceptor) selecting the credential.
+    // LinkedIn's member API is publish-only, so this is the whole surface.
+    this.gateway.addLambdaTarget('LinkedInTools', {
+      gatewayTargetName: 'linkedin',
+      description: "The business owner's LinkedIn: profile and posts",
+      lambdaFunction: props.voiceToolsFn,
+      toolSchema: agentcore.ToolSchema.fromInline([
+        {
+          name: 'get_profile',
+          description: "The connected LinkedIn account's name, headline and email — say who the posts will be published as.",
+          inputSchema: { type: agentcore.SchemaDefinitionType.OBJECT, properties: { ...tenantProps } },
+        },
+        {
+          name: 'create_post',
+          description: "Publish a text post on the owner's LinkedIn. It goes live immediately, so only call this after the person has approved the exact text. Returns the post_urn.",
+          inputSchema: {
+            type: agentcore.SchemaDefinitionType.OBJECT,
+            properties: { text: str('The full post text, as approved'), visibility: str("'PUBLIC' (default) or 'CONNECTIONS'"), ...tenantProps },
+            required: ['text'],
+          },
+        },
+        {
+          name: 'get_post',
+          description: 'Read back a LinkedIn post by its post_urn: text, visibility, when it was created, and the reaction count.',
+          inputSchema: { type: agentcore.SchemaDefinitionType.OBJECT, properties: { post_urn: str('The post_urn returned by create_post'), ...tenantProps }, required: ['post_urn'] },
+        },
+        {
+          name: 'delete_post',
+          description: 'Delete a LinkedIn post by its post_urn. Only after the person confirmed.',
+          inputSchema: { type: agentcore.SchemaDefinitionType.OBJECT, properties: { post_urn: str('The post_urn to delete'), ...tenantProps }, required: ['post_urn'] },
+        },
+      ]),
+    });
     props.voiceToolsFn.grantInvoke(this.gateway.role);
 
     // Vended application logs -> CloudWatch, so tool-call failures are debuggable.

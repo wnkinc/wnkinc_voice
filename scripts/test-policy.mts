@@ -45,6 +45,9 @@ const cases: Array<[string, string, unknown, string]> = [
   ['email', 'voice___record_lead', leadArgs, 'expect DENY (not its scope)'],
   ['assistant', 'crm___search_contacts', { query: 'Composio', limit: 1 }, 'expect ALLOW'],
   ['assistant', 'voice___record_lead', leadArgs, 'expect DENY (not its scope)'],
+  ['assistant', 'linkedin___get_profile', {}, 'expect ALLOW (tool errors until the tenant consents)'],
+  ['email', 'linkedin___get_profile', {}, 'expect DENY (not its scope)'],
+  ['voice', 'linkedin___create_post', { text: 'nope' }, 'expect DENY (not its scope)'],
 ];
 for (const [who, tool, args, expect] of cases) {
   console.log(`${who.padEnd(6)} ${tool.padEnd(28)} [${expect}] ->`, await call(tokens[who]!, tool, args));

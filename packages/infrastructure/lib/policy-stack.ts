@@ -84,14 +84,18 @@ when {
   principal.getTag("scope") like "*gateway/email*" &&
   ${tenantGuard}
 };`);
-    policy('assistant_scope_tools', 'A client acting as the assistant may search, read, create CRM contacts and notes', `
+    policy('assistant_scope_tools', "A client acting as the assistant may search, read, create CRM contacts and notes, and manage the owner's LinkedIn posts", `
 permit(
   principal is AgentCore::OAuthUser,
   action in [
     AgentCore::Action::"crm___search_contacts",
     AgentCore::Action::"crm___get_contact",
     AgentCore::Action::"crm___create_contact",
-    AgentCore::Action::"crm___add_note"
+    AgentCore::Action::"crm___add_note",
+    AgentCore::Action::"linkedin___get_profile",
+    AgentCore::Action::"linkedin___create_post",
+    AgentCore::Action::"linkedin___get_post",
+    AgentCore::Action::"linkedin___delete_post"
   ],
   resource == AgentCore::Gateway::"${gatewayArn}"
 )
