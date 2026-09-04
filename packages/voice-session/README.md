@@ -15,7 +15,7 @@ fails closed.
 | API Gateway HTTP + Lambda | Receives the webhook. | `infrastructure/lib/voice-stack.ts` |
 | SQS (batch size 1, partial batch failure) | Hands one call to one session invocation; a failed attach is retried, three failures dead-letter. | https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html |
 | DynamoDB Tenants / Calls | Tenant row keyed by called number; call row is the audit (transcript, tool calls, once-markers). | |
-| EventBridge bus `wnkinc.voice` | `lead.recorded`, `owner.notify`, `call.ended` fan out to consumers with retries and a DLQ. | https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-dlq.html |
+| EventBridge bus `wnkinc.voice` | `lead.recorded`, `owner.notify`, `call.ended` fan out to the CRM sync here and the runtime stack's workflows, each with retries and a DLQ. | https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-dlq.html |
 | Composio (HubSpot) | Caller recognition and CRM sync under the tenant id. See `shared/README.md`. | |
 | AgentCore Memory | Caller facts recalled at accept, transcript written at hangup. | |
 
@@ -25,14 +25,14 @@ fails closed.
 - `sip.ts` — pull E.164 numbers from SIP headers. On Twilio the dialed number is in `Diversion`, not `To`.
 - `session.ts` / `call.ts` — hold the WebSocket for one call, log transcripts to the call row, enforce the time limit, hang up cleanly. A Lambda holds it because nothing managed holds a WebSocket for fifteen minutes and runs tools.
 - `agent.ts` — tenant row → accept payload (prompt, voice, model, tools) and the three tools. Each tool is one publish. The tenant comes from the call context; the model never names it.
-- `notifier.ts`, `crm-sync.ts` — event consumers. Pure glue: read the event, check the once-marker, call SES/SNS or HubSpot-via-Composio, mark done. Nothing here needs code; these are the first candidates to replace with managed targets (EventBridge → SNS topic per tenant; Step Functions HTTP task → Composio).
+- `crm-sync.ts` — the one remaining event consumer in code: read the event, check the once-marker, upsert the contact, add the note and the task through HubSpot-via-Composio, mark done. It stays code because the writes are deterministic with fixed fields and a business-day due date; a state machine with four Composio HTTP tasks would be longer and less readable. The other consumers (lead email, owner alert) are Step Functions workflows in the runtime stack.
 
 Tenant id enters exactly once, from the signed webhook's called number, and is carried on every record and event from there.
 
 ## How to verify
 
 ```bash
-npm test            # agent, crm-sync, notifier, session, sip, webhook suites
+npm test            # agent, crm-sync, session, sip, webhook suites
 ```
 
 Live, after a deploy: call the tenant's number and follow the session log.

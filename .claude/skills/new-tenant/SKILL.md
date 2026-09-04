@@ -23,7 +23,7 @@ A tenant is data: a config row keyed by their phone number and their credentials
 ## Pre-flight
 
 `npx tsx scripts/check-tenant.ts <id>` prints the provisioning checklist
-(config drift, secrets, Cedar scope, notifications, Google connection) —
+(config drift, secrets, services, owner alert channel, Gmail connection) —
 run it after onboarding and any time a tenant misbehaves.
 
 ## Deliberately deferred (build when the trigger fires, not before)

@@ -13,7 +13,6 @@ export const env = {
   get eventSource() { return process.env.EVENT_SOURCE ?? 'wnkinc.voice'; },
   get sessionQueueUrl() { return process.env.SESSION_QUEUE_URL ?? ''; },
   get openaiSecretArn() { return process.env.OPENAI_SECRET_ARN ?? ''; },
-  get sesFromEmail() { return process.env.SES_FROM_EMAIL ?? ''; },
   get defaultTenantPhone() { return process.env.DEFAULT_TENANT_PHONE ?? ''; },
 };
 

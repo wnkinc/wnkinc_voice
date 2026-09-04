@@ -27,8 +27,9 @@ call). One deployment serves many businesses.
                                        EventBridge bus (wnkinc.voice)
                               lead.recorded · owner.notify · call.ended
                                                     │
-                            Notifier Lambda → SES/SNS   CRM-sync Lambda → HubSpot (via Composio)
-                                       (later: rule → Temporal workflow starter)
+              CRM-sync Lambda → HubSpot (via Composio)   Step Functions workflows (runtime stack):
+                                                          lead.recorded → harness → owner's Gmail
+                                                          owner.notify → owner on Telegram
 ```
 
 ## Layout
@@ -42,7 +43,6 @@ do, and how to verify it. Start there when changing one.
 | `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration |
 | `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
-| `packages/voice-session/src/notifier.ts` | Lambda: EventBridge → SES email / SNS SMS |
 | `packages/voice-session/src/crm-sync.ts` | Lambda: EventBridge → CRM (lead → contact + note + task; call → transcript note) |
 | `packages/shared/src/composio.ts` | Composio adapter: Gmail and HubSpot with the tenant id as the only credential our code names (`CrmAdapter` lives in `shared/src/crm.ts`) |
 | `packages/shared/src/store.ts` | DynamoDB (tenants, calls, people) behind one `Store` interface, plus an in-memory version for tests. No leads table: the tenant's CRM holds the lead; the call row (tool calls + once-markers) is the audit |
@@ -61,7 +61,6 @@ do, and how to verify it. Start there when changing one.
 - Node 22+, AWS CLI configured (CDK bootstrap runs once per account/region: `npx cdk bootstrap`)
 - An OpenAI project with Realtime access (note the `proj_…` id under *Settings → Project → General*)
 - A Twilio account with a phone number
-- (Notifications) an SES-verified sender address; for SMS, an SNS account out of the sandbox
 
 ## Deploy
 
@@ -69,7 +68,7 @@ do, and how to verify it. Start there when changing one.
 npm install
 npm test
 npx cdk bootstrap                           # once per account/region
-SES_FROM_EMAIL=alerts@yourdomain.com ALARM_EMAIL=you@yourdomain.com npm run deploy
+ALARM_EMAIL=you@yourdomain.com npm run deploy
 ```
 
 `ALARM_EMAIL` subscribes an address to the alarm topic (confirm the SNS email once). Every
@@ -131,7 +130,7 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `agentName`, `greeting`, `extraInstructions` | Persona and tenant-specific rules |
 | `model` (default `gpt-realtime-2.1`), `voice` (default `marin`) | Passed to `accept` |
 | `tools` | Subset of `record_lead`, `notify_owner`, `end_call` |
-| `notifications.email` / `.sms` | Where the notifier delivers |
+| `people` | The tenant's own people with their channel ids. `notify_owner` alerts go to the person with role `owner` and a `telegramId`; the assistant answers anyone listed. |
 | `maxCallSeconds` (default 600, max 840) | Agent is asked to wrap up, then the call is hung up |
 | `active` | `false` → calls rejected with SIP 603 |
 | `crm` | `{ "type": "hubspot", "via": "composio" }` enables CRM sync, caller recognition, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
@@ -229,9 +228,9 @@ In `packages/voice-session/src/agent.ts`: add a zod args schema, a handler in `h
 schema; `CallContext` gives the handler the tenant, call id, caller number, store, event
 publisher and `requestHangup()`.
 
-Tools that need durability (scheduling, follow-ups, approvals) should publish an event
-and return immediately; the worker that consumes the event is where a Temporal workflow
-starts. The `notifier` Lambda is the v1 stand-in for that worker.
+Tools that need durability (scheduling, follow-ups, approvals) publish an event and return
+immediately; a Step Functions workflow on a rule consumes it (lead email, owner alert in the
+runtime stack), or a Lambda when a step needs code (CRM sync).
 
 ## Tenancy on the tool path
 
@@ -241,10 +240,11 @@ input, and that selection picks the credential:
 - **Voice receptionist**: the webhook resolves the tenant from the signed called number; the two
   tools (`record_lead`, `notify_owner`) run in-process with that call context and are one write or
   one publish each. Everything multi-step is a consumer of the events they publish.
-- **Automations** (notifier, CRM sync): the tenant id rides in the bus event; the code calls the
-  Composio adapter, which names the tenant on every call, or refuses when the row has no such
-  service. The lead email is a workflow, not code: it reads the tenant row by the event's phone
-  number and hands the harness that tenant's Composio session.
+- **CRM sync**: the tenant id rides in the bus event; the code calls the Composio adapter, which
+  names the tenant on every call, or refuses when the row has no such service.
+- **Workflows** (lead email, owner alert): no code. Each reads the tenant row by the event's
+  phone number; the lead email hands the harness that tenant's Composio session, the owner alert
+  delivers to the owner listed on the row.
 - **My Assistant**: the People table maps the Telegram sender to a tenant; the workflow hands the
   harness that tenant's Composio session URL from the row. The session is bound to the owner's
   connected accounts, so the model's tools cannot reach another tenant's SaaS.

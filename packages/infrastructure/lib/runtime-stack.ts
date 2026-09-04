@@ -379,20 +379,73 @@ export class RuntimeStack extends cdk.Stack {
       actions: ['bedrock-agentcore:InvokeHarness', 'bedrock-agentcore:InvokeAgentRuntime'],
       resources: [harness.attrArn, `${harness.attrArn}/*`],
     }));
-    // A start the rule could not deliver (after retries) parks here and alarms;
+    // A start a rule could not deliver (after retries) parks here and alarms;
     // an execution that started and failed alarms through the workflow metric.
-    const leadDlq = new sqs.Queue(this, 'LeadEmailDlq', { retentionPeriod: cdk.Duration.days(14) });
+    const startDlq = new sqs.Queue(this, 'LeadEmailDlq', { retentionPeriod: cdk.Duration.days(14) });
     new events.Rule(this, 'LeadRule', {
       eventBus: props.bus,
       description: 'Route lead.recorded to the lead email workflow',
       eventPattern: { source: ['wnkinc.voice'], detailType: ['lead.recorded'] },
-      targets: [new targets.SfnStateMachine(leadWorkflow, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: leadDlq })],
+      targets: [new targets.SfnStateMachine(leadWorkflow, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: startDlq })],
     });
-    dlqAlarm(this, 'LeadEmailDlqAlarm', leadDlq, props.alarmTopic, 'Lead email: a lead.recorded event could not start the workflow');
     failedExecutionsAlarm(this, 'LeadEmailWorkflowFailed', leadWorkflow, props.alarmTopic, 'Lead email');
+
+    // ---- Owner alert: owner.notify -> Step Functions -> Telegram reply path ----
+    //
+    // The receptionist's notify_owner tool publishes owner.notify. This
+    // workflow reads the tenant row, picks the owner with a Telegram id, and
+    // publishes the same telegram.reply event the assistant uses; the reply rule
+    // above delivers it. No once-marker: an alert delivered twice on a rare
+    // redelivery is harmless, and it is neither money nor customer-facing. A
+    // tenant with the tool on but no owner channel fails loudly (alarm).
+    const alertDefinition = {
+      QueryLanguage: 'JSONata',
+      StartAt: 'LookupTenant',
+      States: {
+        LookupTenant: {
+          Type: 'Task', Resource: 'arn:aws:states:::dynamodb:getItem',
+          Arguments: { TableName: props.tenantsTable.tableName, Key: { phoneNumber: { S: q('$states.input.detail.tenantPhoneNumber') } } },
+          Assign: {
+            tenant: q('$states.result.Item'),
+            chatId: q("$states.result.Item.people.L[M.role.S = 'owner' and $exists(M.telegramId.N)][0].M.telegramId.N"),
+          },
+          Output: q('$states.input'), Next: 'OwnerChannel',
+        },
+        OwnerChannel: { Type: 'Choice', Choices: [{ Condition: q('$exists($chatId)'), Next: 'Deliver' }], Default: 'NoOwnerChannel' },
+        NoOwnerChannel: { Type: 'Fail', Error: 'NoOwnerChannel', Cause: 'The tenant has no owner with a Telegram id; add one under people and re-seed' },
+        Deliver: {
+          Type: 'Task', Resource: 'arn:aws:states:::events:putEvents',
+          Arguments: { Entries: [{
+            EventBusName: props.bus.eventBusName, Source: 'wnkinc.assistant', DetailType: 'telegram.reply',
+            Detail: q([
+              "$string({'tenantId': $tenant.tenantId.S, 'chatId': $number($chatId), 'text': ",
+              "($states.input.detail.urgency = 'urgent' ? 'URGENT' : 'Heads up') & ' (' & $tenant.businessName.S & '): ' & $states.input.detail.summary",
+              " & ($exists($states.input.detail.callerPhone) ? ' Caller: ' & $states.input.detail.callerPhone : '')})",
+            ].join('')),
+          }] },
+          End: true,
+        },
+      },
+    };
+    const alertWorkflow = new sfn.StateMachine(this, 'OwnerAlertWorkflow', {
+      stateMachineName: `${prefix}-owner-alert`,
+      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(alertDefinition)),
+      timeout: cdk.Duration.minutes(2),
+    });
+    props.tenantsTable.grantReadData(alertWorkflow);
+    props.bus.grantPutEventsTo(alertWorkflow);
+    new events.Rule(this, 'OwnerAlertRule', {
+      eventBus: props.bus,
+      description: 'Route owner.notify to the owner alert workflow',
+      eventPattern: { source: ['wnkinc.voice'], detailType: ['owner.notify'] },
+      targets: [new targets.SfnStateMachine(alertWorkflow, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: startDlq })],
+    });
+    failedExecutionsAlarm(this, 'OwnerAlertWorkflowFailed', alertWorkflow, props.alarmTopic, 'Owner alert');
+    dlqAlarm(this, 'LeadEmailDlqAlarm', startDlq, props.alarmTopic, 'Workflows: a lead.recorded or owner.notify event could not start its workflow');
 
     new cdk.CfnOutput(this, 'assistantHarnessArn', { value: harness.attrArn });
     new cdk.CfnOutput(this, 'leadEmailWorkflowArn', { value: leadWorkflow.stateMachineArn });
+    new cdk.CfnOutput(this, 'ownerAlertWorkflowArn', { value: alertWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'telegramWorkflowArn', { value: workflow.stateMachineArn });
   }

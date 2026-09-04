@@ -13,7 +13,6 @@
     "model": "gpt-realtime-2.1",
     "voice": "marin",
     "tools": ["record_lead", "notify_owner", "end_call"],
-    "notifications": { "email": "owner@example.com" },
     "maxCallSeconds": 600,
     "products": {
       "emailResponder": { "enabled": true },

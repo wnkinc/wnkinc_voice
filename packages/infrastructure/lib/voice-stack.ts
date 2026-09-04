@@ -27,8 +27,6 @@ const EVENT_SOURCE = 'wnkinc.voice';
 export interface VoiceStackProps extends cdk.StackProps {
   /** Prefix for physical names, e.g. `wnkinc-voice-dev`. */
   readonly prefix: string;
-  /** SES-verified sender for owner notifications ('' disables email). */
-  readonly sesFromEmail?: string;
   /** Ceiling on simultaneous calls (SQS scaling config minimum is 2). */
   readonly sessionMaxConcurrency?: number;
   /** Where alarms page. Optional: the topic exists either way; the email is the first subscriber. */
@@ -41,7 +39,7 @@ export interface VoiceStackProps extends cdk.StackProps {
  * The voice receptionist: API Gateway (HTTP) -> webhook Lambda -> [accept call]
  * -> SQS -> session Lambda (WebSocket to OpenAI). DynamoDB: tenants (by called
  * number), calls. EventBridge bus: lead.recorded / owner.notify /
- * call.ended -> notifier + crm-sync Lambdas.
+ * call.ended -> the crm-sync Lambda here and the runtime stack's workflows.
  */
 export class VoiceStack extends cdk.Stack {
   readonly tenantsTable: dynamodb.Table;
@@ -61,7 +59,7 @@ export class VoiceStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: VoiceStackProps) {
     super(scope, id, props);
-    const { prefix, sesFromEmail = '', sessionMaxConcurrency = 20 } = props;
+    const { prefix, sessionMaxConcurrency = 20 } = props;
 
     // ---- State ----------------------------------------------------------------
 
@@ -115,9 +113,9 @@ export class VoiceStack extends cdk.Stack {
     // Call jobs wait here until the session Lambda finishes the call. Visibility
     // must cover the Lambda timeout; repeated failures land in the DLQ.
     const sessionDlq = new sqs.Queue(this, 'SessionDlq', { retentionPeriod: cdk.Duration.days(14) });
-    // Where an event-driven Lambda's message lands after Lambda's async retries
-    // are exhausted (notifier, CRM sync), and where EventBridge parks an event it
-    // could not deliver at all. Anything here is a lost notification or sync.
+    // Where the CRM sync's message lands after Lambda's async retries are
+    // exhausted, and where EventBridge parks an event it could not deliver at
+    // all. Anything here is a lost sync.
     const eventsDlq = new sqs.Queue(this, 'EventsDlq', { retentionPeriod: cdk.Duration.days(14) });
     const sessionQueue = new sqs.Queue(this, 'SessionQueue', {
       visibilityTimeout: cdk.Duration.seconds(960),
@@ -204,17 +202,6 @@ export class VoiceStack extends cdk.Stack {
       maxConcurrency: sessionMaxConcurrency,
     }));
 
-    const notifierFn = fn('notifier', 'notifier.ts', {
-      deadLetterQueue: eventsDlq,
-      description: 'Turns lead.recorded / owner.notify events into email + SMS',
-      timeout: cdk.Duration.seconds(30),
-      env: { SES_FROM_EMAIL: sesFromEmail },
-    });
-    this.tenantsTable.grantReadData(notifierFn);
-    notifierFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['ses:SendEmail', 'ses:SendRawEmail'], resources: ['*'] }));
-    // Direct-to-number SMS has no resource ARN to scope to.
-    notifierFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['sns:Publish'], resources: ['*'] }));
-
     const crmSyncFn = fn('crm-sync', 'crm-sync.ts', {
       deadLetterQueue: eventsDlq,
       description: 'Syncs leads and call transcripts into the tenant CRM (HubSpot via Composio)',
@@ -236,12 +223,8 @@ export class VoiceStack extends cdk.Stack {
 
     // ---- Event routing --------------------------------------------------------
 
-    new events.Rule(this, 'NotifyRule', {
-      eventBus: this.bus,
-      description: 'Route lead + owner notifications to the notifier',
-      eventPattern: { source: [EVENT_SOURCE], detailType: ['lead.recorded', 'owner.notify'] },
-      targets: [new targets.LambdaFunction(notifierFn, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: eventsDlq })],
-    });
+    // lead.recorded and owner.notify are also consumed by the runtime stack's
+    // workflows (lead email, owner alert); those rules live there.
     new events.Rule(this, 'CrmRule', {
       eventBus: this.bus,
       description: 'Route leads + call transcripts to the CRM sync',
@@ -254,10 +237,9 @@ export class VoiceStack extends cdk.Stack {
     // (function errors), and did anything fail for good (dead-letter queues).
 
     dlqAlarm(this, 'SessionDlqAlarm', sessionDlq, this.alarmTopic, 'Voice: a call job failed 3 times');
-    dlqAlarm(this, 'EventsDlqAlarm', eventsDlq, this.alarmTopic, 'Events: a notification or CRM sync was lost');
+    dlqAlarm(this, 'EventsDlqAlarm', eventsDlq, this.alarmTopic, 'Events: a CRM sync was lost');
     errorAlarm(this, 'WebhookErrors', webhookFn, this.alarmTopic, 'Voice webhook');
     errorAlarm(this, 'SessionErrors', sessionFn, this.alarmTopic, 'Voice session');
-    errorAlarm(this, 'NotifierErrors', notifierFn, this.alarmTopic, 'Notifier');
     errorAlarm(this, 'CrmSyncErrors', crmSyncFn, this.alarmTopic, 'CRM sync');
 
     // ---- HTTP API -------------------------------------------------------------

@@ -10,7 +10,6 @@ export const TENANT: TenantConfigInput = {
   businessName: 'Acme Plumbing',
   services: ['drains'],
   hours: '9-5',
-  notifications: { email: 'owner@example.com', sms: '+15555550199' },
 };
 
 export function makeWebhookSecret(): string {

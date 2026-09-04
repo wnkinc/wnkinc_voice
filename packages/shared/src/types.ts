@@ -77,7 +77,6 @@ export const TenantConfigSchema = z.object({
   /** Tool names (see src/agent.ts) enabled for this tenant. */
   tools: z.array(z.string()).default(['record_lead', 'notify_owner', 'end_call']),
 
-  notifications: z.object({ email: z.email().optional(), sms: E164.optional() }).default({}),
 
   /** Hard cap; the agent is asked to wrap up and the call is hung up after this. The session Lambda's 15-minute timeout is the ceiling. */
   maxCallSeconds: z.number().int().positive().max(840).default(600),

@@ -60,9 +60,12 @@ if (cfg) {
   ok('services', on.length ? on.join(', ') : 'none enabled — voice receptionist only');
 }
 
-// 5. Notifications
-if (cfg && !cfg.notifications.email && !cfg.notifications.sms) warn('notifications', 'no email/sms — the owner gets no notifier alerts (email agent still emails the Gmail owner)');
-else if (cfg) ok('notifications', [cfg.notifications.email, cfg.notifications.sms].filter(Boolean).join(', '));
+// 5. Owner alerts: notify_owner delivers to the owner on Telegram (the owner alert workflow)
+if (cfg) {
+  const owners = cfg.people.filter((p) => p.role === 'owner' && p.telegramId !== undefined).map((p) => p.name);
+  if (cfg.tools.includes('notify_owner') && !owners.length) bad('owner alerts', 'tools has notify_owner but no person with role owner and a telegramId — every alert will fail');
+  else ok('owner alerts', owners.length ? `Telegram → ${owners.join(', ')}` : 'notify_owner not enabled');
+}
 
 // 6. Owner's Gmail connected account for the email responder (Composio's vault, under the tenant id)
 if (!cfg?.products.emailResponder.enabled) ok('Gmail connection', 'not needed (email responder off)');
