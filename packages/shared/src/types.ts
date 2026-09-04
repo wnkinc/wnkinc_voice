@@ -59,6 +59,14 @@ export const TenantConfigSchema = z.object({
    * the seed next to the client.
    */
   gatewayOauthProviderArn: z.string().min(1).optional(),
+
+  /**
+   * The assistant's SaaS tools: this tenant's Composio meta-tools MCP session,
+   * minted by the seed (`composioAssistant.ensureSession`) and bound to the
+   * tenant's connected accounts. The workflow hands it to the harness per
+   * invocation; a tenant without one gets no SaaS tools.
+   */
+  composioMcpUrl: z.url().optional(),
   /**
    * Minutes to subtract from UTC so that calendar days roll at 3 AM in the
    * tenant's timezone — the assistant starts a fresh conversation session each

@@ -39,6 +39,7 @@ const identity = new IdentityStack(app, 'wnk-identity-dev', {
   prefix,
   env,
   openaiSecret: voice.openaiSecret,
+  composioSecret: voice.composioSecret,
 });
 const policy = new PolicyStack(app, 'wnk-policy-dev', {
   prefix,
@@ -64,6 +65,7 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   openaiSecret: voice.openaiSecret,
   composioSecret: voice.composioSecret,
   openaiProviderArn: identity.openaiProvider.credentialProviderArn,
+  composioProviderArn: identity.composioProvider.credentialProviderArn,
   gatewayId: (app.node.tryGetContext('wnk:gatewayId') as string | undefined) ?? '',
   bus: voice.bus,
   usageTable: voice.usageTable,

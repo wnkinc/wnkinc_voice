@@ -28,6 +28,8 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly openaiSecret: secretsmanager.ISecret;
   /** Identity API key provider holding the OpenAI key; the assistant harness reads the key from the vault. */
   readonly openaiProviderArn: string;
+  /** Identity API key provider holding the Composio key; the harness resolves it into the MCP session header. */
+  readonly composioProviderArn: string;
   /** The Gateway the assistant harness attaches per invocation (as the tenant). */
   readonly gatewayId: string;
   /** Composio API key (voice stack owns it; the tools Lambda reads it too). */
@@ -161,6 +163,7 @@ export class RuntimeStack extends cdk.Stack {
         agentcoreArn('workload-identity-directory/default/workload-identity/*'),
         agentcoreArn('token-vault/default'),
         props.openaiProviderArn,
+        props.composioProviderArn,
         agentcoreArn('token-vault/default/oauth2credentialprovider/*'),
       ],
     }));
@@ -179,10 +182,12 @@ export class RuntimeStack extends cdk.Stack {
     const harness = new agentcore.CfnHarness(this, 'AssistantHarness', {
       harnessName: `${prefix.replace(/-/g, '_')}_assistant`,
       executionRoleArn: harnessRole.roleArn,
-      model: { openAiModelConfig: { modelId: process.env.ASSISTANT_MODEL ?? 'gpt-5-mini', apiKeyArn: props.openaiProviderArn, apiFormat: 'responses', maxTokens: 1200 } },
+      model: { openAiModelConfig: { modelId: process.env.ASSISTANT_MODEL ?? 'gpt-5.5', apiKeyArn: props.openaiProviderArn, apiFormat: 'responses', maxTokens: 1200 } },
       systemPrompt: [{ text: 'You are My Assistant for a small business. Be brief and plain. The per-invocation prompt names the business and the person.' }],
-      // No default Gateway tool: the workflow passes the TENANT's provider per invocation.
-      allowedTools: ['@wnkgateway/*'], // never the built-in shell/file tools
+      // No default tools: the workflow passes the TENANT's per invocation —
+      // its Composio MCP session (SaaS, meta tools) or, failing that, the
+      // Gateway as its own client. Never the built-in shell/file tools.
+      allowedTools: ['@crm/*', '@wnkgateway/*'],
       // Attached platform Memory: the harness threads each session's history
       // from it (surviving microVM expiry) and, per turn, retrieves what is
       // relevant from every strategy across ALL of the actor's sessions —
@@ -240,6 +245,7 @@ export class RuntimeStack extends cdk.Stack {
       "($exists($tenant.description.S) ? 'About the business: ' & $tenant.description.S & ' ' : '')",
       "($exists($tenant.services.L) and $count($tenant.services.L) > 0 ? 'Services: ' & $join($tenant.services.L.S, ', ') & '. ' : '')",
       "($exists($tenant.hours.S) ? 'Hours: ' & $tenant.hours.S & '. ' : '')",
+      "($exists($tenant.composioMcpUrl.S) ? 'Your tools reach the business systems the owner connected (CRM, email): search for the right tool, then run it; do not stop at search results. CRM phone numbers are stored in E.164 form such as +15095551234, so search the phone property with that exact format. ' : '')",
       "'This is a chat: be brief and plain, no markdown. Use your tools to look things up or record things; say what you did and what you found. Never invent records. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 3000 characters.'",
     ].join(' & ');
     const definition = {
@@ -266,7 +272,7 @@ export class RuntimeStack extends cdk.Stack {
         },
         AssistantEnabled: {
           Type: 'Choice',
-          Choices: [{ Condition: q('$exists($tenant) and $tenant.products.M.assistant.M.enabled.BOOL = true and $exists($tenant.gatewayOauthProviderArn.S)'), Next: 'Invoke' }],
+          Choices: [{ Condition: q('$exists($tenant) and $tenant.products.M.assistant.M.enabled.BOOL = true and ($exists($tenant.composioMcpUrl.S) or $exists($tenant.gatewayOauthProviderArn.S))'), Next: 'Invoke' }],
           Default: 'Ignored',
         },
         Invoke: {
@@ -281,8 +287,13 @@ export class RuntimeStack extends cdk.Stack {
             ActorId: q("$tenant.tenantId.S & '_telegram_' & $string($states.input.message.from.id)"),
             Messages: [{ Role: 'user', Content: [{ Text: q('$states.input.message.text') }] }],
             SystemPrompt: [{ Text: q(prompt) }],
-            Tools: [{ Type: 'agentcore_gateway', Name: 'wnkgateway', Config: { AgentCoreGateway: { GatewayArn: gatewayArn, OutboundAuth: { Oauth: { ProviderArn: q('$tenant.gatewayOauthProviderArn.S'), Scopes: ['gateway/assistant'], GrantType: 'CLIENT_CREDENTIALS' } } } } }],
-            AllowedTools: ['@wnkgateway/*'],
+            // The tenant's SaaS tools: its Composio meta-tools session (the row
+            // selects it; the key rides by ARN and is resolved from the vault at
+            // invocation). Without one, the Gateway as the tenant's own client.
+            Tools: q(`$exists($tenant.composioMcpUrl.S)
+              ? [{ "Type": "remote_mcp", "Name": "crm", "Config": { "RemoteMcp": { "Url": $tenant.composioMcpUrl.S, "Headers": { "x-api-key": "\${${props.composioProviderArn}}" } } } }]
+              : [{ "Type": "agentcore_gateway", "Name": "wnkgateway", "Config": { "AgentCoreGateway": { "GatewayArn": "${gatewayArn}", "OutboundAuth": { "Oauth": { "ProviderArn": $tenant.gatewayOauthProviderArn.S, "Scopes": ["gateway/assistant"], "GrantType": "CLIENT_CREDENTIALS" } } } } }]`),
+            AllowedTools: q("$exists($tenant.composioMcpUrl.S) ? ['@crm/*'] : ['@wnkgateway/*']"),
             TimeoutSeconds: 120,
           },
           Retry: [{ ErrorEquals: ['BedrockAgentCore.ThrottlingException'], IntervalSeconds: 5, MaxAttempts: 2, BackoffRate: 2 }],

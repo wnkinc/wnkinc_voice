@@ -15,11 +15,17 @@
  * with the rest of the tenant's data. Needs COGNITO_USER_POOL_ID and
  * COGNITO_RESOURCE_SERVER_ID (auth stack outputs). The client secret stays in
  * Cognito and the vault; agents read it through IAM.
+ *
+ * And, when the assistant is on, mints the tenant's Composio meta-tools MCP
+ * session (bound to the owner's connected accounts) and writes its URL back
+ * as `composioMcpUrl`. Needs COMPOSIO_SECRET_ARN (voice stack output) or
+ * COMPOSIO_API_KEY; the owner must have run connect-composio first.
  */
 import { BedrockAgentCoreControlClient, CreateOauth2CredentialProviderCommand } from '@aws-sdk/client-bedrock-agentcore-control';
 import { CognitoIdentityProviderClient, CreateUserPoolClientCommand, DescribeResourceServerCommand, DescribeUserPoolClientCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dynamoStore } from '@wnk/shared';
+import { composioAssistant } from '@wnk/shared/composio';
 
 async function ensureGatewayIdentity(raw: { tenantId?: string; cognitoClientId?: string }, file: string): Promise<void> {
   if (raw.cognitoClientId || !raw.tenantId) return;
@@ -71,6 +77,19 @@ async function ensureGatewayOauthProvider(raw: { tenantId?: string; cognitoClien
   console.log(`minted Gateway OAuth provider for ${raw.tenantId}: ${r.credentialProviderArn}`);
 }
 
+/** The assistant's SaaS tools: one Composio meta-tools session per tenant. */
+async function ensureComposioSession(raw: { tenantId?: string; composioMcpUrl?: string; products?: { assistant?: { enabled?: boolean } } }, file: string): Promise<void> {
+  if (raw.composioMcpUrl || !raw.tenantId || !raw.products?.assistant?.enabled) return;
+  if (!process.env.COMPOSIO_SECRET_ARN && !process.env.COMPOSIO_API_KEY) {
+    console.warn(`${raw.tenantId}: assistant is on but no composioMcpUrl and COMPOSIO_SECRET_ARN unset; the assistant has no SaaS tools until one exists`);
+    return;
+  }
+  const s = await composioAssistant.ensureSession(raw.tenantId);
+  raw.composioMcpUrl = s.url;
+  writeBack(file, raw.tenantId, 'composioMcpUrl', s.url);
+  console.log(`minted Composio session for ${raw.tenantId}: ${s.sessionId} (toolkits: ${s.toolkits.join(', ')})`);
+}
+
 /**
  * Minutes to subtract from UTC so days roll at 3 AM local: 180 minus the
  * zone's current UTC offset (PDT, -420 -> 600: the day rolls at 10:00Z).
@@ -108,6 +127,7 @@ for (const file of files) {
   for (const raw of list) {
     await ensureGatewayIdentity(raw as { tenantId?: string; cognitoClientId?: string }, file);
     await ensureGatewayOauthProvider(raw as { tenantId?: string; cognitoClientId?: string; gatewayOauthProviderArn?: string }, file);
+    await ensureComposioSession(raw as Parameters<typeof ensureComposioSession>[0], file);
     const tz = (raw as { timezone?: string }).timezone ?? 'America/Los_Angeles';
     (raw as { sessionDayOffsetMinutes?: number }).sessionDayOffsetMinutes = sessionDayOffsetMinutes(tz);
     const t = await store.putTenant(raw as Parameters<typeof store.putTenant>[0]);

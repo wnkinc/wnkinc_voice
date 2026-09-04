@@ -109,7 +109,7 @@ Twilio Console → *Elastic SIP Trunking → Trunks → Create*:
 Edit `tenants/example.json` (one object per *called* number) and:
 
 ```bash
-TENANTS_TABLE=<tenantsTableName output> PEOPLE_TABLE=<peopleTableName output> AWS_REGION=us-west-2 npm run seed -- tenants/example.json
+TENANTS_TABLE=<tenantsTableName output> PEOPLE_TABLE=<peopleTableName output> COMPOSIO_SECRET_ARN=<composioSecretArn output> AWS_REGION=us-west-2 npm run seed -- tenants/example.json
 ```
 
 Call the number. The webhook Lambda logs every SIP header on each call
@@ -135,6 +135,7 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `active` | `false` → calls rejected with SIP 603 |
 | `crm` | `{ "type": "hubspot", "via": "composio" }` enables CRM sync, caller recognition, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
 | `cognitoClientId` | The tenant's Gateway identity, minted by the seed; every agent calls the Gateway as this client |
+| `composioMcpUrl` | The assistant's SaaS tools: the tenant's Composio meta-tools MCP session, minted by the seed once the owner has connected accounts. The workflow hands it to the harness per invocation; no URL, no SaaS tools. |
 | `products` | Which platform services are on for this tenant: `emailResponder: { enabled }`, `assistant: { enabled }`. The email responder sends from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default all off; agents refuse to act for a tenant whose flag is off. |
 
 Unknown numbers are rejected with SIP 404.
