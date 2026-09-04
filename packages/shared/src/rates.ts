@@ -21,7 +21,7 @@ export const RATES: {
     llm_tokens: {
       rate: 0.000002,
       // gpt-5-mini class drafting: blended in/out per token. Tiny next to voice.
-      note: 'Drafting/summarizing tokens (email responder + assistant)',
+      note: 'Harness tokens (Telegram assistant + lead email)',
     },
     emails_sent: {
       rate: 0,

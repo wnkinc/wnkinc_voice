@@ -50,8 +50,7 @@ do, and how to verify it. Start there when changing one.
 | `packages/voice-session/src/sip.ts` | Caller/called number extraction from SIP headers |
 | `packages/shared/src/types.ts` | `TenantConfig` schema (zod) and record/event types |
 | `packages/shared/src/config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger |
-| `packages/email-responder/src/responder.ts` | Lambda: `lead.recorded` → CRM context via the Composio adapter → OpenAI draft → owner's Gmail via Composio |
-| `packages/infrastructure/lib/runtime-stack.ts` | The email responder's rule + Lambda, and My Assistant as an AgentCore **harness** (configuration, no agent code) plus the Telegram workflow and reply path |
+| `packages/infrastructure/lib/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) and its two Step Functions workflows: Telegram chat with the reply path, and the lead email (`lead.recorded` → harness looks the caller up in the CRM and emails the owner from their own Gmail) |
 | `packages/infrastructure/` | CDK app: `bin/app.ts` + `lib/voice-stack.ts` (NodejsFunction bundles the Lambdas) |
 | `scripts/seed-tenant.ts` | Upsert tenant JSON into the Tenants table |
 | `tenants/example.json` | Example tenant config |
@@ -190,9 +189,10 @@ and sets it after success (`Store.isDone` / `markDone`, keys like `notify:lead:<
 mark; it is not exactly-once. Anything that costs money or reaches a customer irreversibly
 should get a pending → completed ledger with reconciliation instead.
 
-Failures after retries land in a dead-letter queue (session jobs, notifier/CRM events, email
-responder), and each queue has an alarm. The email responder throws on any failure, so a lost
-lead email is a retried, dead-lettered, alarmed event rather than a log line.
+Failures after retries land in a dead-letter queue (session jobs, notifier/CRM events, lead email
+workflow starts), and each queue has an alarm. A workflow execution that fails (Telegram, lead
+email) alarms on the state machine's failed-executions metric; its input is in the execution
+history for replay.
 
 ## Operating the session Lambda
 
@@ -241,9 +241,10 @@ input, and that selection picks the credential:
 - **Voice receptionist**: the webhook resolves the tenant from the signed called number; the two
   tools (`record_lead`, `notify_owner`) run in-process with that call context and are one write or
   one publish each. Everything multi-step is a consumer of the events they publish.
-- **Automations** (email responder, notifier, CRM sync): the tenant id rides in the bus event; the
-  code calls the Composio adapter, which names the tenant on every call, or refuses when the row has
-  no such service.
+- **Automations** (notifier, CRM sync): the tenant id rides in the bus event; the code calls the
+  Composio adapter, which names the tenant on every call, or refuses when the row has no such
+  service. The lead email is a workflow, not code: it reads the tenant row by the event's phone
+  number and hands the harness that tenant's Composio session.
 - **My Assistant**: the People table maps the Telegram sender to a tenant; the workflow hands the
   harness that tenant's Composio session URL from the row. The session is bound to the owner's
   connected accounts, so the model's tools cannot reach another tenant's SaaS.

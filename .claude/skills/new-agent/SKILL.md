@@ -11,10 +11,15 @@ Functions with the optimized `arn:aws:states:::bedrockagentcore:invokeHarness` s
 the tenant's Composio MCP session through its `composioMcpUrl` (tools override per invocation).
 Zero agent code.
 
-**Lambda second.** If the behavior is a fixed sequence (read the tenant, look something up, one
-model call, one side effect) it is a Lambda on an EventBridge rule or a Step Functions task. The
-email responder is the worked example: `packages/email-responder/src/responder.ts` + the rule,
-function, DLQ, and alarms in `lib/runtime-stack.ts`.
+**Workflow second.** If the behavior is a fixed sequence of managed-service calls (read the
+tenant, check a once-marker, invoke the harness, write usage) it is a Step Functions state
+machine on an EventBridge rule, with no package at all. The lead email workflow in
+`lib/runtime-stack.ts` is the worked example: JSONata states, the harness with a fixed prompt
+and the tenant's Composio session, `failedExecutionsAlarm` + a DLQ on the rule target.
+
+**Lambda third.** Only when a step needs code (an HMAC check, deterministic writes with fixed
+fields such as the CRM sync) is it a Lambda on an EventBridge rule: `packages/<name>/` +
+`NodejsFunction` with a DLQ and alarms.
 
 **Runtime code agent last.** Only when neither fits: custom code between model and tools, a
 non-loop pattern, bidirectional streaming, or a job longer than Lambda's 15 minutes. No helper
@@ -28,7 +33,7 @@ An agent = a `packages/<name>/` folder (behavior) + wiring in `packages/infrastr
 
 1. **Package**: create `packages/<name>/package.json` (`@wnk/<name>`, private, type module) and `src/<name>.ts` exporting `handler`. Keep behavior in a function that takes a channel-neutral payload so a test can drive it without the event envelope; channel-specific delivery stays in its own file.
 2. **Shared code**: anything another deployable also needs goes in `packages/shared` (imported as `@wnk/shared`). Deployables never import each other.
-3. **Hosting** in `lib/runtime-stack.ts`: a `NodejsFunction` (ESM, node22, ARM, X-Ray active, a dead-letter queue, `dlqAlarm` + `errorAlarm`) with env vars for everything the agent needs. If it imports `@wnk/shared/composio`, add the `createRequire` banner the email responder uses.
+3. **Hosting** in `lib/runtime-stack.ts`: a `NodejsFunction` (ESM, node22, ARM, X-Ray active, a dead-letter queue, `dlqAlarm` + `errorAlarm`) with env vars for everything the agent needs. If it imports `@wnk/shared/composio`, add the `createRequire` banner the voice-stack `fn` helper uses.
 4. **Identity**: the agent acts for the tenant selected upstream — an automation takes `tenantId` from the event and passes it to every Composio adapter call; a harness is handed the tenant's `composioMcpUrl` per invocation. No agent holds a credential or a Cognito identity.
 5. **Grants**: the execution role gets exactly what the agent touches — tables, secrets, memory actions (`MEMORY_USE_ACTIONS` on the memory ARN + `/*`), `cognito-idp:DescribeUserPoolClient` on the pool. Expect to discover one missing action from an AccessDenied message; the error names the exact action + resource — encode it, don't wildcard the service.
 6. **Trigger**: a bus event → `events.Rule` with the Lambda as target (`retryAttempts: 2`, the DLQ). A request/response surface → HTTP API route → Step Functions (`StepFunctions-StartExecution` integration, `Input: $request.body`), see the Telegram workflow. Prefer a state machine over a Lambda when the steps are all managed-service calls.

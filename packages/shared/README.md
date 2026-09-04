@@ -14,7 +14,7 @@ rented services. Nothing here runs on its own.
 | `config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger | |
 | `prompt.ts` | Tenant row → receptionist system prompt | Lives here so the console can render the same prompt. |
 | `crm.ts` | `CrmAdapter` contract | The platform programs against this, never a vendor SDK. |
-| `composio.ts` | The Composio adapter: Gmail send, HubSpot CRM, the assistant's meta-tools session | The only file that may import `@composio/core` or name a tool slug. Every call passes the tenant id as Composio's `userId`. Not re-exported from the index: import `@wnk/shared/composio` only in bundles that reach SaaS. |
+| `composio.ts` | The Composio adapter: HubSpot CRM, Gmail profile and consent link, the harness's meta-tools session | The only file that may import `@composio/core` or name a tool slug. Every call passes the tenant id as Composio's `userId`. Not re-exported from the index: import `@wnk/shared/composio` only in bundles that reach SaaS. |
 | `memory.ts` | AgentCore Memory: write transcripts, recall facts | Actor id is `<tenantId>_<phone>`, so isolation is structural. |
 | `usage.ts`, `rates.ts` | Metering records and the rate card | Never throws; a metering failure must not hurt the work. |
 | `phone.ts`, `trace.ts` | E.164 normalizing; X-Ray header helpers | |

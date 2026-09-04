@@ -7,28 +7,19 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { MEMORY_USE_ACTIONS } from './memory-stack.js';
-import * as lambda from 'aws-cdk-lib/aws-lambda';
-import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
-import { dlqAlarm, errorAlarm, failedExecutionsAlarm } from './alarms.js';
+import { dlqAlarm, failedExecutionsAlarm } from './alarms.js';
 import { Construct } from 'constructs';
-import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const here = path.dirname(fileURLToPath(import.meta.url));
 
 export interface RuntimeStackProps extends cdk.StackProps {
   readonly prefix: string;
-  readonly openaiSecret: secretsmanager.ISecret;
   /** Identity API key provider holding the OpenAI key; the assistant harness reads the key from the vault. */
   readonly openaiProviderArn: string;
   /** Identity API key provider holding the Composio key; the harness resolves it into the MCP session header. */
   readonly composioProviderArn: string;
-  /** Composio API key (voice stack owns it; the tools Lambda reads it too). */
-  readonly composioSecret: secretsmanager.ISecret;
   readonly bus: events.IEventBus;
   readonly usageTable: dynamodb.ITable;
   /** Agents read their tenant's row to check the service is enabled and how it is configured. */
@@ -40,67 +31,18 @@ export interface RuntimeStackProps extends cdk.StackProps {
   /** The platform HTTP API; the Telegram webhook route is added here. */
   readonly api: apigwv2.IHttpApi;
   readonly alarmTopic: sns.ITopic;
-  /** Caller memory: the email agent recalls facts about the lead's caller. */
+  /** Platform memory: the harness threads sessions and retrieves facts from it. */
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
 }
 
 /**
- * The platform's agents: the email responder (a Lambda on the lead.recorded
- * rule) and My Assistant (an AgentCore harness driven by Step Functions).
+ * The platform's agent: My Assistant, an AgentCore harness driven by two Step
+ * Functions workflows — Telegram chat, and the lead email on lead.recorded.
  */
 export class RuntimeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: RuntimeStackProps) {
     super(scope, id, props);
     const { prefix } = props;
-
-    // ---- Email responder: lead.recorded -> Lambda ------------------------------
-    //
-    // A failed invocation is retried by Lambda, then parked in the dead-letter
-    // queue; the alarm on that queue is how a lost lead email gets noticed.
-    const responderDlq = new sqs.Queue(this, 'EmailTriggerDlq', { retentionPeriod: cdk.Duration.days(14) });
-    const responder = new NodejsFunction(this, 'EmailResponderFn', {
-      functionName: `${prefix}-email-responder`,
-      description: 'Drafts and sends the owner a follow-up email for each recorded lead',
-      entry: path.resolve(here, '../../email-responder/src/responder.ts'),
-      handler: 'handler',
-      runtime: lambda.Runtime.NODEJS_22_X,
-      architecture: lambda.Architecture.ARM_64,
-      timeout: cdk.Duration.minutes(5),
-      memorySize: 512,
-      tracing: lambda.Tracing.ACTIVE,
-      deadLetterQueue: responderDlq,
-      bundling: { format: OutputFormat.ESM, target: 'node22', banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" },
-      environment: {
-        OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
-        USAGE_TABLE: props.usageTable.tableName,
-        TENANTS_TABLE: props.tenantsTable.tableName,
-        CALLS_TABLE: props.callsTable.tableName,
-        COMPOSIO_SECRET_ARN: props.composioSecret.secretArn,
-        ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
-      },
-    });
-    // Exactly what it touches: the tenant row, once-markers on the call row,
-    // usage, the two platform secrets, and caller memory. No Gateway: it is an
-    // automation, so the code is the policy and Composio scopes by tenant id.
-    props.tenantsTable.grantReadData(responder);
-    props.callsTable.grantReadWriteData(responder);
-    props.usageTable.grantWriteData(responder);
-    props.openaiSecret.grantRead(responder);
-    props.composioSecret.grantRead(responder);
-    if (props.callerMemory) {
-      responder.addToRolePolicy(new iam.PolicyStatement({
-        actions: MEMORY_USE_ACTIONS,
-        resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
-      }));
-    }
-    new events.Rule(this, 'LeadRule', {
-      eventBus: props.bus,
-      description: 'Route lead.recorded to the email responder',
-      eventPattern: { source: ['wnkinc.voice'], detailType: ['lead.recorded'] },
-      targets: [new targets.LambdaFunction(responder, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: responderDlq })],
-    });
-    dlqAlarm(this, 'EmailTriggerDlqAlarm', responderDlq, props.alarmTopic, 'Email responder: a lead email was not sent after retries');
-    errorAlarm(this, 'EmailTriggerErrors', responder, props.alarmTopic, 'Email responder');
 
     // ---- My Assistant: Telegram -> API Gateway -> Step Functions -> harness --
     //
@@ -187,7 +129,8 @@ export class RuntimeStack extends cdk.Stack {
       // Nothing is lost when the microVM goes (history is in Memory), so keep
       // idle time — and its memory billing — short.
       environment: { agentCoreRuntimeEnvironment: { lifecycleConfiguration: { idleRuntimeSessionTimeout: 300 } } },
-      maxIterations: 8,
+      // The lead email takes 7 tool calls (search, lookups, profile, send); 12 leaves headroom.
+      maxIterations: 12,
       timeoutSeconds: 120,
     });
     harness.node.addDependency(harnessRole);
@@ -331,9 +274,125 @@ export class RuntimeStack extends cdk.Stack {
       }),
     });
 
+    // ---- Lead email: lead.recorded -> Step Functions -> the same harness -------
+    //
+    // No code. The rule starts a workflow that checks the tenant's flag and the
+    // once-marker, then asks the harness (with the tenant's Composio session, so
+    // Gmail and the CRM are the owner's own) to look the caller up and email the
+    // owner. Actor id is the CALLER's memory actor, so the harness retrieves
+    // what the platform remembers about them. A failed execution alarms; the
+    // input is in the execution history for replay. The once-marker is written
+    // after the send: hardening against redelivery, not exactly-once.
+    const leadPrompt = [
+      "'You are My Assistant for ' & $tenant.businessName.S & ', working for the owner. The phone receptionist just recorded a new lead. '",
+      "'Your tools reach the business systems the owner connected (CRM, Gmail): search for the right tool, then run it; do not stop at search results. CRM phone numbers are stored in E.164 form such as +15095551234, so search the phone property with that exact format. '",
+      "'Do exactly this, in order: 1. Look the caller up in the CRM by phone. If found, read their most recent note. 2. Get the owner\\'s own Gmail address from the Gmail profile. 3. Send ONE plain-text email from the owner\\'s Gmail to that same address. Subject: \"New lead: <caller name> - <reason, under 8 words>\". Body: two sentences summarizing the lead; then what the CRM history says about this caller, or \"No CRM history.\"; then a suggested 2-3 sentence text message the owner could send the caller. No markdown. 4. Reply with one line: the address you sent to and the subject. Never invent records.'",
+    ].join(' & ');
+    const onceKey = q("'done:email:lead:' & $states.input.detail.lead.leadId");
+    const leadDefinition = {
+      QueryLanguage: 'JSONata',
+      StartAt: 'LookupTenant',
+      States: {
+        LookupTenant: {
+          Type: 'Task', Resource: 'arn:aws:states:::dynamodb:getItem',
+          Arguments: { TableName: props.tenantsTable.tableName, Key: { phoneNumber: { S: q('$states.input.detail.tenantPhoneNumber') } } },
+          Assign: { tenant: q('$states.result.Item') }, Output: q('$states.input'), Next: 'ResponderEnabled',
+        },
+        ResponderEnabled: {
+          Type: 'Choice',
+          Choices: [{ Condition: q('$exists($tenant) and $tenant.products.M.emailResponder.M.enabled.BOOL = true and $exists($tenant.composioMcpUrl.S)'), Next: 'CheckDone' }],
+          Default: 'Skipped',
+        },
+        Skipped: { Type: 'Succeed' },
+        CheckDone: {
+          Type: 'Task', Resource: 'arn:aws:states:::dynamodb:getItem',
+          Arguments: {
+            TableName: props.callsTable.tableName, Key: { callId: { S: q('$states.input.detail.callId') } },
+            ProjectionExpression: '#k', ExpressionAttributeNames: { '#k': onceKey },
+          },
+          Assign: { done: q('$exists($states.result.Item) and $count($keys($states.result.Item)) > 0') }, Output: q('$states.input'), Next: 'AlreadyEmailed',
+        },
+        AlreadyEmailed: { Type: 'Choice', Choices: [{ Condition: q('$done'), Next: 'Skipped' }], Default: 'Invoke' },
+        Invoke: {
+          Type: 'Task', Resource: 'arn:aws:states:::bedrockagentcore:invokeHarness',
+          Arguments: {
+            HarnessArn: harness.attrArn,
+            RuntimeSessionId: q("'email-lead-' & $states.input.detail.lead.leadId"),
+            ActorId: q("$tenant.tenantId.S & '_' & ($exists($states.input.detail.lead.phone) ? $replace($states.input.detail.lead.phone, /[^0-9]/, '') : 'lead_' & $states.input.detail.lead.leadId)"),
+            Messages: [{ Role: 'user', Content: [{ Text: q("'New lead: ' & $string($states.input.detail.lead)") }] }],
+            SystemPrompt: [{ Text: q(leadPrompt) }],
+            Tools: [{ Type: 'remote_mcp', Name: 'crm', Config: { RemoteMcp: { Url: q('$tenant.composioMcpUrl.S'), Headers: { 'x-api-key': `\${${props.composioProviderArn}}` } } } }],
+            AllowedTools: ['@crm/*'],
+            TimeoutSeconds: 120,
+          },
+          Retry: [{ ErrorEquals: ['BedrockAgentCore.ThrottlingException'], IntervalSeconds: 5, MaxAttempts: 2, BackoffRate: 2 }],
+          Assign: { usage: q('$states.result.Usage') },
+          Output: q('$states.input'), Next: 'MarkDone',
+        },
+        MarkDone: {
+          Type: 'Task', Resource: 'arn:aws:states:::dynamodb:updateItem',
+          Arguments: {
+            TableName: props.callsTable.tableName, Key: { callId: { S: q('$states.input.detail.callId') } },
+            UpdateExpression: 'SET #k = :at, expiresAt = if_not_exists(expiresAt, :ttl)',
+            ConditionExpression: 'attribute_not_exists(#k)',
+            ExpressionAttributeNames: { '#k': onceKey },
+            ExpressionAttributeValues: { ':at': { S: q('$now()') }, ':ttl': { N: q('$string($floor($millis() / 1000) + 90 * 86400)') } },
+          },
+          // Marked meanwhile by a concurrent delivery: the email went out either way, so still meter it.
+          Catch: [{ ErrorEquals: ['DynamoDB.ConditionalCheckFailedException'], Output: q('$states.input'), Next: 'UsageTokens' }],
+          Output: q('$states.input'), Next: 'UsageTokens',
+        },
+        UsageTokens: {
+          Type: 'Task', Resource: 'arn:aws:states:::dynamodb:putItem',
+          Arguments: { TableName: props.usageTable.tableName, Item: {
+            tenantId: { S: q('$tenant.tenantId.S') },
+            sk: { S: q("$now() & '#llm_tokens#' & $uuid()") },
+            meter: { S: 'llm_tokens' },
+            units: { N: q('$string($usage.TotalTokens)') },
+            ref: { S: q('$states.input.detail.callId') },
+          } },
+          Output: q('$states.input'), Next: 'UsageEmail',
+        },
+        UsageEmail: {
+          Type: 'Task', Resource: 'arn:aws:states:::dynamodb:putItem',
+          Arguments: { TableName: props.usageTable.tableName, Item: {
+            tenantId: { S: q('$tenant.tenantId.S') },
+            sk: { S: q("$now() & '#emails_sent#' & $uuid()") },
+            meter: { S: 'emails_sent' },
+            units: { N: '1' },
+            ref: { S: q('$states.input.detail.callId') },
+          } },
+          End: true,
+        },
+      },
+    };
+    const leadWorkflow = new sfn.StateMachine(this, 'LeadEmailWorkflow', {
+      stateMachineName: `${prefix}-lead-email`,
+      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(leadDefinition)),
+      timeout: cdk.Duration.minutes(5),
+    });
+    props.tenantsTable.grantReadData(leadWorkflow);
+    props.callsTable.grantReadWriteData(leadWorkflow);
+    props.usageTable.grantWriteData(leadWorkflow);
+    leadWorkflow.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:InvokeHarness', 'bedrock-agentcore:InvokeAgentRuntime'],
+      resources: [harness.attrArn, `${harness.attrArn}/*`],
+    }));
+    // A start the rule could not deliver (after retries) parks here and alarms;
+    // an execution that started and failed alarms through the workflow metric.
+    const leadDlq = new sqs.Queue(this, 'LeadEmailDlq', { retentionPeriod: cdk.Duration.days(14) });
+    new events.Rule(this, 'LeadRule', {
+      eventBus: props.bus,
+      description: 'Route lead.recorded to the lead email workflow',
+      eventPattern: { source: ['wnkinc.voice'], detailType: ['lead.recorded'] },
+      targets: [new targets.SfnStateMachine(leadWorkflow, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: leadDlq })],
+    });
+    dlqAlarm(this, 'LeadEmailDlqAlarm', leadDlq, props.alarmTopic, 'Lead email: a lead.recorded event could not start the workflow');
+    failedExecutionsAlarm(this, 'LeadEmailWorkflowFailed', leadWorkflow, props.alarmTopic, 'Lead email');
+
     new cdk.CfnOutput(this, 'assistantHarnessArn', { value: harness.attrArn });
+    new cdk.CfnOutput(this, 'leadEmailWorkflowArn', { value: leadWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'telegramWorkflowArn', { value: workflow.stateMachineArn });
-    new cdk.CfnOutput(this, 'emailResponderFunctionName', { value: responder.functionName });
   }
 }

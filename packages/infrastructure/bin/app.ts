@@ -30,8 +30,6 @@ const identity = new IdentityStack(app, 'wnk-identity-dev', {
 new RuntimeStack(app, 'wnk-runtime-dev', {
   prefix,
   env,
-  openaiSecret: voice.openaiSecret,
-  composioSecret: voice.composioSecret,
   openaiProviderArn: identity.openaiProvider.credentialProviderArn,
   composioProviderArn: identity.composioProvider.credentialProviderArn,
   bus: voice.bus,

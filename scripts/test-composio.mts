@@ -14,7 +14,7 @@
  * to the connected account's own address unless a recipient is given.
  *
  * Compare against our own rails: this replaces identity-stack 3LO + vault +
- * the raw Gmail fetch in email-responder. What it costs us is spelled out in
+ * a raw Gmail fetch in our own code. What it costs us is spelled out in
  * the conversation that led here: token custody, data path, per-call fees.
  */
 import { Composio } from '@composio/core';

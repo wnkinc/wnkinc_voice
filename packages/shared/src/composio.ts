@@ -7,12 +7,12 @@
  * Tenancy: every call names the tenant (Composio `userId` = our tenantId), so
  * the credential is chosen per call.
  *
- * Two doors, one rule. CODE (automations: email responder, CRM sync, the
- * voice tools) calls the task-shaped functions here. An OPEN-ENDED MODEL (the
- * assistant harness) gets Composio's own meta tools over MCP through a
- * per-tenant session minted by `composioAssistant.ensureSession` at seed time;
- * the session is bound to the tenant's connected accounts, so the URL alone
- * selects the tenant's credentials and nothing else can.
+ * Two doors, one rule. CODE (automations: CRM sync, caller recognition) calls
+ * the task-shaped functions here. A MODEL (the assistant harness, chatting on
+ * Telegram or emailing the owner about a lead) gets Composio's own meta tools
+ * over MCP through a per-tenant session minted by `composioAssistant.ensureSession`
+ * at seed time; the session is bound to the tenant's connected accounts, so the
+ * URL alone selects the tenant's credentials and nothing else can.
  *
  * Deliberately NOT re-exported from the shared index: import from
  * '@wnk/shared/composio' so only bundles that reach SaaS carry the SDK.
@@ -82,13 +82,6 @@ async function ownerEmail(tenantId: string): Promise<string> {
   return email;
 }
 
-/** Send a plain-text email from the tenant owner's Gmail to the owner themself. */
-async function sendAsOwner(tenantId: string, subject: string, body: string): Promise<string> {
-  const email = await ownerEmail(tenantId);
-  await execute('GMAIL_SEND_EMAIL', tenantId, { recipient_email: email, subject, body });
-  return email;
-}
-
 export type ComposioToolkit = 'gmail' | 'hubspot';
 
 /** Mint the OAuth connect link a tenant owner clicks once at onboarding, per toolkit. */
@@ -111,7 +104,7 @@ async function connectLink(tenantId: string, toolkit: ComposioToolkit = 'gmail')
   };
 }
 
-export const composioGmail = { sendAsOwner, ownerEmail, connectLink: (tenantId: string) => connectLink(tenantId, 'gmail') };
+export const composioGmail = { ownerEmail, connectLink: (tenantId: string) => connectLink(tenantId, 'gmail') };
 export const composioConnect = { link: connectLink };
 
 // ---- Assistant: meta-tools MCP session ------------------------------------
