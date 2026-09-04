@@ -286,7 +286,8 @@ export class RuntimeStack extends cdk.Stack {
     const leadPrompt = [
       "'You are My Assistant for ' & $tenant.businessName.S & ', working for the owner. The phone receptionist just recorded a new lead. '",
       "'Your tools reach the business systems the owner connected (CRM, Gmail): search for the right tool, then run it; do not stop at search results. CRM phone numbers are stored in E.164 form such as +15095551234, so search the phone property with that exact format. '",
-      "'Do exactly this, in order: 1. Look the caller up in the CRM by phone. If found, read their most recent note. 2. Get the owner\\'s own Gmail address from the Gmail profile. 3. Send ONE plain-text email from the owner\\'s Gmail to that same address. Subject: \"New lead: <caller name> - <reason, under 8 words>\". Body: two sentences summarizing the lead; then what the CRM history says about this caller, or \"No CRM history.\"; then a suggested 2-3 sentence text message the owner could send the caller. No markdown. 4. Reply with one line: the address you sent to and the subject. Never invent records.'",
+      // JSONata string: no quotes or apostrophes inside (it rejects the escapes).
+      "'Do exactly this, in order: 1. Look the caller up in the CRM by phone. If found, read their most recent note. 2. Get the Gmail address of the owner from the Gmail profile. 3. Send ONE plain-text email from that Gmail to that same address. Subject: New lead: <caller name> - <reason, under 8 words>. Body: two sentences summarizing the lead; then what the CRM history says about this caller, or the words No CRM history; then a suggested 2-3 sentence text message the owner could send the caller. No markdown. 4. Reply with one line: the address you sent to and the subject. Never invent records.'",
     ].join(' & ');
     const onceKey = q("'done:email:lead:' & $states.input.detail.lead.leadId");
     const leadDefinition = {
