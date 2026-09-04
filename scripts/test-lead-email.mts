@@ -1,14 +1,16 @@
 /**
- * Drive the assistant harness with the lead-email prompt: the same invocation
- * the lead.recorded workflow makes, for one made-up lead. Sends a REAL email
- * to the owner's own Gmail through the tenant's Composio session.
+ * Prove the lead email workflow end to end: put a real lead.recorded event on
+ * the bus for a tenant, wait for the execution the rule starts, and print its
+ * path. Sends a REAL email to the owner's own Gmail through Composio.
  *
  *   npx tsx scripts/test-lead-email.mts [tenantId] [phone] [callerName] [reason]
  *
- * Actor id is the caller's memory actor (tenant + phone digits), so the
- * harness retrieves what the platform remembers about the caller.
+ * Run it twice with the same lead id (LEAD_ID=<uuid>) to see the once-marker
+ * skip. The call id is made up, so the marker lands on a throwaway call row
+ * that expires with the TTL.
  */
-import { BedrockAgentCoreClient, InvokeHarnessCommand } from '@aws-sdk/client-bedrock-agentcore';
+import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
+import { SFNClient, GetExecutionHistoryCommand, ListExecutionsCommand } from '@aws-sdk/client-sfn';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -20,45 +22,31 @@ const callerName = process.argv[4] ?? 'Jordan Rivera';
 const reason = process.argv[5] ?? 'wants an estimate to replace a warped exterior door';
 const out = (stack: string, key: string) => execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', REGION], { encoding: 'utf8' }).trim();
 
-const tenant = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { businessName: string; composioMcpUrl?: string; products?: { emailResponder?: { enabled?: boolean } } };
+const tenant = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { phoneNumber: string; products?: { emailResponder?: { enabled?: boolean } } };
 if (!tenant.products?.emailResponder?.enabled) throw new Error(`tenant ${tenantId}: products.emailResponder.enabled is off`);
-if (!tenant.composioMcpUrl) throw new Error(`tenant ${tenantId}: no composioMcpUrl; connect accounts and re-run the seed`);
-const composioProviderArn = out('wnk-identity-dev', 'composioProviderArn');
-const harnessArn = out('wnk-runtime-dev', 'assistantHarnessArn');
+const bus = out('wnk-voice-dev', 'eventBusName');
+const machine = out('wnk-runtime-dev', 'leadEmailWorkflowArn');
 
-const lead = { leadId: randomUUID(), createdAt: new Date().toISOString(), tenantId, callId: `test-${Date.now()}`, callerName, phone, reason, preferredCallbackTime: 'weekday mornings' };
+const callId = `test-lead-${Date.now()}`;
+const lead = { leadId: process.env.LEAD_ID ?? randomUUID(), createdAt: new Date().toISOString(), tenantId, callId, callerName, phone, reason, preferredCallbackTime: 'weekday mornings' };
+console.log(`tenant: ${tenantId}  callId: ${callId}  leadId: ${lead.leadId}`);
+const eb = new EventBridgeClient({ region: REGION });
+const put = await eb.send(new PutEventsCommand({ Entries: [{ EventBusName: bus, Source: 'wnkinc.voice', DetailType: 'lead.recorded', Detail: JSON.stringify({ tenantId, tenantPhoneNumber: tenant.phoneNumber, callId, lead }) }] }));
+if (put.FailedEntryCount) throw new Error(`put-events failed: ${JSON.stringify(put.Entries)}`);
 
-// The prompt the workflow will carry. Keep this and the CDK definition in step.
-const prompt = [
-  `You are My Assistant for ${tenant.businessName}, working for the owner. The phone receptionist just recorded a new lead.`,
-  'Your tools reach the business systems the owner connected (CRM, Gmail): search for the right tool, then run it; do not stop at search results.',
-  'CRM phone numbers are stored in E.164 form such as +15095551234, so search the phone property with that exact format.',
-  'Do exactly this, in order:',
-  '1. Look the caller up in the CRM by phone. If found, read their most recent note.',
-  '2. Get the Gmail address of the owner from the Gmail profile.',
-  '3. Send ONE plain-text email from that Gmail to that same address. Subject: New lead: <caller name> - <reason, under 8 words>. Body: two sentences summarizing the lead; then what the CRM history says about this caller, or the words No CRM history; then a suggested 2-3 sentence text message the owner could send the caller. No markdown.',
-  '4. Reply with one line: the address you sent to and the subject. Never invent records.',
-].join(' ');
-const text = `New lead: ${JSON.stringify(lead)}`;
-
-console.log(`tenant: ${tenantId}  lead: ${lead.leadId}\n> ${text}`);
-const client = new BedrockAgentCoreClient({ region: REGION });
+const sfn = new SFNClient({ region: REGION });
 const started = Date.now();
-const res = await client.send(new InvokeHarnessCommand({
-  harnessArn,
-  runtimeSessionId: `email-lead-${lead.leadId}`,
-  actorId: `${tenantId}_${phone.replace(/\D/g, '')}`,
-  messages: [{ role: 'user', content: [{ text }] }],
-  systemPrompt: [{ text: prompt }],
-  tools: [{ type: 'remote_mcp', name: 'crm', config: { remoteMcp: { url: tenant.composioMcpUrl, headers: { 'x-api-key': `\${${composioProviderArn}}` } } } }],
-  allowedTools: ['@crm/*'],
-}));
-let answer = ''; const tools: string[] = []; let usage: unknown;
-for await (const ev of res.stream ?? []) {
-  if ('contentBlockStart' in ev) { const tu = (ev.contentBlockStart as { start?: { toolUse?: { name?: string } } }).start?.toolUse; if (tu?.name) tools.push(tu.name); }
-  if ('contentBlockDelta' in ev) { const d = (ev.contentBlockDelta as { delta?: { text?: string } }).delta; if (d?.text) answer += d.text; }
-  if ('metadata' in ev) usage = (ev.metadata as { usage?: unknown }).usage;
-  if ('internalServerException' in ev || 'validationException' in ev || 'runtimeClientError' in ev) console.log('stream error:', JSON.stringify(ev).slice(0, 400));
+let exec: { executionArn?: string; status?: string } | undefined;
+while (Date.now() - started < 240_000) {
+  await new Promise((r) => setTimeout(r, 3000));
+  const list = await sfn.send(new ListExecutionsCommand({ stateMachineArn: machine, maxResults: 5 }));
+  exec = list.executions?.find((e) => (e.startDate?.getTime() ?? 0) >= started - 5000);
+  if (exec && exec.status !== 'RUNNING') break;
 }
-console.log(`tools (${tools.length}): ${tools.join(', ') || '(none)'} | usage: ${JSON.stringify(usage)} | ${Math.round((Date.now() - started) / 1000)}s`);
-console.log(answer.trim());
+if (!exec?.executionArn) throw new Error('no execution started within 4 minutes');
+console.log(`execution: ${exec.status} (${Math.round((Date.now() - started) / 1000)}s)`);
+const hist = await sfn.send(new GetExecutionHistoryCommand({ executionArn: exec.executionArn, maxResults: 200 }));
+for (const ev of hist.events ?? []) {
+  if (ev.stateExitedEventDetails) console.log(`  ${ev.stateExitedEventDetails.name}`);
+  if (ev.executionFailedEventDetails) console.log(`  FAILED: ${ev.executionFailedEventDetails.error} ${ev.executionFailedEventDetails.cause?.slice(0, 300)}`);
+}

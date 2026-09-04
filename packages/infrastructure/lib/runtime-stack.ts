@@ -20,6 +20,8 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly openaiProviderArn: string;
   /** Identity API key provider holding the Composio key; the harness resolves it into the MCP session header. */
   readonly composioProviderArn: string;
+  /** Composio API key (voice stack owns it); the lead email workflow's HTTP tasks carry it through an EventBridge Connection. */
+  readonly composioSecret: secretsmanager.ISecret;
   readonly bus: events.IEventBus;
   readonly usageTable: dynamodb.ITable;
   /** Agents read their tenant's row to check the service is enabled and how it is configured. */
@@ -36,8 +38,9 @@ export interface RuntimeStackProps extends cdk.StackProps {
 }
 
 /**
- * The platform's agent: My Assistant, an AgentCore harness driven by two Step
- * Functions workflows — Telegram chat, and the lead email on lead.recorded.
+ * The platform's agent, My Assistant (an AgentCore harness driven by the
+ * Telegram workflow), and the two deterministic workflows on bus events:
+ * the lead email and the owner alert. No code in this stack.
  */
 export class RuntimeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: RuntimeStackProps) {
@@ -129,8 +132,7 @@ export class RuntimeStack extends cdk.Stack {
       // Nothing is lost when the microVM goes (history is in Memory), so keep
       // idle time — and its memory billing — short.
       environment: { agentCoreRuntimeEnvironment: { lifecycleConfiguration: { idleRuntimeSessionTimeout: 300 } } },
-      // The lead email takes 7 tool calls (search, lookups, profile, send); 12 leaves headroom.
-      maxIterations: 12,
+      maxIterations: 8,
       timeoutSeconds: 120,
     });
     harness.node.addDependency(harnessRole);
@@ -274,22 +276,53 @@ export class RuntimeStack extends cdk.Stack {
       }),
     });
 
-    // ---- Lead email: lead.recorded -> Step Functions -> the same harness -------
+    // ---- Lead email: lead.recorded -> Step Functions -> Composio HTTP -> Gmail --
     //
-    // No code. The rule starts a workflow that checks the tenant's flag and the
-    // once-marker, then asks the harness (with the tenant's Composio session, so
-    // Gmail and the CRM are the owner's own) to look the caller up and email the
-    // owner. Actor id is the CALLER's memory actor, so the harness retrieves
-    // what the platform remembers about them. A failed execution alarms; the
-    // input is in the execution history for replay. The once-marker is written
-    // after the send: hardening against redelivery, not exactly-once.
-    const leadPrompt = [
-      "'You are My Assistant for ' & $tenant.businessName.S & ', working for the owner. The phone receptionist just recorded a new lead. '",
-      "'Your tools reach the business systems the owner connected (CRM, Gmail): search for the right tool, then run it; do not stop at search results. CRM phone numbers are stored in E.164 form such as +15095551234, so search the phone property with that exact format. '",
-      // JSONata string: no quotes or apostrophes inside (it rejects the escapes).
-      "'Do exactly this, in order: 1. Look the caller up in the CRM by phone. If found, read their most recent note. 2. Get the Gmail address of the owner from the Gmail profile. 3. Send ONE plain-text email from that Gmail to that same address. Subject: New lead: <caller name> - <reason, under 8 words>. Body: two sentences summarizing the lead; then what the CRM history says about this caller, or the words No CRM history; then a suggested 2-3 sentence text message the owner could send the caller. No markdown. 4. Reply with one line: the address you sent to and the subject. Never invent records.'",
-    ].join(' & ');
+    // Deterministic, no model. The rule starts a workflow that reads the tenant
+    // row, checks the flag and the once-marker, fetches what already exists
+    // (the CRM contact and its last note through Composio, caller memory), and
+    // formats the owner's email from those fields. Every Composio call is a
+    // plain HTTP task naming the tenant as Composio's user_id; the API key
+    // rides in an EventBridge Connection. Enrichment is best effort (Catch ->
+    // continue); the profile lookup and the send fail the execution, which
+    // alarms. The once-marker is written after the send: hardening against
+    // redelivery, not exactly-once. One retry per Composio call, as the adapter
+    // did. Toolkit versions are not pinned here (dev); pin in prod with a
+    // `version` field on the execute bodies.
+    const composioConnection = new events.Connection(this, 'ComposioConnection', {
+      description: 'Composio API key for the lead email workflow',
+      authorization: events.Authorization.apiKey('x-api-key', props.composioSecret.secretValueFromJson('COMPOSIO_API_KEY')),
+    });
+    const composio = (path: string) => `https://backend.composio.dev/api/v3/${path}`;
+    const http = (method: 'GET' | 'POST', path: string, body?: Record<string, unknown>, query?: Record<string, string>) => ({
+      Type: 'Task', Resource: 'arn:aws:states:::http:invoke',
+      Arguments: {
+        ApiEndpoint: composio(path), Method: method,
+        Authentication: { ConnectionArn: composioConnection.connectionArn },
+        ...(body ? { RequestBody: body } : {}), ...(query ? { QueryParameters: query } : {}),
+      },
+      Retry: [{ ErrorEquals: ['States.TaskFailed'], IntervalSeconds: 2, MaxAttempts: 1 }],
+    });
     const onceKey = q("'done:email:lead:' & $states.input.detail.lead.leadId");
+    const tenantId = q('$tenant.tenantId.S');
+    const lead = '$states.input.detail.lead';
+    const phoneFilter = (propertyName: string) => ({ filters: [{ propertyName, operator: 'EQ', value: q(`${lead}.phone`) }] });
+    // The email, from existing data only. JSONata strings: no quotes or apostrophes inside.
+    const noteText = "$substring($replace($replace($replace($note.hs_note_body, /<br[^>]*>/, '\\n'), /<[^>]+>/, ''), '&nbsp;', ' '), 0, 800)";
+    const bodyExpr = [
+      "'New lead from the phone receptionist.\\n\\n'",
+      `'Name: ' & ${lead}.callerName & '\\n'`,
+      `'Phone: ' & ($exists(${lead}.phone) ? ${lead}.phone : 'not provided') & '\\n'`,
+      `'Reason: ' & ${lead}.reason & '\\n'`,
+      `($exists(${lead}.preferredCallbackTime) ? 'Preferred callback: ' & ${lead}.preferredCallbackTime & '\\n' : '')`,
+      `($exists(${lead}.notes) ? 'Notes: ' & ${lead}.notes & '\\n' : '')`,
+      "'\\nCRM: ' & ($exists($contact) ? 'known contact ' & $join([$contact.properties.firstname, $contact.properties.lastname], ' ') & ' ' & $contact.url"
+        + ` & ($exists($note.hs_note_body) ? '\\nLast note (' & $substring($note.hs_createdate, 0, 10) & '):\\n' & ${noteText} : '\\nNo notes on this contact yet.')`
+        + " : 'no matching contact.') & '\\n'",
+      "($count($memories) > 0 ? '\\nWhat the platform remembers about this caller:\\n' & $join($memories.('- ' & $), '\\n') & '\\n' : '')",
+      `'\\nSuggested text: Hi ' & $split(${lead}.callerName, ' ')[0] & ', this is ' & $tenant.businessName.S & '. Thanks for calling about ' & ${lead}.reason & '. When is a good time to talk? Reply here or call ' & $tenant.phoneNumber.S & '.\\n'`,
+      "'\\nCall ' & $states.input.detail.callId",
+    ].join(' & ');
     const leadDefinition = {
       QueryLanguage: 'JSONata',
       StartAt: 'LookupTenant',
@@ -301,7 +334,7 @@ export class RuntimeStack extends cdk.Stack {
         },
         ResponderEnabled: {
           Type: 'Choice',
-          Choices: [{ Condition: q('$exists($tenant) and $tenant.products.M.emailResponder.M.enabled.BOOL = true and $exists($tenant.composioMcpUrl.S)'), Next: 'CheckDone' }],
+          Choices: [{ Condition: q('$exists($tenant) and $tenant.products.M.emailResponder.M.enabled.BOOL = true'), Next: 'CheckDone' }],
           Default: 'Skipped',
         },
         Skipped: { Type: 'Succeed' },
@@ -313,23 +346,78 @@ export class RuntimeStack extends cdk.Stack {
           },
           Assign: { done: q('$exists($states.result.Item) and $count($keys($states.result.Item)) > 0') }, Output: q('$states.input'), Next: 'AlreadyEmailed',
         },
-        AlreadyEmailed: { Type: 'Choice', Choices: [{ Condition: q('$done'), Next: 'Skipped' }], Default: 'Invoke' },
-        Invoke: {
-          Type: 'Task', Resource: 'arn:aws:states:::bedrockagentcore:invokeHarness',
-          Arguments: {
-            HarnessArn: harness.attrArn,
-            RuntimeSessionId: q("'email-lead-' & $states.input.detail.lead.leadId"),
-            ActorId: q("$tenant.tenantId.S & '_' & ($exists($states.input.detail.lead.phone) ? $replace($states.input.detail.lead.phone, /[^0-9]/, '') : 'lead_' & $states.input.detail.lead.leadId)"),
-            Messages: [{ Role: 'user', Content: [{ Text: q("'New lead: ' & $string($states.input.detail.lead)") }] }],
-            SystemPrompt: [{ Text: q(leadPrompt) }],
-            Tools: [{ Type: 'remote_mcp', Name: 'crm', Config: { RemoteMcp: { Url: q('$tenant.composioMcpUrl.S'), Headers: { 'x-api-key': `\${${props.composioProviderArn}}` } } } }],
-            AllowedTools: ['@crm/*'],
-            TimeoutSeconds: 120,
-          },
-          Retry: [{ ErrorEquals: ['BedrockAgentCore.ThrottlingException'], IntervalSeconds: 5, MaxAttempts: 2, BackoffRate: 2 }],
-          Assign: { usage: q('$states.result.Usage') },
-          Output: q('$states.input'), Next: 'MarkDone',
+        AlreadyEmailed: { Type: 'Choice', Choices: [{ Condition: q('$done'), Next: 'Skipped' }], Default: 'HasCrm' },
+        // ---- Enrichment: the tenant's CRM (by its row), best effort ----------
+        HasCrm: {
+          Type: 'Choice',
+          Choices: [{ Condition: q(`$exists(${lead}.phone) and $tenant.crm.M.type.S = 'hubspot' and $tenant.crm.M.via.S = 'composio'`), Next: 'FindContact' }],
+          Default: 'HasPhone',
         },
+        FindContact: {
+          ...http('POST', 'tools/execute/HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', {
+            user_id: tenantId,
+            arguments: { filterGroups: [phoneFilter('phone'), phoneFilter('mobilephone')], properties: ['firstname', 'lastname', 'phone', 'email'], limit: 1 },
+          }),
+          Assign: { contact: q('$states.result.ResponseBody.data.data.results[0]') },
+          Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasPhone' }],
+          Output: q('$states.input'), Next: 'HasContact',
+        },
+        HasContact: { Type: 'Choice', Choices: [{ Condition: q('$exists($contact.id)'), Next: 'HubspotAccount' }], Default: 'HasPhone' },
+        // Notes have no Composio tool; the proxy needs the connected account id.
+        HubspotAccount: {
+          ...http('GET', 'connected_accounts', undefined, { user_ids: tenantId, toolkit_slugs: 'hubspot', statuses: 'ACTIVE' }),
+          Assign: { accountId: q('$states.result.ResponseBody.items[0].id') },
+          Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasPhone' }],
+          Output: q('$states.input'), Next: 'LastNote',
+        },
+        LastNote: {
+          ...http('POST', 'tools/execute/proxy', {
+            endpoint: '/crm/v3/objects/notes/search', method: 'POST', connected_account_id: q('$accountId'),
+            body: {
+              filterGroups: [{ filters: [{ propertyName: 'associations.contact', operator: 'EQ', value: q('$contact.id') }] }],
+              sorts: [{ propertyName: 'hs_timestamp', direction: 'DESCENDING' }],
+              properties: ['hs_note_body', 'hs_timestamp'], limit: 1,
+            },
+          }),
+          Assign: { note: q('$states.result.ResponseBody.data.results[0].properties') },
+          Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasPhone' }],
+          Output: q('$states.input'), Next: 'HasPhone',
+        },
+        // ---- Enrichment: caller memory (facts from earlier calls), best effort --
+        HasPhone: { Type: 'Choice', Choices: [{ Condition: q(`$exists(${lead}.phone)`), Next: props.callerMemory ? 'RecallMemory' : 'OwnerEmail' }], Default: 'OwnerEmail' },
+        ...(props.callerMemory ? { RecallMemory: {
+          Type: 'Task', Resource: 'arn:aws:states:::aws-sdk:bedrockagentcore:retrieveMemoryRecords',
+          Arguments: {
+            MemoryId: props.callerMemory.memoryId,
+            NamespacePath: q(`'/callers/' & $tenant.tenantId.S & '_' & $replace(${lead}.phone, /[^0-9]/, '')`),
+            SearchCriteria: { SearchQuery: 'who this caller is, their jobs, and their preferences', TopK: 6 },
+          },
+          Assign: { memories: q('[$states.result.MemoryRecordSummaries.Content.Text]') },
+          Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'OwnerEmail' }],
+          Output: q('$states.input'), Next: 'OwnerEmail',
+        } } : {}),
+        // ---- Send from the owner's own Gmail to the owner ----------------------
+        OwnerEmail: {
+          ...http('POST', 'tools/execute/GMAIL_GET_PROFILE', { user_id: tenantId, arguments: {} }),
+          Assign: { ownerEmail: q('$states.result.ResponseBody.data.response_data.emailAddress') },
+          Output: q('$states.input'), Next: 'HasOwnerEmail',
+        },
+        HasOwnerEmail: { Type: 'Choice', Choices: [{ Condition: q('$exists($ownerEmail)'), Next: 'Send' }], Default: 'NoGmail' },
+        NoGmail: { Type: 'Fail', Error: 'NoGmailConnection', Cause: 'No Gmail profile for the tenant in Composio; run scripts/connect-composio.mts <tenantId> gmail' },
+        Send: {
+          ...http('POST', 'tools/execute/GMAIL_SEND_EMAIL', {
+            user_id: tenantId,
+            arguments: {
+              recipient_email: q('$ownerEmail'),
+              subject: q(`'New lead: ' & ${lead}.callerName & ' - ' & $substring(${lead}.reason, 0, 60)`),
+              body: q(bodyExpr),
+            },
+          }),
+          Assign: { sent: q('$states.result.ResponseBody.successful = true') },
+          Output: q('$states.input'), Next: 'SentOk',
+        },
+        SentOk: { Type: 'Choice', Choices: [{ Condition: q('$sent'), Next: 'MarkDone' }], Default: 'SendRejected' },
+        SendRejected: { Type: 'Fail', Error: 'SendRejected', Cause: 'Composio answered 200 but successful=false for GMAIL_SEND_EMAIL; see the execution history' },
         MarkDone: {
           Type: 'Task', Resource: 'arn:aws:states:::dynamodb:updateItem',
           Arguments: {
@@ -340,24 +428,13 @@ export class RuntimeStack extends cdk.Stack {
             ExpressionAttributeValues: { ':at': { S: q('$now()') }, ':ttl': { N: q('$string($floor($millis() / 1000) + 90 * 86400)') } },
           },
           // Marked meanwhile by a concurrent delivery: the email went out either way, so still meter it.
-          Catch: [{ ErrorEquals: ['DynamoDB.ConditionalCheckFailedException'], Output: q('$states.input'), Next: 'UsageTokens' }],
-          Output: q('$states.input'), Next: 'UsageTokens',
-        },
-        UsageTokens: {
-          Type: 'Task', Resource: 'arn:aws:states:::dynamodb:putItem',
-          Arguments: { TableName: props.usageTable.tableName, Item: {
-            tenantId: { S: q('$tenant.tenantId.S') },
-            sk: { S: q("$now() & '#llm_tokens#' & $uuid()") },
-            meter: { S: 'llm_tokens' },
-            units: { N: q('$string($usage.TotalTokens)') },
-            ref: { S: q('$states.input.detail.callId') },
-          } },
+          Catch: [{ ErrorEquals: ['DynamoDB.ConditionalCheckFailedException'], Output: q('$states.input'), Next: 'UsageEmail' }],
           Output: q('$states.input'), Next: 'UsageEmail',
         },
         UsageEmail: {
           Type: 'Task', Resource: 'arn:aws:states:::dynamodb:putItem',
           Arguments: { TableName: props.usageTable.tableName, Item: {
-            tenantId: { S: q('$tenant.tenantId.S') },
+            tenantId: { S: tenantId },
             sk: { S: q("$now() & '#emails_sent#' & $uuid()") },
             meter: { S: 'emails_sent' },
             units: { N: '1' },
@@ -375,10 +452,22 @@ export class RuntimeStack extends cdk.Stack {
     props.tenantsTable.grantReadData(leadWorkflow);
     props.callsTable.grantReadWriteData(leadWorkflow);
     props.usageTable.grantWriteData(leadWorkflow);
+    // HTTP tasks: the endpoint allow-list, the connection, and the secret EventBridge keeps for it.
     leadWorkflow.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:InvokeHarness', 'bedrock-agentcore:InvokeAgentRuntime'],
-      resources: [harness.attrArn, `${harness.attrArn}/*`],
+      actions: ['states:InvokeHTTPEndpoint'], resources: ['*'],
+      conditions: { StringLike: { 'states:HTTPEndpoint': [composio('*')] } },
     }));
+    leadWorkflow.addToRolePolicy(new iam.PolicyStatement({ actions: ['events:RetrieveConnectionCredentials'], resources: [composioConnection.connectionArn] }));
+    leadWorkflow.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
+      resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:events!connection/*`],
+    }));
+    if (props.callerMemory) {
+      leadWorkflow.addToRolePolicy(new iam.PolicyStatement({
+        actions: MEMORY_USE_ACTIONS,
+        resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
+      }));
+    }
     // A start a rule could not deliver (after retries) parks here and alarms;
     // an execution that started and failed alarms through the workflow metric.
     const startDlq = new sqs.Queue(this, 'LeadEmailDlq', { retentionPeriod: cdk.Duration.days(14) });

@@ -28,7 +28,7 @@ call). One deployment serves many businesses.
                               lead.recorded · owner.notify · call.ended
                                                     │
               CRM-sync Lambda → HubSpot (via Composio)   Step Functions workflows (runtime stack):
-                                                          lead.recorded → harness → owner's Gmail
+                                                          lead.recorded → CRM + memory → owner's Gmail (no model)
                                                           owner.notify → owner on Telegram
 ```
 
@@ -50,7 +50,7 @@ do, and how to verify it. Start there when changing one.
 | `packages/voice-session/src/sip.ts` | Caller/called number extraction from SIP headers |
 | `packages/shared/src/types.ts` | `TenantConfig` schema (zod) and record/event types |
 | `packages/shared/src/config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger |
-| `packages/infrastructure/lib/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) and its two Step Functions workflows: Telegram chat with the reply path, and the lead email (`lead.recorded` → harness looks the caller up in the CRM and emails the owner from their own Gmail) |
+| `packages/infrastructure/lib/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram workflow and reply path, plus two deterministic Step Functions workflows: the lead email (`lead.recorded` → CRM contact + last note and caller memory fetched → email formatted from those fields → sent from the owner's Gmail, all through Composio HTTP tasks, no model) and the owner alert (`owner.notify` → Telegram) |
 | `packages/infrastructure/` | CDK app: `bin/app.ts` + `lib/voice-stack.ts` (NodejsFunction bundles the Lambdas) |
 | `scripts/seed-tenant.ts` | Upsert tenant JSON into the Tenants table |
 | `tenants/example.json` | Example tenant config |
@@ -242,9 +242,9 @@ input, and that selection picks the credential:
   one publish each. Everything multi-step is a consumer of the events they publish.
 - **CRM sync**: the tenant id rides in the bus event; the code calls the Composio adapter, which
   names the tenant on every call, or refuses when the row has no such service.
-- **Workflows** (lead email, owner alert): no code. Each reads the tenant row by the event's
-  phone number; the lead email hands the harness that tenant's Composio session, the owner alert
-  delivers to the owner listed on the row.
+- **Workflows** (lead email, owner alert): no code, no model. Each reads the tenant row by the
+  event's phone number; the lead email names that tenant as Composio's user on every HTTP call,
+  the owner alert delivers to the owner listed on the row.
 - **My Assistant**: the People table maps the Telegram sender to a tenant; the workflow hands the
   harness that tenant's Composio session URL from the row. The session is bound to the owner's
   connected accounts, so the model's tools cannot reach another tenant's SaaS.

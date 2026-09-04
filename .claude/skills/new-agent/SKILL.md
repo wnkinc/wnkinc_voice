@@ -12,10 +12,13 @@ the tenant's Composio MCP session through its `composioMcpUrl` (tools override p
 Zero agent code.
 
 **Workflow second.** If the behavior is a fixed sequence of managed-service calls (read the
-tenant, check a once-marker, invoke the harness, write usage) it is a Step Functions state
-machine on an EventBridge rule, with no package at all. The lead email workflow in
-`lib/runtime-stack.ts` is the worked example: JSONata states, the harness with a fixed prompt
-and the tenant's Composio session, `failedExecutionsAlarm` + a DLQ on the rule target.
+tenant, check a once-marker, fetch, format, send, write usage) it is a Step Functions state
+machine on an EventBridge rule, with no package and no model. The lead email workflow in
+`lib/runtime-stack.ts` is the worked example: JSONata states, Composio reached with HTTP tasks
+through an EventBridge Connection (the tenant id as `user_id` on every call), the email formatted
+in JSONata from the data already fetched, `failedExecutionsAlarm` + a DLQ on the rule target.
+Reach for the harness only when the step is open-ended (a person chatting); a fixed sequence
+never needs a model, and a model in the loop costs ~90k tokens per run.
 
 **Lambda third.** Only when a step needs code (an HMAC check, deterministic writes with fixed
 fields such as the CRM sync) is it a Lambda on an EventBridge rule: `packages/<name>/` +
