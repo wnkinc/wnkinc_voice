@@ -39,7 +39,7 @@ export interface VoiceStackProps extends cdk.StackProps {
  * The voice receptionist: API Gateway (HTTP) -> webhook Lambda -> [accept call]
  * -> SQS -> session Lambda (WebSocket to OpenAI). DynamoDB: tenants (by called
  * number), calls. EventBridge bus: lead.recorded / owner.notify /
- * call.ended -> the crm-sync Lambda here and the runtime stack's workflows.
+ * call.ended -> the runtime stack's workflows.
  */
 export class VoiceStack extends cdk.Stack {
   readonly tenantsTable: dynamodb.Table;
@@ -113,10 +113,6 @@ export class VoiceStack extends cdk.Stack {
     // Call jobs wait here until the session Lambda finishes the call. Visibility
     // must cover the Lambda timeout; repeated failures land in the DLQ.
     const sessionDlq = new sqs.Queue(this, 'SessionDlq', { retentionPeriod: cdk.Duration.days(14) });
-    // Where the CRM sync's message lands after Lambda's async retries are
-    // exhausted, and where EventBridge parks an event it could not deliver at
-    // all. Anything here is a lost sync.
-    const eventsDlq = new sqs.Queue(this, 'EventsDlq', { retentionPeriod: cdk.Duration.days(14) });
     const sessionQueue = new sqs.Queue(this, 'SessionQueue', {
       visibilityTimeout: cdk.Duration.seconds(960),
       retentionPeriod: cdk.Duration.hours(1), // a call older than an hour is over
@@ -202,45 +198,28 @@ export class VoiceStack extends cdk.Stack {
       maxConcurrency: sessionMaxConcurrency,
     }));
 
-    const crmSyncFn = fn('crm-sync', 'crm-sync.ts', {
-      deadLetterQueue: eventsDlq,
-      description: 'Syncs leads and call transcripts into the tenant CRM (HubSpot via Composio)',
-      timeout: cdk.Duration.seconds(30),
-    });
-    this.tenantsTable.grantReadData(crmSyncFn);
-
     // Composio: Gmail + HubSpot credential broker (their verified OAuth apps;
     // tokens in their vault keyed by our tenant id). Fill after deploy:
     //   aws secretsmanager put-secret-value --secret-id <arn> --secret-string '{"COMPOSIO_API_KEY":"ak_..."}'
     this.composioSecret = new secretsmanager.Secret(this, 'ComposioSecret', {
       description: 'Composio project API key ({"COMPOSIO_API_KEY": ...})',
     });
-    // CRM sync and the webhook's caller recognition reach HubSpot through Composio.
-    this.composioSecret.grantRead(crmSyncFn);
-    crmSyncFn.addEnvironment('COMPOSIO_SECRET_ARN', this.composioSecret.secretArn);
+    // The webhook's caller recognition reaches HubSpot through Composio.
     this.composioSecret.grantRead(webhookFn);
     webhookFn.addEnvironment('COMPOSIO_SECRET_ARN', this.composioSecret.secretArn);
 
     // ---- Event routing --------------------------------------------------------
 
-    // lead.recorded and owner.notify are also consumed by the runtime stack's
-    // workflows (lead email, owner alert); those rules live there.
-    new events.Rule(this, 'CrmRule', {
-      eventBus: this.bus,
-      description: 'Route leads + call transcripts to the CRM sync',
-      eventPattern: { source: [EVENT_SOURCE], detailType: ['lead.recorded', 'call.ended'] },
-      targets: [new targets.LambdaFunction(crmSyncFn, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: eventsDlq })],
-    });
+    // Every consumer of lead.recorded / owner.notify / call.ended is a Step
+    // Functions workflow in the runtime stack; the rules live there.
 
     // ---- Alarms ---------------------------------------------------------------
     // Two questions, answered by CloudWatch: is anything failing right now
     // (function errors), and did anything fail for good (dead-letter queues).
 
     dlqAlarm(this, 'SessionDlqAlarm', sessionDlq, this.alarmTopic, 'Voice: a call job failed 3 times');
-    dlqAlarm(this, 'EventsDlqAlarm', eventsDlq, this.alarmTopic, 'Events: a CRM sync was lost');
     errorAlarm(this, 'WebhookErrors', webhookFn, this.alarmTopic, 'Voice webhook');
     errorAlarm(this, 'SessionErrors', sessionFn, this.alarmTopic, 'Voice session');
-    errorAlarm(this, 'CrmSyncErrors', crmSyncFn, this.alarmTopic, 'CRM sync');
 
     // ---- HTTP API -------------------------------------------------------------
 

@@ -25,14 +25,14 @@ fails closed.
 - `sip.ts` — pull E.164 numbers from SIP headers. On Twilio the dialed number is in `Diversion`, not `To`.
 - `session.ts` / `call.ts` — hold the WebSocket for one call, log transcripts to the call row, enforce the time limit, hang up cleanly. A Lambda holds it because nothing managed holds a WebSocket for fifteen minutes and runs tools.
 - `agent.ts` — tenant row → accept payload (prompt, voice, model, tools) and the three tools. Each tool is one publish. The tenant comes from the call context; the model never names it.
-- `crm-sync.ts` — the one remaining event consumer in code: read the event, check the once-marker, upsert the contact, add the note and the task through HubSpot-via-Composio, mark done. It stays code because the writes are deterministic with fixed fields and a business-day due date; a state machine with four Composio HTTP tasks would be longer and less readable. The other consumers (lead email, owner alert) are Step Functions workflows in the runtime stack.
+- Event consumers: none here. Every consumer of `lead.recorded`, `owner.notify`, and `call.ended` is a Step Functions workflow in the runtime stack (CRM sync, lead email, owner alert). The `call.ended` event carries ids and the outcome only; the transcript stays on the call row.
 
 Tenant id enters exactly once, from the signed webhook's called number, and is carried on every record and event from there.
 
 ## How to verify
 
 ```bash
-npm test            # agent, crm-sync, session, sip, webhook suites
+npm test            # agent, session, sip, webhook suites
 ```
 
 Live, after a deploy: call the tenant's number and follow the session log.
@@ -44,4 +44,4 @@ aws logs tail /aws/lambda/wnkinc-voice-dev-session --follow
 - The webhook log line `incoming call` shows the SIP headers; `to` must resolve to the tenant's `phoneNumber`.
 - The call row in the Calls table is the audit: `transcript`, `toolCalls` (each tool with its arguments), and a `done:<key>` attribute per consumer that succeeded.
 - `npx tsx scripts/check-tenant.ts <tenantId>` reports config drift, secrets, and the owner's connected accounts.
-- `npx tsx scripts/test-crm.mts <tenantId> <phone>` proves the CRM path without a call.
+- `npx tsx scripts/test-crm-workflows.mts <tenantId> <phone>` proves the CRM workflows with real events; `scripts/test-lead-email.mts` does the same for the lead email.

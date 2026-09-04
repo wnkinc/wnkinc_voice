@@ -191,7 +191,7 @@ export async function runCall(job: SessionJob, deps: CallDeps, opts: { deadlineM
   const status: CallStatus = error && transcript.length === 0 ? 'failed' : 'completed';
   try {
     await deps.store.setCallStatus(callId, status, { endedAt: new Date().toISOString(), error });
-    await deps.events.publish({ type: 'call.ended', tenantId: tenant.tenantId, tenantPhoneNumber: tenant.phoneNumber, callId, callerPhone: job.from, status, durationSeconds, transcript });
+    await deps.events.publish({ type: 'call.ended', tenantId: tenant.tenantId, tenantPhoneNumber: tenant.phoneNumber, callId, callerPhone: job.from, status, durationSeconds });
   } catch (err) {
     log.error('failed to finalize call', { err });
   }

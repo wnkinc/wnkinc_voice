@@ -6,6 +6,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { MEMORY_USE_ACTIONS } from './memory-stack.js';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type * as sns from 'aws-cdk-lib/aws-sns';
@@ -293,7 +294,8 @@ export class RuntimeStack extends cdk.Stack {
       description: 'Composio API key for the lead email workflow',
       authorization: events.Authorization.apiKey('x-api-key', props.composioSecret.secretValueFromJson('COMPOSIO_API_KEY')),
     });
-    const composio = (path: string) => `https://backend.composio.dev/api/v3/${path}`;
+    // v3.1: the path the SDK uses; v3 does not resolve every HubSpot slug.
+    const composio = (path: string) => `https://backend.composio.dev/api/v3.1/${path}`;
     const http = (method: 'GET' | 'POST', path: string, body?: Record<string, unknown>, query?: Record<string, string>) => ({
       Type: 'Task', Resource: 'arn:aws:states:::http:invoke',
       Arguments: {
@@ -303,6 +305,32 @@ export class RuntimeStack extends cdk.Stack {
       },
       Retry: [{ ErrorEquals: ['States.TaskFailed'], IntervalSeconds: 2, MaxAttempts: 1 }],
     });
+    // Express with execution data NOT logged: for workflows that handle
+    // transcripts or CRM notes. State transitions and errors still log (and the
+    // failed-executions alarm still fires); payloads are persisted nowhere.
+    const expressNoData = (logId: string) => ({
+      stateMachineType: sfn.StateMachineType.EXPRESS,
+      logs: {
+        destination: new logs.LogGroup(this, logId, { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: cdk.RemovalPolicy.DESTROY }),
+        level: sfn.LogLevel.ALL,
+        includeExecutionData: false,
+      },
+    });
+    // HTTP tasks: the endpoint allow-list, the connection, and the secret EventBridge keeps for it.
+    const grantComposioHttp = (wf: sfn.StateMachine) => {
+      wf.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['states:InvokeHTTPEndpoint'], resources: ['*'],
+        conditions: { StringLike: { 'states:HTTPEndpoint': [composio('*')] } },
+      }));
+      wf.addToRolePolicy(new iam.PolicyStatement({ actions: ['events:RetrieveConnectionCredentials'], resources: [composioConnection.connectionArn] }));
+      wf.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
+        resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:events!connection/*`],
+      }));
+    };
+    // A start a rule could not deliver (after retries) parks here and alarms;
+    // an execution that started and failed alarms through the workflow metric.
+    const startDlq = new sqs.Queue(this, 'LeadEmailDlq', { retentionPeriod: cdk.Duration.days(14) });
     const onceKey = q("'done:email:lead:' & $states.input.detail.lead.leadId");
     const tenantId = q('$tenant.tenantId.S');
     const lead = '$states.input.detail.lead';
@@ -359,7 +387,7 @@ export class RuntimeStack extends cdk.Stack {
             user_id: tenantId,
             arguments: { filterGroups: [phoneFilter('phone'), phoneFilter('mobilephone')], properties: ['firstname', 'lastname', 'phone', 'email'], limit: 1 },
           }),
-          Assign: { contact: q('$states.result.ResponseBody.data.data.results[0]') },
+          Assign: { contact: q('$states.result.ResponseBody.data.results[0]') },
           Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasPhone' }],
           Output: q('$states.input'), Next: 'HasContact',
         },
@@ -402,7 +430,7 @@ export class RuntimeStack extends cdk.Stack {
         // ---- Send from the owner's own Gmail to the owner ----------------------
         OwnerEmail: {
           ...http('POST', 'tools/execute/GMAIL_GET_PROFILE', { user_id: tenantId, arguments: {} }),
-          Assign: { ownerEmail: q('$states.result.ResponseBody.data.response_data.emailAddress') },
+          Assign: { ownerEmail: q('$states.result.ResponseBody.data.emailAddress') },
           Output: q('$states.input'), Next: 'HasOwnerEmail',
         },
         HasOwnerEmail: { Type: 'Choice', Choices: [{ Condition: q('$exists($ownerEmail)'), Next: 'Send' }], Default: 'NoGmail' },
@@ -447,33 +475,25 @@ export class RuntimeStack extends cdk.Stack {
         },
       },
     };
+    // Express, no execution data: the email body carries the CRM note. (Named
+    // -express because Standard -> Express is a replacement, and CloudFormation
+    // creates the new machine before deleting the old one of the same name.)
     const leadWorkflow = new sfn.StateMachine(this, 'LeadEmailWorkflow', {
-      stateMachineName: `${prefix}-lead-email`,
+      stateMachineName: `${prefix}-lead-email-express`,
       definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(leadDefinition)),
       timeout: cdk.Duration.minutes(5),
+      ...expressNoData('LeadEmailWorkflowLogs'),
     });
     props.tenantsTable.grantReadData(leadWorkflow);
     props.callsTable.grantReadWriteData(leadWorkflow);
     props.usageTable.grantWriteData(leadWorkflow);
-    // HTTP tasks: the endpoint allow-list, the connection, and the secret EventBridge keeps for it.
-    leadWorkflow.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['states:InvokeHTTPEndpoint'], resources: ['*'],
-      conditions: { StringLike: { 'states:HTTPEndpoint': [composio('*')] } },
-    }));
-    leadWorkflow.addToRolePolicy(new iam.PolicyStatement({ actions: ['events:RetrieveConnectionCredentials'], resources: [composioConnection.connectionArn] }));
-    leadWorkflow.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
-      resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:events!connection/*`],
-    }));
+    grantComposioHttp(leadWorkflow);
     if (props.callerMemory) {
       leadWorkflow.addToRolePolicy(new iam.PolicyStatement({
         actions: MEMORY_USE_ACTIONS,
         resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
       }));
     }
-    // A start a rule could not deliver (after retries) parks here and alarms;
-    // an execution that started and failed alarms through the workflow metric.
-    const startDlq = new sqs.Queue(this, 'LeadEmailDlq', { retentionPeriod: cdk.Duration.days(14) });
     new events.Rule(this, 'LeadRule', {
       eventBus: props.bus,
       description: 'Route lead.recorded to the lead email workflow',
@@ -481,6 +501,220 @@ export class RuntimeStack extends cdk.Stack {
       targets: [new targets.SfnStateMachine(leadWorkflow, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: startDlq })],
     });
     failedExecutionsAlarm(this, 'LeadEmailWorkflowFailed', leadWorkflow, props.alarmTopic, 'Lead email');
+
+    // ---- CRM sync: lead.recorded / call.ended -> Step Functions -> HubSpot ----
+    //
+    // Deterministic, no code. The lead workflow (Standard: its input is the
+    // lead fields, which the owner's email carries anyway) upserts the contact,
+    // adds a note, and adds a follow-up task due the next business morning.
+    // The call workflow (Express, execution data not logged: it handles the
+    // transcript) adds a transcript note when the caller is already a contact.
+    // The transcript never rides on the bus; the workflow reads it from the
+    // call row by id. Once-marker before, mark after; a failed execution
+    // alarms, as the Lambda's DLQ did.
+    const esc = (expr: string) => `$replace($replace($replace(${expr}, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')`;
+    const crmOn = (phoneExpr: string) => q(`$exists(${phoneExpr}) and $tenant.crm.M.type.S = 'hubspot' and $tenant.crm.M.via.S = 'composio'`);
+    const findContact = (phoneExpr: string, next: string) => ({
+      ...http('POST', 'tools/execute/HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', {
+        user_id: tenantId,
+        arguments: {
+          filterGroups: [
+            { filters: [{ propertyName: 'phone', operator: 'EQ', value: q(phoneExpr) }] },
+            { filters: [{ propertyName: 'mobilephone', operator: 'EQ', value: q(phoneExpr) }] },
+          ],
+          properties: ['firstname', 'lastname', 'phone'], limit: 1,
+        },
+      }),
+      Assign: { contact: q('$states.result.ResponseBody.data.results[0]') },
+      Output: q('$states.input'), Next: next,
+    });
+    const assoc = (typeId: number) => [{ to: { id: q('$contactId') }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: typeId }] }];
+    const markDone = (key: string) => ({
+      Type: 'Task', Resource: 'arn:aws:states:::dynamodb:updateItem',
+      Arguments: {
+        TableName: props.callsTable.tableName, Key: { callId: { S: q('$states.input.detail.callId') } },
+        UpdateExpression: 'SET #k = :at, expiresAt = if_not_exists(expiresAt, :ttl)',
+        ExpressionAttributeNames: { '#k': key },
+        ExpressionAttributeValues: { ':at': { S: q('$now()') }, ':ttl': { N: q('$string($floor($millis() / 1000) + 90 * 86400)') } },
+      },
+      End: true,
+    });
+    const checkDone = (key: string, extraProjection = '') => ({
+      Type: 'Task', Resource: 'arn:aws:states:::dynamodb:getItem',
+      Arguments: {
+        TableName: props.callsTable.tableName, Key: { callId: { S: q('$states.input.detail.callId') } },
+        ProjectionExpression: `#k${extraProjection ? `, ${extraProjection}` : ''}`, ExpressionAttributeNames: { '#k': key },
+      },
+    });
+    // Next weekday at 9:00 tenant-local, from the zone offset the seed derives
+    // (sessionDayOffsetMinutes = 180 - zoneOffsetMinutes). JSONata has no tz
+    // database, so after a DST change the hour drifts by one until the next seed.
+    const nextBusinessMorning = [
+      "( $zone := (180 - ($exists($tenant.sessionDayOffsetMinutes.N) ? $number($tenant.sessionDayOffsetMinutes.N) : 600)) * 60000;",
+      '$nowMs := $millis(); $day := $floor(($nowMs + $zone) / 86400000);',
+      '$due := [0..7] ~> $map(function($i) { ( $d := $day + $i; $dow := ($d + 4) % 7; ($dow != 0 and $dow != 6) ? ($d * 86400000 + 9 * 3600000 - $zone) : 0 ) }) ~> $filter(function($t) { $t > $nowMs });',
+      '$fromMillis($due[0]) )',
+    ].join(' ');
+    const crmLeadKey = q("'done:crm:lead:' & $states.input.detail.lead.leadId");
+    const crmLeadDefinition = {
+      QueryLanguage: 'JSONata',
+      StartAt: 'CheckDone',
+      States: {
+        CheckDone: {
+          ...checkDone(crmLeadKey),
+          Assign: { done: q('$exists($states.result.Item) and $count($keys($states.result.Item)) > 0') }, Output: q('$states.input'), Next: 'AlreadyDone',
+        },
+        AlreadyDone: { Type: 'Choice', Choices: [{ Condition: q('$done'), Next: 'Skipped' }], Default: 'LookupTenant' },
+        Skipped: { Type: 'Succeed' },
+        LookupTenant: {
+          Type: 'Task', Resource: 'arn:aws:states:::dynamodb:getItem',
+          Arguments: { TableName: props.tenantsTable.tableName, Key: { phoneNumber: { S: q('$states.input.detail.tenantPhoneNumber') } } },
+          Assign: {
+            tenant: q('$states.result.Item'),
+            name: q(`$trim(${lead}.callerName)`),
+            first: q(`$split($trim(${lead}.callerName), ' ')[0]`),
+            last: q(`$trim($substringAfter($trim(${lead}.callerName), ' '))`),
+          },
+          Output: q('$states.input'), Next: 'HasCrm',
+        },
+        HasCrm: { Type: 'Choice', Choices: [{ Condition: crmOn(`${lead}.phone`), Next: 'FindContact' }], Default: 'Skipped' },
+        FindContact: findContact(`${lead}.phone`, 'HasContact'),
+        HasContact: { Type: 'Choice', Choices: [{ Condition: q('$exists($contact.id)'), Next: 'MissingNames' }], Default: 'CreateContact' },
+        CreateContact: {
+          ...http('POST', 'tools/execute/HUBSPOT_CREATE_CONTACT', {
+            user_id: tenantId,
+            arguments: q(`$merge([{'phone': ${lead}.phone}, ($first != '' ? {'firstname': $first} : {}), ($last != '' ? {'lastname': $last} : {})])`),
+          }),
+          Assign: { contactId: q('$states.result.ResponseBody.data.id') },
+          Output: q('$states.input'), Next: 'AddNote',
+        },
+        // An existing contact only gains the name fields it lacks.
+        MissingNames: {
+          Type: 'Pass',
+          Assign: {
+            contactId: q('$contact.id'),
+            props: q("$merge([($first != '' and $not($exists($contact.properties.firstname)) ? {'firstname': $first} : {}), ($last != '' and $not($exists($contact.properties.lastname)) ? {'lastname': $last} : {})])"),
+          },
+          Output: q('$states.input'), Next: 'NeedsUpdate',
+        },
+        NeedsUpdate: { Type: 'Choice', Choices: [{ Condition: q('$count($keys($props)) > 0'), Next: 'UpdateContact' }], Default: 'AddNote' },
+        UpdateContact: {
+          ...http('POST', 'tools/execute/HUBSPOT_UPDATE_CONTACT', { user_id: tenantId, arguments: { contactId: q('$contactId'), properties: q('$props') } }),
+          Output: q('$states.input'), Next: 'AddNote',
+        },
+        AddNote: {
+          ...http('POST', 'tools/execute/HUBSPOT_CREATE_NOTE', {
+            user_id: tenantId,
+            arguments: {
+              hs_timestamp: q('$now()'),
+              hs_note_body: q([
+                "'Phone lead via receptionist (' & $tenant.businessName.S & ' line)<br><br>'",
+                `'Reason: ' & ${esc(`${lead}.reason`)} & '<br>'`,
+                `($exists(${lead}.preferredCallbackTime) ? 'Preferred callback: ' & ${esc(`${lead}.preferredCallbackTime`)} & '<br>' : '')`,
+                `($exists(${lead}.notes) ? 'Notes: ' & ${esc(`${lead}.notes`)} & '<br>' : '')`,
+                "'<br>Call ID: ' & $states.input.detail.callId",
+              ].join(' & ')),
+              associations: assoc(202),
+            },
+          }),
+          Output: q('$states.input'), Next: 'DefaultOwner',
+        },
+        // The account's first owner gets the task; no owner is not an error.
+        DefaultOwner: {
+          ...http('POST', 'tools/execute/HUBSPOT_RETRIEVE_OWNERS', { user_id: tenantId, arguments: { limit: 1 } }),
+          Assign: { ownerId: q('$states.result.ResponseBody.data.results[0].id') },
+          Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'AddTask' }],
+          Output: q('$states.input'), Next: 'AddTask',
+        },
+        AddTask: {
+          ...http('POST', 'tools/execute/HUBSPOT_CREATE_TASK', {
+            user_id: tenantId,
+            arguments: q([
+              "$merge([{",
+              `'hs_timestamp': ${nextBusinessMorning},`,
+              `'hs_task_subject': 'Follow up with ' & $name & ' (' & ${lead}.phone & ')',`,
+              `'hs_task_body': ${esc(`${lead}.reason`)} & ($exists(${lead}.preferredCallbackTime) ? '<br>Preferred: ' & ${esc(`${lead}.preferredCallbackTime`)} : ''),`,
+              "'hs_task_status': 'NOT_STARTED', 'hs_task_priority': 'MEDIUM', 'hs_task_type': 'TODO',",
+              `'associations': [{'to': {'id': $contactId}, 'types': [{'associationCategory': 'HUBSPOT_DEFINED', 'associationTypeId': 204}]}]`,
+              "}, ($exists($ownerId) ? {'hubspot_owner_id': $ownerId} : {})])",
+            ].join(' ')),
+          }),
+          Output: q('$states.input'), Next: 'MarkDone',
+        },
+        MarkDone: markDone(crmLeadKey),
+      },
+    };
+    const crmLeadWorkflow = new sfn.StateMachine(this, 'CrmLeadWorkflow', {
+      stateMachineName: `${prefix}-crm-lead`,
+      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(crmLeadDefinition)),
+      timeout: cdk.Duration.minutes(5),
+    });
+
+    const crmCallDefinition = {
+      QueryLanguage: 'JSONata',
+      StartAt: 'HasCaller',
+      States: {
+        HasCaller: { Type: 'Choice', Choices: [{ Condition: q("$exists($states.input.detail.callerPhone) and $states.input.detail.status = 'completed'"), Next: 'CheckDone' }], Default: 'Skipped' },
+        Skipped: { Type: 'Succeed' },
+        // One read: the marker and the transcript (kept off the bus; fetched by id here).
+        CheckDone: {
+          ...checkDone('done:crm:call', 'transcript'),
+          Assign: { done: q("$exists($states.result.Item.`done:crm:call`)"), transcript: q('[$states.result.Item.transcript.L]') },
+          Output: q('$states.input'), Next: 'AlreadyDone',
+        },
+        AlreadyDone: { Type: 'Choice', Choices: [{ Condition: q('$done or $count($transcript) = 0'), Next: 'Skipped' }], Default: 'LookupTenant' },
+        LookupTenant: {
+          Type: 'Task', Resource: 'arn:aws:states:::dynamodb:getItem',
+          Arguments: { TableName: props.tenantsTable.tableName, Key: { phoneNumber: { S: q('$states.input.detail.tenantPhoneNumber') } } },
+          Assign: { tenant: q('$states.result.Item') }, Output: q('$states.input'), Next: 'HasCrm',
+        },
+        HasCrm: { Type: 'Choice', Choices: [{ Condition: crmOn('$states.input.detail.callerPhone'), Next: 'FindContact' }], Default: 'Skipped' },
+        FindContact: findContact('$states.input.detail.callerPhone', 'HasContact'),
+        // Only callers already in the CRM get a transcript note.
+        HasContact: { Type: 'Choice', Choices: [{ Condition: q('$exists($contact.id)'), Next: 'AddNote' }], Default: 'Skipped' },
+        AddNote: {
+          ...http('POST', 'tools/execute/HUBSPOT_CREATE_NOTE', {
+            user_id: tenantId,
+            arguments: {
+              hs_timestamp: q('$now()'),
+              hs_note_body: q([
+                "$substring('Call to ' & $tenant.businessName.S & ' line - ' & $string($round($states.input.detail.durationSeconds / 60)) & ' min, ' & $states.input.detail.status & '<br><br>'",
+                `& $join($transcript[M.role.S != 'tool'].((M.role.S = 'user' ? 'Caller: ' : 'Agent: ') & ${esc('M.text.S')}), '<br>')`,
+                "& '<br><br>Call ID: ' & $states.input.detail.callId, 0, 60000)",
+              ].join(' ')),
+              associations: [{ to: { id: q('$contact.id') }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 202 }] }],
+            },
+          }),
+          Output: q('$states.input'), Next: 'MarkDone',
+        },
+        MarkDone: markDone('done:crm:call'),
+      },
+    };
+    const crmCallWorkflow = new sfn.StateMachine(this, 'CrmCallWorkflow', {
+      stateMachineName: `${prefix}-crm-call`,
+      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(crmCallDefinition)),
+      timeout: cdk.Duration.minutes(5),
+      ...expressNoData('CrmCallWorkflowLogs'),
+    });
+    for (const wf of [crmLeadWorkflow, crmCallWorkflow]) {
+      props.tenantsTable.grantReadData(wf);
+      props.callsTable.grantReadWriteData(wf);
+      grantComposioHttp(wf);
+    }
+    new events.Rule(this, 'CrmLeadRule', {
+      eventBus: props.bus,
+      description: 'Route lead.recorded to the CRM lead workflow',
+      eventPattern: { source: ['wnkinc.voice'], detailType: ['lead.recorded'] },
+      targets: [new targets.SfnStateMachine(crmLeadWorkflow, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: startDlq })],
+    });
+    new events.Rule(this, 'CrmCallRule', {
+      eventBus: props.bus,
+      description: 'Route call.ended to the CRM call workflow',
+      eventPattern: { source: ['wnkinc.voice'], detailType: ['call.ended'] },
+      targets: [new targets.SfnStateMachine(crmCallWorkflow, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: startDlq })],
+    });
+    failedExecutionsAlarm(this, 'CrmLeadWorkflowFailed', crmLeadWorkflow, props.alarmTopic, 'CRM sync (lead)');
+    failedExecutionsAlarm(this, 'CrmCallWorkflowFailed', crmCallWorkflow, props.alarmTopic, 'CRM sync (call)');
 
     // ---- Owner alert: owner.notify -> Step Functions -> Telegram reply path ----
     //
@@ -538,6 +772,8 @@ export class RuntimeStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'assistantHarnessArn', { value: harness.attrArn });
     new cdk.CfnOutput(this, 'leadEmailWorkflowArn', { value: leadWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'ownerAlertWorkflowArn', { value: alertWorkflow.stateMachineArn });
+    new cdk.CfnOutput(this, 'crmLeadWorkflowArn', { value: crmLeadWorkflow.stateMachineArn });
+    new cdk.CfnOutput(this, 'crmCallWorkflowArn', { value: crmCallWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'telegramWorkflowArn', { value: workflow.stateMachineArn });
   }

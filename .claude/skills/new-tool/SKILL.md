@@ -17,7 +17,7 @@ Composio brokers it; the model gets Composio's meta tools over the tenant's sess
 4. If the model needs guidance the toolkit's schemas do not give (formats, ids), add one sentence to the workflow prompt in `lib/runtime-stack.ts` — data, not code.
 5. Prove with `npx tsx scripts/test-assistant.mts "<a question that needs it>"`.
 
-## Code needs a SaaS (automations: CRM sync, caller recognition)
+## Code needs a SaaS (the webhook's caller recognition)
 
 Add a task-shaped function to `packages/shared/src/composio.ts` — the ONE file that may import `@composio/core` or name a tool slug. Take the tenant id as the first argument; never a default. A second CRM is a second `CrmAdapter` implementation there plus a `type` value on the tenant row.
 

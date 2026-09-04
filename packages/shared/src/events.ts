@@ -7,7 +7,7 @@ export interface EventPublisher {
   publish(event: VoiceEvent): Promise<void>;
 }
 
-/** Publishes domain events to the EventBridge bus; rules route them to the CRM sync and the workflows. */
+/** Publishes domain events to the EventBridge bus; rules route them to the runtime stack's workflows. */
 export function eventBridgePublisher(): EventPublisher {
   if (!env.eventBusName) throw new Error('EVENT_BUS_NAME not set');
   const client = new EventBridgeClient({});
@@ -15,7 +15,7 @@ export function eventBridgePublisher(): EventPublisher {
     async publish(event) {
       const { type, ...detail } = event;
       // TraceHeader carries the X-Ray trace to the rule targets, so the
-      // CRM sync and the workflows appear in the same trace as the call.
+      // the workflows appear in the same trace as the call.
       const res = await client.send(new PutEventsCommand({
         Entries: [{ EventBusName: env.eventBusName, Source: env.eventSource, DetailType: type, Detail: JSON.stringify(detail), TraceHeader: currentXrayHeader() }],
       }));

@@ -27,9 +27,11 @@ call). One deployment serves many businesses.
                                        EventBridge bus (wnkinc.voice)
                               lead.recorded · owner.notify · call.ended
                                                     │
-              CRM-sync Lambda → HubSpot (via Composio)   Step Functions workflows (runtime stack):
-                                                          lead.recorded → CRM + memory → owner's Gmail (no model)
-                                                          owner.notify → owner on Telegram
+                      Step Functions workflows (runtime stack, no code, no model):
+                        lead.recorded → HubSpot contact + note + task (via Composio HTTP)
+                        lead.recorded → CRM + memory → owner's Gmail
+                        call.ended    → transcript note on the HubSpot contact
+                        owner.notify  → owner on Telegram
 ```
 
 ## Layout
@@ -43,14 +45,13 @@ do, and how to verify it. Start there when changing one.
 | `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration |
 | `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
-| `packages/voice-session/src/crm-sync.ts` | Lambda: EventBridge → CRM (lead → contact + note + task; call → transcript note) |
 | `packages/shared/src/composio.ts` | Composio adapter: Gmail and HubSpot with the tenant id as the only credential our code names (`CrmAdapter` lives in `shared/src/crm.ts`) |
 | `packages/shared/src/store.ts` | DynamoDB (tenants, calls, people) behind one `Store` interface, plus an in-memory version for tests. No leads table: the tenant's CRM holds the lead; the call row (tool calls + once-markers) is the audit |
 | `packages/shared/src/events.ts` | EventBridge publisher |
 | `packages/voice-session/src/sip.ts` | Caller/called number extraction from SIP headers |
 | `packages/shared/src/types.ts` | `TenantConfig` schema (zod) and record/event types |
 | `packages/shared/src/config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger |
-| `packages/infrastructure/lib/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram workflow and reply path, plus two deterministic Step Functions workflows: the lead email (`lead.recorded` → CRM contact + last note and caller memory fetched → email formatted from those fields → sent from the owner's Gmail, all through Composio HTTP tasks, no model) and the owner alert (`owner.notify` → Telegram) |
+| `packages/infrastructure/lib/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram workflow and reply path, plus four deterministic Step Functions workflows: CRM sync for leads and for call transcripts (HubSpot through Composio HTTP tasks), the lead email (CRM contact + last note and caller memory fetched → email formatted from those fields → sent from the owner's Gmail), and the owner alert (`owner.notify` → Telegram). Workflows that handle transcripts or CRM notes run as Express with execution data not logged |
 | `packages/infrastructure/` | CDK app: `bin/app.ts` + `lib/voice-stack.ts` (NodejsFunction bundles the Lambdas) |
 | `scripts/seed-tenant.ts` | Upsert tenant JSON into the Tenants table |
 | `tenants/example.json` | Example tenant config |
@@ -188,10 +189,12 @@ and sets it after success (`Store.isDone` / `markDone`, keys like `notify:lead:<
 mark; it is not exactly-once. Anything that costs money or reaches a customer irreversibly
 should get a pending → completed ledger with reconciliation instead.
 
-Failures after retries land in a dead-letter queue (session jobs, notifier/CRM events, lead email
-workflow starts), and each queue has an alarm. A workflow execution that fails (Telegram, lead
-email) alarms on the state machine's failed-executions metric; its input is in the execution
-history for replay.
+Failures after retries land in a dead-letter queue (session jobs, workflow starts), and each queue
+has an alarm. A workflow execution that fails alarms on the state machine's failed-executions
+metric. Standard workflows (Telegram, owner alert, CRM lead) keep their history for replay;
+workflows that handle transcripts or CRM notes (lead email, CRM call) are Express with execution
+data not logged, so only the state path and the error are kept. Events carry ids and outcomes;
+the transcript stays on the call row and is fetched by id where needed.
 
 ## Operating the session Lambda
 
@@ -212,9 +215,10 @@ HubSpot app once; no HubSpot token exists anywhere in the platform. Every CRM ca
 - **My Assistant** reaches the CRM (and Gmail) through the tenant's Composio meta-tools MCP
   session (`composioMcpUrl`), bound at seed time to the owner's connected accounts, so the model
   can reach nothing else.
-- **`lead.recorded`** → contact upserted by phone, note with the lead, follow-up task due the
-  next business morning in the tenant's timezone, assigned to the account's first owner.
-- **`call.ended`** → transcript note on the contact, if the caller is already a contact.
+- **`lead.recorded`** → (CRM lead workflow) contact upserted by phone, note with the lead, follow-up
+  task due the next business morning in the tenant's timezone, assigned to the account's first owner.
+- **`call.ended`** → (CRM call workflow) transcript note on the contact, if the caller is already a
+  contact. The transcript is read from the call row, not the event.
 - **Caller recognition** — before accepting, the webhook looks the caller ID up (600 ms budget;
   skipped if slow). On a hit, the prompt gets a "Caller ID" section with the name and last note.
 
@@ -240,11 +244,10 @@ input, and that selection picks the credential:
 - **Voice receptionist**: the webhook resolves the tenant from the signed called number; the two
   tools (`record_lead`, `notify_owner`) run in-process with that call context and are one write or
   one publish each. Everything multi-step is a consumer of the events they publish.
-- **CRM sync**: the tenant id rides in the bus event; the code calls the Composio adapter, which
-  names the tenant on every call, or refuses when the row has no such service.
-- **Workflows** (lead email, owner alert): no code, no model. Each reads the tenant row by the
-  event's phone number; the lead email names that tenant as Composio's user on every HTTP call,
-  the owner alert delivers to the owner listed on the row.
+- **Workflows** (CRM sync, lead email, owner alert): no code, no model. Each reads the tenant row
+  by the event's phone number and acts only if the row enables the service; every Composio HTTP
+  call names that tenant as Composio's user, and the owner alert delivers to the owner listed on
+  the row.
 - **My Assistant**: the People table maps the Telegram sender to a tenant; the workflow hands the
   harness that tenant's Composio session URL from the row. The session is bound to the owner's
   connected accounts, so the model's tools cannot reach another tenant's SaaS.
