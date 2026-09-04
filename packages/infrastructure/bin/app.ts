@@ -59,9 +59,6 @@ const gateway = new GatewayStack(app, 'wnk-gateway-dev', {
 new RuntimeStack(app, 'wnk-runtime-dev', {
   prefix,
   env,
-  gatewayUrl: gateway.gateway.gatewayUrl ?? '',
-  cognitoUserPoolId: auth.userPool.userPoolId,
-  cognitoTokenUrl: auth.tokenUrl,
   openaiSecret: voice.openaiSecret,
   composioSecret: voice.composioSecret,
   openaiProviderArn: identity.openaiProvider.credentialProviderArn,

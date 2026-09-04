@@ -1,8 +1,8 @@
 /**
  * Email responder — a Lambda on the `lead.recorded` rule.
  *
- * Enriches the lead with CRM context through the Gateway (as the tenant's own
- * client) and platform caller memory, drafts a follow-up with OpenAI, and sends
+ * Enriches the lead with CRM context (the tenant's CRM through the Composio
+ * adapter) and platform caller memory, drafts a follow-up with OpenAI, and sends
  * it from the owner's own Gmail through Composio, whose vault holds the
  * credential under the tenant id. v1 emails the OWNER (phone leads carry no
  * email address).
@@ -14,14 +14,13 @@
  * Failure is loud: any throw fails the invocation, so Lambda's async retries
  * run and the dead-letter queue and its alarm catch what still fails.
  *
- * Credentials the function holds: none. Cognito mints its Gateway JWT,
- * Composio hands it the owner's Gmail, and the OpenAI key comes from Secrets
- * Manager.
+ * Credentials the function holds: none. Composio holds the owner's Gmail and
+ * CRM under the tenant id, and the OpenAI key comes from Secrets Manager.
  */
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import type { EventBridgeEvent } from 'aws-lambda';
-import { callerMemory, currentXrayHeader, dynamoStore, gatewayConfigFromEnv, recordUsage, requireTenant, tenantGatewayClient, traceIdOf } from '@wnk/shared';
-import { composioGmail } from '@wnk/shared/composio';
+import { callerMemory, currentXrayHeader, dynamoStore, recordUsage, requireTenant, traceIdOf } from '@wnk/shared';
+import { composioGmail, crmForTenant } from '@wnk/shared/composio';
 
 const env = (name: string): string => {
   const v = process.env[name];
@@ -109,13 +108,13 @@ export async function processLead(event: LeadEvent): Promise<{ ok: boolean; sent
 
   let crmContext = '';
   if (lead.phone) {
-    // As the tenant (its own Gateway client): the Gateway attributes the call
-    // and the crm tool reaches the tenant's CRM, or refuses if it has none.
-    const gw = gatewayConfigFromEnv();
-    if (gw && tenant.crm) {
+    // The tenant's CRM by its row (none means no lookup, never someone else's).
+    const crm = await crmForTenant(tenant);
+    if (crm) {
       try {
-        crmContext = await tenantGatewayClient(gw, tenant).callTool('crm___search_contacts', { query: lead.phone, limit: 3 });
-        console.log(JSON.stringify({ msg: 'crm context fetched', ...ctx }));
+        const contact = await crm.findContactByPhone(lead.phone);
+        if (contact) crmContext = JSON.stringify({ contact, lastNote: (await crm.lastNote(contact.id).catch(() => undefined)) ?? null });
+        console.log(JSON.stringify({ msg: 'crm context fetched', found: Boolean(contact), ...ctx }));
       } catch (err) {
         console.warn(JSON.stringify({ msg: 'crm context unavailable; continuing', err: String(err), ...ctx }));
       }

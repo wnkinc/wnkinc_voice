@@ -22,9 +22,6 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 export interface RuntimeStackProps extends cdk.StackProps {
   readonly prefix: string;
-  readonly gatewayUrl: string;
-  readonly cognitoUserPoolId: string;
-  readonly cognitoTokenUrl: string;
   readonly openaiSecret: secretsmanager.ISecret;
   /** Identity API key provider holding the OpenAI key; the assistant harness reads the key from the vault. */
   readonly openaiProviderArn: string;
@@ -76,10 +73,6 @@ export class RuntimeStack extends cdk.Stack {
       deadLetterQueue: responderDlq,
       bundling: { format: OutputFormat.ESM, target: 'node22', banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" },
       environment: {
-        GATEWAY_URL: props.gatewayUrl,
-        COGNITO_USER_POOL_ID: props.cognitoUserPoolId,
-        GATEWAY_SCOPE: 'gateway/email',
-        COGNITO_TOKEN_URL: props.cognitoTokenUrl,
         OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
         USAGE_TABLE: props.usageTable.tableName,
         TENANTS_TABLE: props.tenantsTable.tableName,
@@ -89,8 +82,8 @@ export class RuntimeStack extends cdk.Stack {
       },
     });
     // Exactly what it touches: the tenant row, once-markers on the call row,
-    // usage, the two platform secrets, caller memory, and the tenant's Cognito
-    // client secret for its Gateway JWT.
+    // usage, the two platform secrets, and caller memory. No Gateway: it is an
+    // automation, so the code is the policy and Composio scopes by tenant id.
     props.tenantsTable.grantReadData(responder);
     props.callsTable.grantReadWriteData(responder);
     props.usageTable.grantWriteData(responder);
@@ -102,10 +95,6 @@ export class RuntimeStack extends cdk.Stack {
         resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
       }));
     }
-    responder.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['cognito-idp:DescribeUserPoolClient'],
-      resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${props.cognitoUserPoolId}`],
-    }));
     new events.Rule(this, 'LeadRule', {
       eventBus: props.bus,
       description: 'Route lead.recorded to the email responder',

@@ -278,6 +278,12 @@ export function crmAdapterOn(t: CrmTransport): CrmAdapter {
 }
 
 /** The tenant's HubSpot, through Composio's vault. The tenant id is the only credential our code names. */
+/** The tenant's CRM by its row, or nothing: a tenant not connected through Composio has no CRM. Never a default. */
+export async function crmForTenant(tenant: { tenantId: string; crm?: { type: string; via: string } }): Promise<CrmAdapter | undefined> {
+  if (tenant.crm?.type !== 'hubspot' || tenant.crm.via !== 'composio') return undefined;
+  return composioCrm(tenant.tenantId);
+}
+
 export function composioCrm(tenantId: string): CrmAdapter {
   return crmAdapterOn({
     execute: (slug, args) => execute(slug, tenantId, args),

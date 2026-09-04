@@ -1,6 +1,6 @@
 import type { EventBridgeEvent } from 'aws-lambda';
 import { createLogger, nextBusinessMorning, type CrmAdapter, type Logger } from '@wnk/shared';
-import { composioCrm } from '@wnk/shared/composio';
+import { crmForTenant } from '@wnk/shared/composio';
 import { dynamoStore, type Store } from '@wnk/shared';
 import type { TenantConfig, VoiceEvent } from '@wnk/shared';
 
@@ -106,10 +106,6 @@ export function createCrmSyncHandler(deps: CrmSyncDeps) {
   };
 }
 
-/** Production resolver: the tenant's HubSpot through Composio's vault. A tenant not connected through Composio has no CRM. */
-export async function crmForTenant(tenant: TenantConfig): Promise<CrmAdapter | undefined> {
-  if (tenant.crm?.type !== 'hubspot' || tenant.crm.via !== 'composio') return undefined;
-  return composioCrm(tenant.tenantId);
-}
+export { crmForTenant };
 
 export const handler = createCrmSyncHandler({ store: dynamoStore, crmFor: crmForTenant });
