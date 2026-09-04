@@ -30,7 +30,7 @@ export const PAGE_HTML = `<!doctype html>
 <header><h1>WNK Console</h1><span class="who" id="who"></span></header>
 <div id="login" hidden><p>Read-only console for your business's agents.</p><button onclick="login()">Sign in</button></div>
 <nav id="nav" hidden>
-  <button data-tab="calls" class="on">Calls</button><button data-tab="leads">Leads</button><button data-tab="memory">Memory</button><button data-tab="business">Business</button><button data-tab="costs">Costs</button>
+  <button data-tab="calls" class="on">Calls</button><button data-tab="memory">Memory</button><button data-tab="business">Business</button><button data-tab="costs">Costs</button>
 </nav>
 <main id="main" hidden></main>
 <script>
@@ -54,11 +54,6 @@ async function tabCalls(){
       (c.transcript||[]).map(t=>'<p class="t"><b>'+esc(t.role)+'</b>'+esc(t.text)+'</p>').join('')+
       ((c.toolCalls||[]).length?'<p class="muted">tools: '+esc(c.toolCalls.map(t=>t.name).join(', '))+'</p>':'')+'</div>'));
   });
-}
-async function tabLeads(){
-  const leads=await api('/leads');
-  main.innerHTML='<table><tr><th>When</th><th>Name</th><th>Phone</th><th>Reason</th><th>Callback</th></tr>'+leads.map(l=>
-    '<tr><td>'+when(l.createdAt)+'</td><td>'+esc(l.callerName)+'</td><td>'+esc(l.phone)+'</td><td>'+esc(l.reason)+'</td><td>'+esc(l.preferredCallbackTime)+'</td></tr>').join('')+'</table>';
 }
 async function tabMemory(){
   const calls=await api('/calls');
@@ -99,7 +94,7 @@ async function tabCosts(month){
     (c.lines.length?'':'<p class="muted">No usage recorded this month yet.</p>');
   document.getElementById('prevmo').onclick=()=>tabCosts(prev);
 }
-const tabs={calls:tabCalls,leads:tabLeads,memory:tabMemory,business:tabBusiness,costs:()=>tabCosts()};
+const tabs={calls:tabCalls,memory:tabMemory,business:tabBusiness,costs:()=>tabCosts()};
 document.getElementById('nav').onclick=(e)=>{const t=e.target.dataset?.tab;if(!t)return;
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));tabs[t]();};
 async function show(){

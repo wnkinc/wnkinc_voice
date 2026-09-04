@@ -19,7 +19,6 @@ export interface ConsoleStackProps extends cdk.StackProps {
   readonly authBaseUrl: string;
   readonly tenantsTable: dynamodb.ITable;
   readonly callsTable: dynamodb.ITable;
-  readonly leadsTable: dynamodb.ITable;
   readonly usageTable: dynamodb.ITable;
   readonly callerMemory: { readonly memoryId: string; readonly memoryArn: string };
 }
@@ -36,7 +35,7 @@ export class ConsoleStack extends cdk.Stack {
 
     const fn = new NodejsFunction(this, 'Api', {
       functionName: `${prefix}-console`,
-      description: 'Read-only console: calls, leads, caller memory per tenant',
+      description: 'Read-only console: calls, caller memory, costs per tenant',
       entry: path.resolve(here, '../../console/src/api.ts'),
       handler: 'handler',
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -46,7 +45,6 @@ export class ConsoleStack extends cdk.Stack {
       environment: {
         TENANTS_TABLE: props.tenantsTable.tableName,
         CALLS_TABLE: props.callsTable.tableName,
-        LEADS_TABLE: props.leadsTable.tableName,
         USAGE_TABLE: props.usageTable.tableName,
         MEMORY_ID: props.callerMemory.memoryId,
         COGNITO_USER_POOL_ID: props.userPool.userPoolId,
@@ -55,7 +53,6 @@ export class ConsoleStack extends cdk.Stack {
     });
     props.tenantsTable.grantReadData(fn);
     props.callsTable.grantReadData(fn);
-    props.leadsTable.grantReadData(fn);
     props.usageTable.grantReadData(fn);
     fn.addToRolePolicy(new iam.PolicyStatement({
       actions: MEMORY_USE_ACTIONS,

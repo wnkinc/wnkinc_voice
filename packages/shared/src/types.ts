@@ -150,9 +150,14 @@ export interface CallRecord {
   expiresAt?: number; // DynamoDB TTL (epoch seconds)
 }
 
+/**
+ * What the receptionist captured, as carried on the `lead.recorded` event. Not
+ * a table: the tenant's CRM is the record of the lead, and the call row (the
+ * `record_lead` tool call plus the once-markers each consumer writes) is the
+ * audit that the platform did what it should. `leadId` keys those markers.
+ */
 export interface Lead {
   tenantId: string;
-  sk: string; // `${createdAt}#${leadId}` for time-ordered queries
   leadId: string;
   callId: string;
   createdAt: string;

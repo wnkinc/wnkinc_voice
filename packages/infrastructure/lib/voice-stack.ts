@@ -40,13 +40,12 @@ export interface VoiceStackProps extends cdk.StackProps {
 /**
  * The voice receptionist: API Gateway (HTTP) -> webhook Lambda -> [accept call]
  * -> SQS -> session Lambda (WebSocket to OpenAI). DynamoDB: tenants (by called
- * number), calls, leads. EventBridge bus: lead.recorded / owner.notify /
+ * number), calls. EventBridge bus: lead.recorded / owner.notify /
  * call.ended -> notifier + crm-sync Lambdas.
  */
 export class VoiceStack extends cdk.Stack {
   readonly tenantsTable: dynamodb.Table;
   readonly callsTable: dynamodb.Table;
-  readonly leadsTable: dynamodb.Table;
   readonly bus: events.EventBus;
   /** Usage metering records: (tenantId, timestamp#meter) -> units. */
   readonly usageTable: dynamodb.Table;
@@ -99,13 +98,6 @@ export class VoiceStack extends cdk.Stack {
       sortKey: { name: 'startedAt', type: dynamodb.AttributeType.STRING },
     });
 
-    this.leadsTable = new dynamodb.Table(this, 'Leads', {
-      partitionKey: { name: 'tenantId', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
-
     this.usageTable = new dynamodb.Table(this, 'Usage', {
       partitionKey: { name: 'tenantId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
@@ -139,7 +131,6 @@ export class VoiceStack extends cdk.Stack {
     const commonEnv = {
       TENANTS_TABLE: this.tenantsTable.tableName,
       CALLS_TABLE: this.callsTable.tableName,
-      LEADS_TABLE: this.leadsTable.tableName,
       EVENT_BUS_NAME: this.bus.eventBusName,
       EVENT_SOURCE,
       OPENAI_SECRET_ARN: this.openaiSecret.secretArn,
@@ -206,7 +197,6 @@ export class VoiceStack extends cdk.Stack {
     this.openaiSecret.grantRead(sessionFn);
     this.tenantsTable.grantReadData(sessionFn);
     this.callsTable.grantReadWriteData(sessionFn);
-    this.leadsTable.grantWriteData(sessionFn);
     this.bus.grantPutEventsTo(sessionFn);
     sessionFn.addEventSource(new SqsEventSource(sessionQueue, {
       batchSize: 1, // one call per invocation
@@ -293,7 +283,6 @@ export class VoiceStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'tenantsTableName', { value: this.tenantsTable.tableName });
     new cdk.CfnOutput(this, 'peopleTableName', { value: this.peopleTable.tableName });
     new cdk.CfnOutput(this, 'callsTableName', { value: this.callsTable.tableName });
-    new cdk.CfnOutput(this, 'leadsTableName', { value: this.leadsTable.tableName });
     new cdk.CfnOutput(this, 'eventBusName', { value: this.bus.eventBusName });
     new cdk.CfnOutput(this, 'sessionQueueUrl', { value: sessionQueue.queueUrl });
     new cdk.CfnOutput(this, 'sessionFunctionName', { value: sessionFn.functionName });

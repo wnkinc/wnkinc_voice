@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { OpenAIRealtimeSIP, RealtimeAgent, tool, type RealtimeContextData, type RealtimeSessionOptions } from '@openai/agents/realtime';
 import type { RunContext } from '@openai/agents';
 import type { CallAcceptParams } from 'openai/resources/realtime/calls';
@@ -7,7 +8,7 @@ import type { EventPublisher } from '@wnk/shared';
 import { buildInstructions } from '@wnk/shared';
 import { normalizePhone } from './sip.js';
 import type { Store } from '@wnk/shared';
-import type { CallExtras, CallParty, TenantConfig } from '@wnk/shared';
+import type { CallExtras, CallParty, Lead, TenantConfig } from '@wnk/shared';
 
 /** Everything a tool may touch during a call. Passed as the RealtimeSession context. */
 export interface CallContext {
@@ -42,14 +43,18 @@ export const EndCallArgs = z.object({
   reason: z.enum(['completed', 'caller_requested', 'spam', 'abusive', 'no_response']).default('completed'),
 });
 
-// The tools run in-process: each is one write or one publish, and the tenant
-// comes from the call context the webhook built from the signed called
-// number — the model never supplies it. Everything multi-step (email, owner
-// notification, CRM sync) is a consumer of the events these publish.
+// The tools run in-process: each is one publish, and the tenant comes from the
+// call context the webhook built from the signed called number — the model
+// never supplies it. Everything multi-step (email, owner notification, CRM
+// sync) is a consumer of the events these publish. The platform keeps no lead
+// table: the tenant's CRM holds the lead, and the call row (this tool call,
+// plus each consumer's once-marker) is the audit that it got there.
 export const handlers = {
   async record_lead(args: z.infer<typeof RecordLeadArgs>, ctx: CallContext) {
     const phone = normalizePhone(args.phone) ?? ctx.party.from;
-    const lead = await ctx.store.createLead({
+    const lead: Lead = {
+      leadId: randomUUID(),
+      createdAt: new Date().toISOString(),
       tenantId: ctx.tenant.tenantId,
       callId: ctx.callId,
       callerName: args.caller_name,
@@ -57,7 +62,7 @@ export const handlers = {
       reason: args.reason,
       preferredCallbackTime: args.preferred_callback_time,
       notes: args.notes,
-    });
+    };
     await ctx.events.publish({ type: 'lead.recorded', tenantId: ctx.tenant.tenantId, tenantPhoneNumber: ctx.tenant.phoneNumber, callId: ctx.callId, lead });
     ctx.log.info('lead recorded', { leadId: lead.leadId });
     return { ok: true, lead_id: lead.leadId, phone_saved: phone ?? null };

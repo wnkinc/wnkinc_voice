@@ -22,7 +22,7 @@ function fakeCrm(existing?: { id: string; firstName?: string }): CrmAdapter & { 
 const base = { tenantId: 'acme', tenantPhoneNumber: '+15555550100', callId: 'call_1' };
 const leadEvent = (phone?: string): CrmSyncEvent => ({
   'detail-type': 'lead.recorded',
-  detail: { ...base, lead: { tenantId: 'acme', sk: 'x', leadId: 'L1', callId: 'call_1', createdAt: 'now', callerName: 'Jordan Rivera', phone, reason: 'door replacement', preferredCallbackTime: 'mornings' } },
+  detail: { ...base, lead: { tenantId: 'acme', leadId: 'L1', callId: 'call_1', createdAt: 'now', callerName: 'Jordan Rivera', phone, reason: 'door replacement', preferredCallbackTime: 'mornings' } },
 } as CrmSyncEvent);
 const endedEvent = (callerPhone?: string): CrmSyncEvent => ({
   'detail-type': 'call.ended',

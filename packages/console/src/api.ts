@@ -3,7 +3,6 @@
  *   GET /            the single-page UI (Cognito Hosted UI login, PKCE)
  *   GET /api/me      who am I (from the verified ID token)
  *   GET /api/calls   newest calls for MY tenant     GET /api/calls/{id} one call
- *   GET /api/leads   newest leads for MY tenant
  *   GET /api/memories?phone=+1...   what the platform remembers about a caller
  *
  * Tenancy is the point: every query is keyed by the custom:businessId claim in
@@ -115,7 +114,6 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     if (!call || call.tenantId !== tenantId) return json(404, { error: 'no such call' }); // tenant check, always
     return json(200, call);
   }
-  if (path === '/api/leads') return json(200, await store.listLeads(tenantId, 50));
   if (path === '/api/tenant') {
     const config = await store.findTenantById(tenantId);
     if (!config) return json(404, { error: 'no tenant config' });

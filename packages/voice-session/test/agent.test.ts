@@ -64,17 +64,19 @@ describe('tool handlers', () => {
     return { c, store, events, hangup: () => hangup };
   }
 
-  it('record_lead stores the lead and publishes lead.recorded', async () => {
-    const { c, store, events } = ctx();
+  it('record_lead publishes lead.recorded carrying the lead', async () => {
+    const { c, events } = ctx();
     const res = await handlers.record_lead({ caller_name: 'Sam', phone: '(555) 555-0111', reason: 'leaky faucet' }, c);
     expect(res.ok).toBe(true);
-    expect(store.leads[0]).toMatchObject({ tenantId: 'acme', callId: 'call_1', callerName: 'Sam', phone: '+15555550111', reason: 'leaky faucet' });
-    expect(events.events[0]).toMatchObject({ type: 'lead.recorded', tenantId: 'acme', callId: 'call_1' });
+    expect(events.events[0]).toMatchObject({
+      type: 'lead.recorded', tenantId: 'acme', callId: 'call_1',
+      lead: { leadId: res.lead_id, tenantId: 'acme', callId: 'call_1', callerName: 'Sam', phone: '+15555550111', reason: 'leaky faucet' },
+    });
   });
   it('record_lead falls back to caller id when no phone given', async () => {
-    const { c, store } = ctx();
+    const { c, events } = ctx();
     await handlers.record_lead({ caller_name: 'Sam', reason: 'x' }, c);
-    expect(store.leads[0]?.phone).toBe('+15555550123');
+    expect(events.events[0]).toMatchObject({ type: 'lead.recorded', lead: { phone: '+15555550123' } });
   });
   it('notify_owner publishes owner.notify', async () => {
     const { c, events } = ctx();

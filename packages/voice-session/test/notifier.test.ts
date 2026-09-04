@@ -8,7 +8,7 @@ const lead: NotifierEvent = {
   'detail-type': 'lead.recorded',
   detail: {
     tenantId: 'acme', tenantPhoneNumber: '+15555550100', callId: 'call_1',
-    lead: { tenantId: 'acme', sk: 'x', leadId: 'L1', callId: 'call_1', createdAt: 'now', callerName: 'Sam', phone: '+15555550111', reason: 'leak' },
+    lead: { tenantId: 'acme', leadId: 'L1', callId: 'call_1', createdAt: 'now', callerName: 'Sam', phone: '+15555550111', reason: 'leak' },
   },
 } as NotifierEvent;
 

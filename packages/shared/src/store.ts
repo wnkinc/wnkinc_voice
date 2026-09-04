@@ -1,12 +1,9 @@
-import { randomUUID } from 'node:crypto';
 import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { env } from './config.js';
-import { personChannelKeys, TenantConfigSchema, type CallRecord, type CallStatus, type Lead, type PersonRecord, type TenantConfig, type TenantConfigInput, type ToolCallRecord, type TranscriptEntry } from './types.js';
+import { personChannelKeys, TenantConfigSchema, type CallRecord, type CallStatus, type PersonRecord, type TenantConfig, type TenantConfigInput, type ToolCallRecord, type TranscriptEntry } from './types.js';
 
 const CALL_TTL_DAYS = 90;
-
-export type NewLead = Omit<Lead, 'sk' | 'leadId' | 'createdAt'>;
 
 /** All persistence behind one interface: DynamoDB in AWS, in-memory in tests. */
 export interface Store {
@@ -28,7 +25,6 @@ export interface Store {
   setCallStatus(callId: string, status: CallStatus, extra?: Partial<CallRecord>): Promise<void>;
   appendTranscript(callId: string, entry: TranscriptEntry): Promise<void>;
   appendToolCall(callId: string, tc: ToolCallRecord): Promise<void>;
-  createLead(lead: NewLead): Promise<Lead>;
   /**
    * Once-markers for side effects that run under at-least-once delivery
    * (EventBridge, Lambda async retries, our own SDK retries). Pattern:
@@ -49,19 +45,11 @@ export interface Store {
   findTenantById(tenantId: string): Promise<TenantConfig | undefined>;
   /** Newest-first calls for a tenant (byTenant GSI). */
   listCalls(tenantId: string, limit?: number): Promise<CallRecord[]>;
-  /** Newest-first leads for a tenant. */
-  listLeads(tenantId: string, limit?: number): Promise<Lead[]>;
 }
 
 function peopleRecords(tenant: TenantConfig): PersonRecord[] {
   return tenant.people.flatMap((p) =>
     personChannelKeys(p).map((channelId) => ({ channelId, tenantId: tenant.tenantId, tenantPhone: tenant.phoneNumber, name: p.name, role: p.role })));
-}
-
-function buildLead(input: NewLead): Lead {
-  const leadId = randomUUID();
-  const createdAt = new Date().toISOString();
-  return { ...input, leadId, createdAt, sk: `${createdAt}#${leadId}` };
 }
 
 export function dynamoStore(): Store {
@@ -73,7 +61,6 @@ export function dynamoStore(): Store {
   };
   const tenants = () => table('TENANTS_TABLE', env.tenantsTable);
   const calls = () => table('CALLS_TABLE', env.callsTable);
-  const leads = () => table('LEADS_TABLE', env.leadsTable);
   const people = () => table('PEOPLE_TABLE', env.peopleTable);
 
   const appendList = (callId: string, attr: 'transcript' | 'toolCalls', item: unknown) =>
@@ -150,11 +137,6 @@ export function dynamoStore(): Store {
     },
     appendTranscript: (callId, entry) => appendList(callId, 'transcript', entry).then(() => {}),
     appendToolCall: (callId, tc) => appendList(callId, 'toolCalls', tc).then(() => {}),
-    async createLead(input) {
-      const lead = buildLead(input);
-      await db.send(new PutCommand({ TableName: leads(), Item: lead }));
-      return lead;
-    },
     async isDone(callId, key) {
       const res = await db.send(new GetCommand({
         TableName: calls(), Key: { callId },
@@ -199,27 +181,16 @@ export function dynamoStore(): Store {
       }));
       return (res.Items ?? []) as CallRecord[];
     },
-    async listLeads(tenantId, limit = 50) {
-      const res = await db.send(new QueryCommand({
-        TableName: leads(),
-        KeyConditionExpression: 'tenantId = :t',
-        ExpressionAttributeValues: { ':t': tenantId },
-        ScanIndexForward: false,
-        Limit: limit,
-      }));
-      return (res.Items ?? []) as Lead[];
-    },
   };
 }
 
 /** In-memory store for tests. */
-export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls: Map<string, CallRecord>; leads: Lead[] } {
+export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls: Map<string, CallRecord> } {
   const tenantMap = new Map(tenants.map((t) => {
     const parsed = TenantConfigSchema.parse(t);
     return [parsed.phoneNumber, parsed] as const;
   }));
   const calls = new Map<string, CallRecord>();
-  const leads: Lead[] = [];
   const done = new Set<string>();
   const peopleMap = new Map<string, PersonRecord>();
   const must = (id: string) => {
@@ -229,7 +200,6 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
   };
   return {
     calls,
-    leads,
     getTenant: async (n) => tenantMap.get(n),
     async putTenant(input) {
       const t = TenantConfigSchema.parse(input);
@@ -259,14 +229,6 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
     async listCalls(tenantId, limit = 50) {
       return [...calls.values()].filter((c) => c.tenantId === tenantId)
         .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? '')).slice(0, limit);
-    },
-    async listLeads(tenantId, limit = 50) {
-      return leads.filter((l) => l.tenantId === tenantId).slice().reverse().slice(0, limit);
-    },
-    async createLead(input) {
-      const lead = buildLead(input);
-      leads.push(lead);
-      return lead;
     },
     isDone: async (id, key) => done.has(`${id}|${key}`),
     async markDone(id, key) {
