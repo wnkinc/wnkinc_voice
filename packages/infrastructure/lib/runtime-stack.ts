@@ -320,7 +320,7 @@ export class RuntimeStack extends cdk.Stack {
         + ` & ($exists($note.hs_note_body) ? '\\nLast note (' & $substring($note.hs_createdate, 0, 10) & '):\\n' & ${noteText} : '\\nNo notes on this contact yet.')`
         + " : 'no matching contact.') & '\\n'",
       // Preference records arrive as JSON text; show their preference sentence, not the blob.
-      "($count($memories) > 0 ? '\\nWhat the platform remembers about this caller:\\n' & $join($memories.('- ' & ($substring($, 0, 1) = '{' ? $match($, /\"preference\":\"([^\"]*)\"/)[0].groups[0] : $)), '\\n') & '\\n' : '')",
+      "($count($memories) > 0 ? '\\nCaller preferences (from earlier calls):\\n' & $join($memories.('- ' & ($substring($, 0, 1) = '{' ? $match($, /\"preference\":\"([^\"]*)\"/)[0].groups[0] : $)), '\\n') & '\\n' : '')",
       `'\\nSuggested text: Hi ' & $split(${lead}.callerName, ' ')[0] & ', this is ' & $tenant.businessName.S & '. Thanks for calling about ' & ${lead}.reason & '. When is a good time to talk? Reply here or call ' & $tenant.phoneNumber.S & '.\\n'`,
       "'\\nCall ' & $states.input.detail.callId",
     ].join(' & ');
@@ -384,14 +384,16 @@ export class RuntimeStack extends cdk.Stack {
           Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasPhone' }],
           Output: q('$states.input'), Next: 'HasPhone',
         },
-        // ---- Enrichment: caller memory (facts from earlier calls), best effort --
+        // ---- Enrichment: caller preferences from memory, best effort -----------
         HasPhone: { Type: 'Choice', Choices: [{ Condition: q(`$exists(${lead}.phone)`), Next: props.callerMemory ? 'RecallMemory' : 'OwnerEmail' }], Default: 'OwnerEmail' },
         ...(props.callerMemory ? { RecallMemory: {
           Type: 'Task', Resource: 'arn:aws:states:::aws-sdk:bedrockagentcore:retrieveMemoryRecords',
           Arguments: {
             MemoryId: props.callerMemory.memoryId,
-            NamespacePath: q(`'/callers/' & $tenant.tenantId.S & '_' & $replace(${lead}.phone, /[^0-9]/, '')`),
-            SearchCriteria: { SearchQuery: 'who this caller is, their jobs, and their preferences', TopK: 6 },
+            // Preferences only: how and when the caller wants to be reached, which the
+            // CRM has no field for. Facts and session summaries are the assistant's.
+            NamespacePath: q(`'/callers/' & $tenant.tenantId.S & '_' & $replace(${lead}.phone, /[^0-9]/, '') & '/preferences'`),
+            SearchCriteria: { SearchQuery: 'how and when this caller prefers to be contacted', TopK: 4 },
           },
           Assign: { memories: q('[$states.result.MemoryRecordSummaries.Content.Text]') },
           Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'OwnerEmail' }],
