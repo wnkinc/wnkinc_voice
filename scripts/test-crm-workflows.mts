@@ -1,8 +1,8 @@
 /**
  * Prove the CRM workflows end to end against the tenant's real HubSpot:
  * a lead.recorded event (contact upsert + note + task) and a call.ended
- * event (transcript note on the contact, read from a call row this script
- * writes). Success is judged by side effects: the once-markers on the call
+ * event (transcript note on the contact, plus the call-ended workflow: memory
+ * and usage; all read from a call row this script writes). Success is judged by side effects: the once-markers on the call
  * row, then the note and task visible through Composio.
  *
  *   npx tsx scripts/test-crm-workflows.mts [tenantId] [phone] [callerName]
@@ -60,6 +60,7 @@ console.log('lead.recorded published; waiting for done:crm:lead...');
 console.log(await waitForMarker(callId, `crm:lead:${lead.leadId}`) ? '  ✓ lead synced (marker set)' : '  ✗ no marker within 90 s');
 
 await publish('call.ended', { ...base, callerPhone: phone, status: 'completed', durationSeconds: 61 });
-console.log('call.ended published; waiting for done:crm:call...');
-console.log(await waitForMarker(callId, 'crm:call') ? '  ✓ transcript note synced (marker set)' : '  ✗ no marker within 90 s');
+console.log('call.ended published; waiting for done:crm:call and done:call.ended...');
+console.log(await waitForMarker(callId, 'crm:call') ? '  ✓ transcript note synced (marker set)' : '  ✗ no crm:call marker within 90 s');
+console.log(await waitForMarker(callId, 'call.ended') ? '  ✓ memory written + minutes metered (marker set)' : '  ✗ no call.ended marker within 90 s');
 console.log(`check HubSpot: the contact for ${phone} should show a "Phone lead via receptionist" note, a "Follow up with ${callerName}" task, and a "Call to ... line - 1 min" note.`);

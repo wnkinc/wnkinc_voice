@@ -34,14 +34,15 @@ export interface RuntimeStackProps extends cdk.StackProps {
   /** The platform HTTP API; the Telegram webhook route is added here. */
   readonly api: apigwv2.IHttpApi;
   readonly alarmTopic: sns.ITopic;
-  /** Platform memory: the harness threads sessions and retrieves facts from it. */
+  /** Platform memory: the harness threads sessions and retrieves facts from it; the call-ended workflow writes transcripts. */
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
 }
 
 /**
  * The platform's agent, My Assistant (an AgentCore harness driven by the
  * Telegram workflow), and the two deterministic workflows on bus events:
- * CRM sync, the lead email, and the owner alert. No code in this stack.
+ * CRM sync, the call-ended tail (memory, usage), the lead email, and the
+ * owner alert. No code in this stack.
  */
 export class RuntimeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: RuntimeStackProps) {
@@ -671,6 +672,75 @@ export class RuntimeStack extends cdk.Stack {
     failedExecutionsAlarm(this, 'CrmLeadWorkflowFailed', crmLeadWorkflow, props.alarmTopic, 'CRM sync (lead)');
     failedExecutionsAlarm(this, 'CrmCallWorkflowFailed', crmCallWorkflow, props.alarmTopic, 'CRM sync (call)');
 
+    // ---- Call ended: transcript -> caller memory, minutes -> usage -------------
+    //
+    // Express, execution data not logged (the transcript). The session Lambda
+    // publishes ids and the outcome only; this reads the transcript from the
+    // call row by id, writes it to the caller's memory (facts and preferences
+    // are extracted asynchronously), and meters the minutes. Once-marker, since
+    // a redelivered event would otherwise double both.
+    const endedDefinition = {
+      QueryLanguage: 'JSONata',
+      StartAt: 'Completed',
+      States: {
+        Completed: { Type: 'Choice', Choices: [{ Condition: q("$states.input.detail.status = 'completed' and $states.input.detail.durationSeconds > 0"), Next: 'CheckDone' }], Default: 'Skipped' },
+        Skipped: { Type: 'Succeed' },
+        CheckDone: {
+          ...checkDone('done:call.ended', 'transcript'),
+          Assign: { done: q('$exists($states.result.Item.`done:call.ended`)'), transcript: q('[$states.result.Item.transcript.L]') },
+          Output: q('$states.input'), Next: 'AlreadyDone',
+        },
+        AlreadyDone: { Type: 'Choice', Choices: [{ Condition: q('$done'), Next: 'Skipped' }], Default: 'Usage' },
+        Usage: {
+          Type: 'Task', Resource: 'arn:aws:states:::dynamodb:putItem',
+          Arguments: { TableName: props.usageTable.tableName, Item: {
+            tenantId: { S: q('$states.input.detail.tenantId') },
+            sk: { S: q("$now() & '#voice_minutes#' & $uuid()") },
+            meter: { S: 'voice_minutes' },
+            units: { N: q('$string($states.input.detail.durationSeconds / 60)') },
+            ref: { S: q('$states.input.detail.callId') },
+          } },
+          Output: q('$states.input'), Next: props.callerMemory ? 'HasTranscript' : 'MarkDone',
+        },
+        ...(props.callerMemory ? {
+          HasTranscript: { Type: 'Choice', Choices: [{ Condition: q("$exists($states.input.detail.callerPhone) and $count($transcript[M.role.S != 'tool']) > 0"), Next: 'RememberCall' }], Default: 'MarkDone' },
+          RememberCall: {
+            Type: 'Task', Resource: 'arn:aws:states:::aws-sdk:bedrockagentcore:createEvent',
+            Arguments: {
+              MemoryId: props.callerMemory.memoryId,
+              ActorId: q("$states.input.detail.tenantId & '_' & $replace($states.input.detail.callerPhone, /[^0-9]/, '')"),
+              SessionId: q('$states.input.detail.callId'),
+              EventTimestamp: q('$now()'),
+              Payload: q("[$transcript[M.role.S != 'tool'].{'Conversational': {'Role': (M.role.S = 'user' ? 'USER' : 'ASSISTANT'), 'Content': {'Text': M.text.S}}}]"),
+            },
+            Output: q('$states.input'), Next: 'MarkDone',
+          },
+        } : {}),
+        MarkDone: markDone('done:call.ended'),
+      },
+    };
+    const endedWorkflow = new sfn.StateMachine(this, 'CallEndedWorkflow', {
+      stateMachineName: `${prefix}-call-ended`,
+      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(endedDefinition)),
+      timeout: cdk.Duration.minutes(2),
+      ...expressNoData(this, 'CallEndedWorkflowLogs'),
+    });
+    props.callsTable.grantReadWriteData(endedWorkflow);
+    props.usageTable.grantWriteData(endedWorkflow);
+    if (props.callerMemory) {
+      endedWorkflow.addToRolePolicy(new iam.PolicyStatement({
+        actions: MEMORY_USE_ACTIONS,
+        resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
+      }));
+    }
+    new events.Rule(this, 'CallEndedRule', {
+      eventBus: props.bus,
+      description: 'Route call.ended to the call-ended workflow (memory, usage)',
+      eventPattern: { source: ['wnkinc.voice'], detailType: ['call.ended'] },
+      targets: [new targets.SfnStateMachine(endedWorkflow, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: startDlq })],
+    });
+    failedExecutionsAlarm(this, 'CallEndedWorkflowFailed', endedWorkflow, props.alarmTopic, 'Call ended (memory, usage)');
+
     // ---- Owner alert: owner.notify -> Step Functions -> Telegram reply path ----
     //
     // The receptionist's notify_owner tool publishes owner.notify. This
@@ -729,6 +799,7 @@ export class RuntimeStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ownerAlertWorkflowArn', { value: alertWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'crmLeadWorkflowArn', { value: crmLeadWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'crmCallWorkflowArn', { value: crmCallWorkflow.stateMachineArn });
+    new cdk.CfnOutput(this, 'callEndedWorkflowArn', { value: endedWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'telegramWorkflowArn', { value: workflow.stateMachineArn });
   }

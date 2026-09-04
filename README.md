@@ -33,6 +33,7 @@ call). One deployment serves many businesses.
                         lead.recorded → HubSpot contact + note + task (via Composio HTTP)
                         lead.recorded → CRM + memory → owner's Gmail
                         call.ended    → transcript note on the HubSpot contact
+                        call.ended    → transcript to caller memory, minutes to usage
                         owner.notify  → owner on Telegram
 ```
 
@@ -44,7 +45,7 @@ do, and how to verify it. Start there when changing one.
 | Path | What |
 |---|---|
 | `packages/voice-session/src/webhook.ts` | Lambda (~40 lines, stdlib): verifies the OpenAI webhook signature and starts the accept workflow. The one piece of the call path that must be code |
-| `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration |
+| `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
 | `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
 | `packages/infrastructure/lib/workflows.ts` | Builders for the JSONata state machines: HTTP tasks through Connections, Express-without-data, SIP number parsing, business-day math (unit-tested with the jsonata package) |
@@ -53,7 +54,7 @@ do, and how to verify it. Start there when changing one.
 | `packages/shared/src/events.ts` | EventBridge publisher |
 | `packages/shared/src/types.ts` | `TenantConfig` schema (zod) and record/event types |
 | `packages/shared/src/config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger |
-| `packages/infrastructure/lib/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram workflow and reply path, plus four deterministic Step Functions workflows: CRM sync for leads and for call transcripts (HubSpot through Composio HTTP tasks), the lead email (CRM contact + last note and caller memory fetched → email formatted from those fields → sent from the owner's Gmail), and the owner alert (`owner.notify` → Telegram). Workflows that handle transcripts or CRM notes run as Express with execution data not logged |
+| `packages/infrastructure/lib/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram workflow and reply path, plus five deterministic Step Functions workflows: CRM sync for leads and for call transcripts (HubSpot through Composio HTTP tasks), the call-ended tail (transcript to caller memory, minutes to usage), the lead email (CRM contact + last note and caller memory fetched → email formatted from those fields → sent from the owner's Gmail), and the owner alert (`owner.notify` → Telegram). Workflows that handle transcripts or CRM notes run as Express with execution data not logged |
 | `packages/infrastructure/` | CDK app: `bin/app.ts` + `lib/voice-stack.ts` (the two Lambdas and the accept workflow) |
 | `scripts/seed-tenant.ts` | Upsert tenant JSON into the Tenants table |
 | `tenants/example.json` | Example tenant config |
@@ -165,12 +166,13 @@ Unknown numbers are rejected with SIP 404.
    wrap up; hangup follows the next `response.done` (hard stop 20 s later). The Lambda's
    15-minute timeout is the ceiling, hence `maxCallSeconds` maxes at 840.
 8. **End** — on socket close the call record gets `status`/`endedAt`, a `call.ended` event
-   is published with the full transcript, and the SQS message is deleted by the event
-   source mapping.
-9. **Failures** — an attach failure is reported as a batch item failure, so the message
-   becomes visible again (after the queue's visibility timeout) and the call is retried.
-   There is no mid-call re-attach: if an invocation dies, the call drops and the caller
-   calls back. A message received 3 times without completing goes to the DLQ.
+   (ids and outcome; the transcript stays on the row) is published, and the SQS message is
+   deleted by the event source mapping. The call-ended workflow writes the transcript to the
+   caller's memory and meters the minutes.
+9. **Failures** — an attach failure is reported as a batch item failure and the message
+   dead-letters at once (a retry after the 16-minute visibility timeout would reach a call
+   that ended long ago); the DLQ alarms. There is no mid-call re-attach: if an invocation
+   dies, the call drops and the caller calls back.
 
 ## Operating: traces, alarms, dead letters
 

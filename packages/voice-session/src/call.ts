@@ -3,15 +3,12 @@ import { buildAgent, greeting, sessionOptions, type CallContext } from './agent.
 import { createOpenAI, type Logger, type OpenAISecrets } from '@wnk/shared';
 import type { EventPublisher } from '@wnk/shared';
 import type { Store } from '@wnk/shared';
-import { recordUsage } from '@wnk/shared';
-import type { CallerMemory, CallStatus, SessionJob, TranscriptEntry } from '@wnk/shared';
+import type { CallStatus, SessionJob, TranscriptEntry } from '@wnk/shared';
 
 export interface CallDeps {
   secrets: () => Promise<OpenAISecrets>;
   store: Store;
   events: EventPublisher;
-  /** Platform caller memory; when present, finished calls are written to it. */
-  memory?: CallerMemory;
   log: Logger;
 }
 
@@ -195,14 +192,7 @@ export async function runCall(job: SessionJob, deps: CallDeps, opts: { deadlineM
   } catch (err) {
     log.error('failed to finalize call', { err });
   }
-  if (status === 'completed' && durationSeconds > 0) {
-    await recordUsage(tenant.tenantId, 'voice_minutes', durationSeconds / 60, callId);
-  }
-  if (deps.memory && job.from && status === 'completed' && transcript.length > 0) {
-    await deps.memory.recordCall(tenant.tenantId, job.from, callId, transcript)
-      .then(() => log.info('call written to caller memory'))
-      .catch((err) => log.warn('caller memory write failed', { err }));
-  }
+  // Memory and usage are the call-ended workflow's (runtime stack), from the row.
   log.info('call finished', { status, durationSeconds, turns: transcript.length });
   return { status, durationSeconds, transcript, error };
 }

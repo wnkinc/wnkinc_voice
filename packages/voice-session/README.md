@@ -14,16 +14,16 @@ fails closed.
 | OpenAI Agents SDK (`RealtimeSession` + `OpenAIRealtimeSIP`) | Runs the tool loop: validates arguments against zod, calls our handler, returns the result to the model. | https://github.com/openai/openai-agents-js/tree/main/examples/realtime-twilio-sip (the shape `call.ts` copies) |
 | API Gateway HTTP + Lambda | Receives the webhook; the Lambda only verifies the signature. | `infrastructure/lib/voice-stack.ts` |
 | Step Functions accept workflow (Express, no execution data) | Called number → tenant, claim, accept, caller recognition, job to SQS. All managed tasks; SIP parsing is a unit-tested JSONata expression. | `infrastructure/lib/workflows.ts` |
-| SQS (batch size 1, partial batch failure) | Hands one call to one session invocation; a failed attach is retried, three failures dead-letter. | https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html |
+| SQS (batch size 1, partial batch failure) | Hands one call to one session invocation; a failed attach dead-letters at once (a retry after the 16-minute visibility timeout would find a dead call). | https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html |
 | DynamoDB Tenants / Calls | Tenant row keyed by called number; call row is the audit (transcript, tool calls, once-markers). | |
 | EventBridge bus `wnkinc.voice` | `lead.recorded`, `owner.notify`, `call.ended` fan out to the CRM sync here and the runtime stack's workflows, each with retries and a DLQ. | https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-dlq.html |
 | Composio (HubSpot) | Caller recognition, from the accept workflow, under the tenant id. | |
-| AgentCore Memory | Caller facts recalled by the accept workflow, transcript written at hangup. | |
+| AgentCore Memory | Caller facts recalled by the accept workflow; the transcript is written by the call-ended workflow (runtime stack), not here. | |
 
 ## What the code is allowed to do, per file
 
 - `webhook.ts` — the one job only code can do on this path: verify the webhook HMAC over the raw body, then start the accept workflow. About 40 lines, stdlib crypto, no SDK bundle. Everything it used to do (tenant, claim, accept, recognition, enqueue) is the accept workflow in the voice stack.
-- `session.ts` / `call.ts` — hold the WebSocket for one call, log transcripts to the call row, enforce the time limit, hang up cleanly. A Lambda holds it because nothing managed holds a WebSocket for fifteen minutes and runs tools.
+- `session.ts` / `call.ts` — hold the WebSocket for one call, log transcripts and tool calls to the call row, enforce the time limit, hang up cleanly, publish `call.ended` (ids and outcome). Nothing else: memory and usage are the call-ended workflow's. A Lambda holds it because nothing managed holds a WebSocket for fifteen minutes and runs tools.
 - `agent.ts` — tenant row → session config (prompt, voice, model, tools) sent on attach, and the three tools. Each tool is one publish. The tenant comes from the call context; the model never names it.
 - Event consumers: none here. Every consumer of `lead.recorded`, `owner.notify`, and `call.ended` is a Step Functions workflow in the runtime stack (CRM sync, lead email, owner alert). The `call.ended` event carries ids and the outcome only; the transcript stays on the call row.
 

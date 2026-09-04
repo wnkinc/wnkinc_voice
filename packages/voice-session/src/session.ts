@@ -6,7 +6,7 @@
  */
 import type { Context, SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { runCall, type CallDeps, type CallOutcome } from './call.js';
-import { createLogger, getOpenAISecrets, memoryFromEnv, type Logger } from '@wnk/shared';
+import { createLogger, getOpenAISecrets, type Logger } from '@wnk/shared';
 import { eventBridgePublisher } from '@wnk/shared';
 import { dynamoStore } from '@wnk/shared';
 import type { SessionJob } from '@wnk/shared';
@@ -48,7 +48,7 @@ let deps: CallDeps | undefined; // built on first use so importing this module n
 export const handler = createSessionHandler({
   log,
   runCall: (job, deadlineMs) => {
-    deps ??= { secrets: getOpenAISecrets, store: dynamoStore(), events: eventBridgePublisher(), memory: memoryFromEnv(), log };
+    deps ??= { secrets: getOpenAISecrets, store: dynamoStore(), events: eventBridgePublisher(), log };
     return runCall(job, deps, { deadlineMs });
   },
 });

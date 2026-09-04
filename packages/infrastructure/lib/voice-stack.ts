@@ -116,13 +116,14 @@ export class VoiceStack extends cdk.Stack {
     if (props.alarmEmail) this.alarmTopic.addSubscription(new subs.EmailSubscription(props.alarmEmail));
 
     // Call jobs wait here until the session Lambda finishes the call. Visibility
-    // must cover the Lambda timeout; repeated failures land in the DLQ.
+    // must cover the Lambda timeout (16 min), so a retry would reach a call that
+    // ended long ago: a failed attach dead-letters at once and alarms instead.
     const sessionDlq = new sqs.Queue(this, 'SessionDlq', { retentionPeriod: cdk.Duration.days(14) });
     const sessionQueue = new sqs.Queue(this, 'SessionQueue', {
       visibilityTimeout: cdk.Duration.seconds(960),
       retentionPeriod: cdk.Duration.hours(1), // a call older than an hour is over
       receiveMessageWaitTime: cdk.Duration.seconds(20),
-      deadLetterQueue: { queue: sessionDlq, maxReceiveCount: 3 },
+      deadLetterQueue: { queue: sessionDlq, maxReceiveCount: 1 },
     });
 
     // ---- Lambdas --------------------------------------------------------------
@@ -179,20 +180,9 @@ export class VoiceStack extends cdk.Stack {
     this.openaiSecret.grantRead(webhookFn);
 
     const sessionFn = fn('session', 'session.ts', {
-      description: 'Holds the OpenAI Realtime WebSocket for one call and runs the tool loop',
+      description: 'Holds the OpenAI Realtime WebSocket for one call and runs the tool loop; nothing else',
       timeout: cdk.Duration.seconds(900),
     });
-    sessionFn.addEnvironment('USAGE_TABLE', this.usageTable.tableName);
-    this.usageTable.grantWriteData(sessionFn);
-    if (props.callerMemory) {
-      for (const f of [sessionFn]) {
-        f.addEnvironment('MEMORY_ID', props.callerMemory.memoryId);
-        f.addToRolePolicy(new iam.PolicyStatement({
-          actions: MEMORY_USE_ACTIONS,
-          resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
-        }));
-      }
-    }
     this.openaiSecret.grantRead(sessionFn);
     this.tenantsTable.grantReadData(sessionFn);
     this.callsTable.grantReadWriteData(sessionFn);
@@ -320,9 +310,15 @@ export class VoiceStack extends cdk.Stack {
             instructions: q("'You are ' & $tenant.agentName.S & ', the phone receptionist for ' & $tenant.businessName.S & '. The call has just connected and the receptionist system will start the conversation in a moment. Until you receive new instructions, do not speak.'"),
             audio: { output: { voice: q('$tenant.voice.S') } },
           }),
-          Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'MarkFailed' }],
+          Catch: [
+            // The caller hung up while ringing: not an error worth paging for.
+            { ErrorEquals: ['States.Http.StatusCode.404'], Output: q('$states.input'), Next: 'MarkGone' },
+            { ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'MarkFailed' },
+          ],
           Output: q('$states.input'), Next: 'MarkAccepted',
         },
+        MarkGone: { ...setStatus('failed', 'call gone before accept'), Next: 'Gone' },
+        Gone: { Type: 'Succeed' },
         MarkFailed: { ...setStatus('failed', 'accept failed'), Next: 'AcceptFailed' },
         AcceptFailed: { Type: 'Fail', Error: 'AcceptFailed', Cause: 'OpenAI did not accept the call (gone, or an API error); the call row is marked failed' },
         MarkAccepted: { ...setStatus('accepted'), Next: 'HasCrm' },
@@ -416,7 +412,7 @@ export class VoiceStack extends cdk.Stack {
     // Two questions, answered by CloudWatch: is anything failing right now
     // (function errors), and did anything fail for good (dead-letter queues).
 
-    dlqAlarm(this, 'SessionDlqAlarm', sessionDlq, this.alarmTopic, 'Voice: a call job failed 3 times');
+    dlqAlarm(this, 'SessionDlqAlarm', sessionDlq, this.alarmTopic, 'Voice: a session could not attach to a call');
     errorAlarm(this, 'WebhookErrors', webhookFn, this.alarmTopic, 'Voice webhook');
     errorAlarm(this, 'SessionErrors', sessionFn, this.alarmTopic, 'Voice session');
 
