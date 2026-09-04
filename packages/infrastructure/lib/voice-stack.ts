@@ -33,19 +33,8 @@ export interface VoiceStackProps extends cdk.StackProps {
   readonly sessionMaxConcurrency?: number;
   /** Where alarms page. Optional: the topic exists either way; the email is the first subscriber. */
   readonly alarmEmail?: string;
-  /**
-   * Gateway wiring for the session Lambda's tool calls. `gatewayUrl` comes from
-   * cdk.json context (a stable string) rather than a stack reference — the
-   * gateway stack consumes this stack's tools Lambda, so a CFN reference in the
-   * other direction would be a cycle. Unset: tools run in-process (first deploy).
-   */
   /** Admin/test app clients the interceptor passes through without tenant attribution (they name the tenant themselves). */
   readonly platformClientIds?: string[];
-  readonly gateway?: {
-    readonly gatewayUrl: string;
-    readonly userPoolId: string;
-    readonly tokenUrl: string;
-  };
   /** Caller memory (AgentCore Memory): webhook recalls, session writes. */
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
 }
@@ -214,21 +203,7 @@ export class VoiceStack extends cdk.Stack {
     const sessionFn = fn('session', 'session.ts', {
       description: 'Holds the OpenAI Realtime WebSocket for one call and runs the tool loop',
       timeout: cdk.Duration.seconds(900),
-      env: props.gateway
-        ? {
-            GATEWAY_URL: props.gateway.gatewayUrl,
-            COGNITO_USER_POOL_ID: props.gateway.userPoolId,
-            GATEWAY_SCOPE: 'gateway/voice',
-            COGNITO_TOKEN_URL: props.gateway.tokenUrl,
-          }
-        : {},
     });
-    if (props.gateway) {
-      sessionFn.addToRolePolicy(new iam.PolicyStatement({
-        actions: ['cognito-idp:DescribeUserPoolClient'],
-        resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${props.gateway.userPoolId}`],
-      }));
-    }
     sessionFn.addEnvironment('USAGE_TABLE', this.usageTable.tableName);
     this.usageTable.grantWriteData(sessionFn);
     if (props.callerMemory) {

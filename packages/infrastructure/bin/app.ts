@@ -16,23 +16,12 @@ const auth = new CognitoStack(app, 'wnk-auth-dev', { prefix, env });
 const memory = new MemoryStack(app, 'wnk-memory-dev', { prefix, env });
 const callerMemory = { memoryId: memory.memory.memoryId, memoryArn: memory.memory.memoryArn };
 
-// The gateway's URL, from context: the gateway stack consumes the voice stack's
-// tools Lambda, so the URL can't be a stack reference without a cycle. Set/update
-// `wnk:gatewayUrl` in cdk.json after (re)creating the gateway.
-const gatewayUrl = app.node.tryGetContext('wnk:gatewayUrl') as string | undefined;
 const voice = new VoiceStack(app, 'wnk-voice-dev', {
   prefix,
   env,
   sesFromEmail: process.env.SES_FROM_EMAIL ?? '',
   alarmEmail: process.env.ALARM_EMAIL,
   platformClientIds: [auth.machineClient.userPoolClientId],
-  gateway: gatewayUrl
-    ? {
-        gatewayUrl,
-        userPoolId: auth.userPool.userPoolId,
-        tokenUrl: auth.tokenUrl,
-      }
-    : undefined,
   callerMemory,
 });
 const identity = new IdentityStack(app, 'wnk-identity-dev', {
