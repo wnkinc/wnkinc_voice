@@ -33,6 +33,9 @@ call). One deployment serves many businesses.
 
 ## Layout
 
+Each package has its own README: what rented service it sits on, what its code is allowed to
+do, and how to verify it. Start there when changing one.
+
 | Path | What |
 |---|---|
 | `packages/voice-session/src/webhook.ts` | Lambda: `POST /openai/webhook` — verify, route by called number, claim, accept, enqueue |
