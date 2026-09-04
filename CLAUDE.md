@@ -8,8 +8,8 @@ that decide *how* to change it.
 1. **The smallest amount of custom code that offers multiple services safely
    across multiple tenants.**
 2. **Thin product code on top of thick rented infrastructure.** Managed services
-   (AgentCore Gateway/Identity/Policy/Memory/Runtime, Cognito, DynamoDB,
-   EventBridge, Composio, OpenAI Realtime, Twilio) carry the enforcement. Custom
+   (AgentCore Identity/Memory/Runtime, Cognito, DynamoDB, EventBridge, Step
+   Functions, Composio, OpenAI Realtime, Twilio) carry the enforcement. Custom
    code only resolves tenant identity, threads it through, and fails closed.
 
 Why: this is a solo-built platform. Every line of custom code is maintenance and
@@ -32,11 +32,14 @@ should live.
 ## Safety invariants
 
 - Tenant id comes only from unforgeable inputs: signed webhook called-number,
-  verified JWT claim, events on our own bus, or the Gateway interceptor mapping
-  the caller's validated client identity to its tenant.
-- On the tool path, tenant context is written by the Gateway interceptor from
-  the caller's identity, never by the model and not by agent code. An agent
-  acts for a tenant by calling the Gateway as that tenant's own client.
+  verified JWT claim, events on our own bus, or a People-table row keyed by a
+  channel identity the channel vouches for.
+- The tenant is selected before any model runs, and that selection picks the
+  credential: in-process tools carry the call's tenant, automations take it
+  from the event and name it on every Composio call, and the assistant is
+  handed the tenant's own Composio session. Neither the model nor a caller
+  ever names a tenant. AgentCore Gateway with Cedar is a per-capability option
+  for a model that needs platform tools, not a mandatory hop.
 - Every per-tenant resource is addressed by tenant id in its key.
 - A missing or unknown tenant fails closed.
 - A service acts for a tenant only if that tenant's config enables it.
@@ -47,5 +50,5 @@ should live.
 
 ## Skills
 
-`new-tenant`, `new-tool`, `new-agent`, `new-policy` under `.claude/skills/` are
+`new-tenant`, `new-tool`, `new-agent` under `.claude/skills/` are
 the procedures for the recurring changes. Use them before improvising.

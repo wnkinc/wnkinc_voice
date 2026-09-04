@@ -94,7 +94,7 @@ async function tabCosts(month){
     '<button class="link" id="prevmo">← '+esc(prev)+'</button></p>'+
     '<table><tr><th>Meter</th><th>Units</th><th>Rate</th><th>Est. cost</th><th>What it is</th></tr>'+
     c.lines.map(l=>'<tr><td>'+esc(l.meter)+'</td><td>'+l.units+'</td><td>$'+l.rate+'</td><td>$'+l.cost.toFixed(2)+'</td><td class="muted">'+esc(l.note)+'</td></tr>').join('')+
-    (c.overhead?'<tr><td>shared AWS overhead</td><td>—</td><td>—</td><td>$'+c.overhead.toFixed(2)+'</td><td class="muted">Lambda, DynamoDB, Gateway, Memory, logs (flat)</td></tr>':'')+
+    (c.overhead?'<tr><td>shared AWS overhead</td><td>—</td><td>—</td><td>$'+c.overhead.toFixed(2)+'</td><td class="muted">Lambda, DynamoDB, Step Functions, Memory, logs (flat)</td></tr>':'')+
     '<tr><td><b>Total</b></td><td></td><td></td><td><b>$'+c.total.toFixed(2)+'</b></td><td></td></tr></table>'+
     (c.lines.length?'':'<p class="muted">No usage recorded this month yet.</p>');
   document.getElementById('prevmo').onclick=()=>tabCosts(prev);

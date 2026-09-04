@@ -51,10 +51,10 @@ if (cfg?.crm) {
   if (cfg.crm.via !== 'composio') bad('CRM', `crm.via is "${cfg.crm.via}"; the token path is gone — consent via scripts/connect-composio.mts ${tenantId} hubspot and set via: composio`);
   else ok('CRM', 'hubspot via composio (prove with scripts/test-crm.mts)');
 } else ok('CRM', 'not configured (crm: none)');
-if (!cfg?.cognitoClientId) bad('Gateway identity', 'no cognitoClientId — re-run the seed with COGNITO_USER_POOL_ID/COGNITO_RESOURCE_SERVER_ID set');
-else ok('Gateway identity', cfg.cognitoClientId);
+if (cfg?.products.assistant.enabled && !cfg.composioMcpUrl) bad('Assistant tools', 'assistant is on but no composioMcpUrl — connect accounts, then re-run the seed with COMPOSIO_SECRET_ARN set');
+else if (cfg?.composioMcpUrl) ok('Assistant tools', 'Composio MCP session on the row');
 
-// 4. Services this tenant has turned on (Cedar admits any tenant with context present; no per-tenant policy)
+// 4. Services this tenant has turned on
 if (cfg) {
   const on = Object.entries(cfg.products).filter(([, v]) => v.enabled).map(([k]) => k);
   ok('services', on.length ? on.join(', ') : 'none enabled — voice receptionist only');

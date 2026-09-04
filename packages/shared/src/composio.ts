@@ -3,8 +3,6 @@
  * Composio tool slug. Composio is our SaaS credential broker (their verified
  * OAuth apps; tokens live in their vault, keyed by our tenantId): code calls
  * these functions, nothing else in the platform knows Composio exists.
- * LLM-facing surfaces get task-shaped Gateway tools that call THIS underneath —
- * never Composio's generic tools directly.
  *
  * Tenancy: every call names the tenant (Composio `userId` = our tenantId), so
  * the credential is chosen per call.

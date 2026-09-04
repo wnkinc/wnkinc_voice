@@ -1,24 +1,30 @@
 ---
 name: new-tool
-description: Add tools to the Gateway catalog — a new SaaS integration (OpenAPI target + credential provider) or new platform tools (Lambda target). Use when agents need to reach a new API (Salesforce, Slack, calendar) or a new internal capability.
+description: Give an agent a new capability — a SaaS the assistant can use, a task-shaped function for automations, a new voice tool, or (trigger-gated) a platform tool for an open-ended model. Use when an agent needs to reach a new API (Salesforce, Slack, calendar) or a new internal capability.
 ---
 
-# Add a Gateway tool
+# Add a capability
 
-Tools are data + wiring, not agent code: agents discover them from the catalog. Two shapes.
+Pick the shape by WHO chooses the tool.
 
-## SaaS integration (OpenAPI target)
+## An open-ended model needs a SaaS (My Assistant)
 
-1. **Spec**: add `packages/infrastructure/assets/<vendor>-openapi.json` — only the operations agents need, each with an `operationId` (that becomes the tool name, prefixed `<target>___`). Rules the service enforces: NO `securitySchemes`/`security` sections (auth is configured on the target, never in the spec); static `servers` URL; no oneOf/anyOf/allOf; application/json only.
-2. **Credentials** in `lib/identity-stack.ts`:
-   - API key: `ApiKeyCredentialProvider` with the key from Secrets Manager via `cdk.SecretValue.secretsManager(...)`.
-   - OAuth (3LO): `OAuth2CredentialProvider.using<Vendor>(...)`; output its `callbackUrl` and register it in the vendor's OAuth app; run a consent flow (print the authorization URL, poll the session, prove the token with one API read). For SaaS with a Composio integration, prefer `scripts/connect-composio.mts` and the Composio adapter instead.
-3. **Target** in `lib/gateway-stack.ts`: `gateway.addOpenApiTarget(...)` with the credential provider. CRITICAL for Bearer APIs: pass an explicit `ApiKeyCredentialLocation.header({ credentialParameterName: 'Authorization', credentialPrefix: 'Bearer' })` — NO trailing space; the CDK default `'Bearer '` plus the service's own joining space produces `Bearer  <key>` and an upstream 401.
-4. **Policy**: no agent can call the new tools until a Cedar permit names them (new-policy skill).
-5. **Prove it**: `scripts/test-gateway.ts` lists tools; call one through the gateway as the admin client. If a call returns "internal error", read `/wnk/agentcore/gateway` logs for the upstream response; if still opaque, point a temporary echo target (httpbin `/anything`) at the same credential provider to see exactly what the gateway sends.
+Composio brokers it; the model gets Composio's meta tools over the tenant's session. No code.
 
-## Platform tools (Lambda target)
+1. Confirm Composio has the toolkit (`composio.dev/toolkits/<slug>`).
+2. Owner consent: `npx tsx scripts/connect-composio.mts <tenantId> <toolkit>` (the adapter's `connectLink` creates a managed auth config on first use).
+3. Re-mint the tenant's session so it includes the new toolkit: delete `composioMcpUrl` from `tenants/<id>.json`, then re-run the seed with `COMPOSIO_SECRET_ARN` set. Commit the new URL.
+4. If the model needs guidance the toolkit's schemas do not give (formats, ids), add one sentence to the workflow prompt in `lib/runtime-stack.ts` — data, not code.
+5. Prove with `npx tsx scripts/test-assistant.mts "<a question that needs it>"`.
 
-1. Handler in `packages/lambda/src/` — the Gateway passes tool args as the event and the tool name in `context.clientContext.custom.bedrockAgentCoreToolName` (`<target>___<tool>`). Tenant context (`tenant_id`, `tenant_phone`) is written into the args by the Gateway's request interceptor from the caller's identity (declare the fields in the schema, never mark them required); other context (`call_id`, …) is injected by the calling agent. The model never supplies any of it, and Cedar guards `context.input has tenant_id`. SaaS credentials are chosen per call by tenant id (Composio) — never attach a credential to a target.
-2. The Lambda lives in `lib/voice-stack.ts` (it owns the tables/bus it touches); the target registration lives in `lib/gateway-stack.ts` via `addLambdaTarget` with an inline `ToolSchema` + `grantInvoke(gateway.role)`.
-3. Same policy + proof steps as above.
+## Code needs a SaaS (automations: email responder, CRM sync, notifier)
+
+Add a task-shaped function to `packages/shared/src/composio.ts` — the ONE file that may import `@composio/core` or name a tool slug. Take the tenant id as the first argument; never a default. A second CRM is a second `CrmAdapter` implementation there plus a `type` value on the tenant row.
+
+## The voice receptionist needs a tool
+
+In `packages/voice-session/src/agent.ts`: a zod args schema, a handler in `handlers` (one write or one publish — anything multi-step publishes an event and returns), a `tool({...})` entry in `TOOLS`; then list its name in the tenant's `tools`. Fields that differ between tenants belong on the tenant row, not in the schema.
+
+## An open-ended model needs a PLATFORM tool (trigger-gated)
+
+This is the trigger for AgentCore Gateway with a Lambda target and Cedar in front of that one capability. The last working shape — gateway stack, policy stack, interceptor, tools Lambda, per-tenant Cognito client — is at commit `832360b`. Recover only what that capability needs.

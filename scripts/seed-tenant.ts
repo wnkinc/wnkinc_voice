@@ -8,74 +8,14 @@
  * identity) and removes rows this tenant no longer lists — that is how someone
  * gains or loses access to the assistant. No deploy.
  *
- * And mints the tenant's Gateway identity if the file lacks it: a Cognito app
- * client (client-credentials, every agent scope) and an AgentCore Identity
- * OAuth2 provider wrapping it (what the assistant harness is handed per
- * invocation), both written back into the tenant file so they are committed
- * with the rest of the tenant's data. Needs COGNITO_USER_POOL_ID and
- * COGNITO_RESOURCE_SERVER_ID (auth stack outputs). The client secret stays in
- * Cognito and the vault; agents read it through IAM.
- *
  * And, when the assistant is on, mints the tenant's Composio meta-tools MCP
  * session (bound to the owner's connected accounts) and writes its URL back
  * as `composioMcpUrl`. Needs COMPOSIO_SECRET_ARN (voice stack output) or
  * COMPOSIO_API_KEY; the owner must have run connect-composio first.
  */
-import { BedrockAgentCoreControlClient, CreateOauth2CredentialProviderCommand } from '@aws-sdk/client-bedrock-agentcore-control';
-import { CognitoIdentityProviderClient, CreateUserPoolClientCommand, DescribeResourceServerCommand, DescribeUserPoolClientCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dynamoStore } from '@wnk/shared';
 import { composioAssistant } from '@wnk/shared/composio';
-
-async function ensureGatewayIdentity(raw: { tenantId?: string; cognitoClientId?: string }, file: string): Promise<void> {
-  if (raw.cognitoClientId || !raw.tenantId) return;
-  const { COGNITO_USER_POOL_ID: UserPoolId, COGNITO_RESOURCE_SERVER_ID: resourceServerId } = process.env;
-  if (!UserPoolId || !resourceServerId) {
-    console.warn(`${raw.tenantId}: no cognitoClientId and COGNITO_USER_POOL_ID/COGNITO_RESOURCE_SERVER_ID unset; agents cannot act for this tenant until one exists`);
-    return;
-  }
-  const cognito = new CognitoIdentityProviderClient({});
-  const rs = await cognito.send(new DescribeResourceServerCommand({ UserPoolId, Identifier: resourceServerId }));
-  const scopes = (rs.ResourceServer?.Scopes ?? []).map((s) => `${resourceServerId}/${s.ScopeName}`);
-  const created = await cognito.send(new CreateUserPoolClientCommand({
-    UserPoolId,
-    ClientName: `tenant-${raw.tenantId}`,
-    GenerateSecret: true,
-    AllowedOAuthFlowsUserPoolClient: true,
-    AllowedOAuthFlows: ['client_credentials'],
-    AllowedOAuthScopes: scopes,
-  }));
-  const clientId = created.UserPoolClient?.ClientId;
-  if (!clientId) throw new Error(`Cognito returned no client id for tenant ${raw.tenantId}`);
-  raw.cognitoClientId = clientId;
-  writeBack(file, raw.tenantId, 'cognitoClientId', clientId);
-  console.log(`minted Gateway identity for ${raw.tenantId}: ${clientId} (scopes: ${scopes.join(' ')})`);
-}
-
-/** The vault-side wrapper of the tenant's client, for the assistant harness. */
-async function ensureGatewayOauthProvider(raw: { tenantId?: string; cognitoClientId?: string; gatewayOauthProviderArn?: string }, file: string): Promise<void> {
-  if (raw.gatewayOauthProviderArn || !raw.tenantId || !raw.cognitoClientId) return;
-  const { COGNITO_USER_POOL_ID: UserPoolId } = process.env;
-  if (!UserPoolId) return;
-  const region = process.env.AWS_REGION ?? 'us-west-2';
-  const cognito = new CognitoIdentityProviderClient({});
-  const { UserPoolClient } = await cognito.send(new DescribeUserPoolClientCommand({ UserPoolId, ClientId: raw.cognitoClientId }));
-  if (!UserPoolClient?.ClientSecret) throw new Error(`client ${raw.cognitoClientId} has no secret`);
-  const control = new BedrockAgentCoreControlClient({});
-  const r = await control.send(new CreateOauth2CredentialProviderCommand({
-    name: `tenant-${raw.tenantId.replace(/[^A-Za-z0-9.-]/g, '-')}-gateway`, // ARN pattern forbids underscores
-    credentialProviderVendor: 'CustomOauth2',
-    oauth2ProviderConfigInput: { customOauth2ProviderConfig: {
-      clientId: raw.cognitoClientId,
-      clientSecret: UserPoolClient.ClientSecret,
-      oauthDiscovery: { discoveryUrl: `https://cognito-idp.${region}.amazonaws.com/${UserPoolId}/.well-known/openid-configuration` },
-    } },
-  }));
-  if (!r.credentialProviderArn) throw new Error(`Identity returned no provider ARN for tenant ${raw.tenantId}`);
-  raw.gatewayOauthProviderArn = r.credentialProviderArn;
-  writeBack(file, raw.tenantId, 'gatewayOauthProviderArn', r.credentialProviderArn);
-  console.log(`minted Gateway OAuth provider for ${raw.tenantId}: ${r.credentialProviderArn}`);
-}
 
 /** The assistant's SaaS tools: one Composio meta-tools session per tenant. */
 async function ensureComposioSession(raw: { tenantId?: string; composioMcpUrl?: string; products?: { assistant?: { enabled?: boolean } } }, file: string): Promise<void> {
@@ -125,8 +65,6 @@ for (const file of files) {
   const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
   const list = Array.isArray(parsed) ? parsed : [parsed];
   for (const raw of list) {
-    await ensureGatewayIdentity(raw as { tenantId?: string; cognitoClientId?: string }, file);
-    await ensureGatewayOauthProvider(raw as { tenantId?: string; cognitoClientId?: string; gatewayOauthProviderArn?: string }, file);
     await ensureComposioSession(raw as Parameters<typeof ensureComposioSession>[0], file);
     const tz = (raw as { timezone?: string }).timezone ?? 'America/Los_Angeles';
     (raw as { sessionDayOffsetMinutes?: number }).sessionDayOffsetMinutes = sessionDayOffsetMinutes(tz);

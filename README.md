@@ -42,13 +42,12 @@ call). One deployment serves many businesses.
 | `packages/voice-session/src/notifier.ts` | Lambda: EventBridge → SES email / SNS SMS |
 | `packages/voice-session/src/crm-sync.ts` | Lambda: EventBridge → CRM (lead → contact + note + task; call → transcript note) |
 | `packages/shared/src/composio.ts` | Composio adapter: Gmail and HubSpot with the tenant id as the only credential our code names (`CrmAdapter` lives in `shared/src/crm.ts`) |
-| `packages/lambda/src/interceptor.ts` | Gateway request interceptor: tenant context from the caller's client identity |
 | `packages/shared/src/store.ts` | DynamoDB (tenants, calls, leads) behind one `Store` interface, plus an in-memory version for tests |
 | `packages/shared/src/events.ts` | EventBridge publisher |
 | `packages/voice-session/src/sip.ts` | Caller/called number extraction from SIP headers |
 | `packages/shared/src/types.ts` | `TenantConfig` schema (zod) and record/event types |
 | `packages/shared/src/config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger |
-| `packages/email-responder/src/responder.ts` | Lambda: `lead.recorded` → CRM context via the Gateway (as the tenant) → OpenAI draft → owner's Gmail via Composio |
+| `packages/email-responder/src/responder.ts` | Lambda: `lead.recorded` → CRM context via the Composio adapter → OpenAI draft → owner's Gmail via Composio |
 | `packages/infrastructure/lib/runtime-stack.ts` | The email responder's rule + Lambda, and My Assistant as an AgentCore **harness** (configuration, no agent code) plus the Telegram workflow and reply path |
 | `packages/infrastructure/` | CDK app: `bin/app.ts` + `lib/voice-stack.ts` (NodejsFunction bundles the Lambdas) |
 | `scripts/seed-tenant.ts` | Upsert tenant JSON into the Tenants table |
@@ -134,7 +133,6 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `maxCallSeconds` (default 600, max 840) | Agent is asked to wrap up, then the call is hung up |
 | `active` | `false` → calls rejected with SIP 603 |
 | `crm` | `{ "type": "hubspot", "via": "composio" }` enables CRM sync, caller recognition, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
-| `cognitoClientId` | The tenant's Gateway identity, minted by the seed; every agent calls the Gateway as this client |
 | `composioMcpUrl` | The assistant's SaaS tools: the tenant's Composio meta-tools MCP session, minted by the seed once the owner has connected accounts. The workflow hands it to the harness per invocation; no URL, no SaaS tools. |
 | `products` | Which platform services are on for this tenant: `emailResponder: { enabled }`, `assistant: { enabled }`. The email responder sends from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default all off; agents refuse to act for a tenant whose flag is off. |
 
@@ -209,9 +207,9 @@ Per tenant, opt-in via `crm: { type: "hubspot", via: "composio" }`. The owner ap
 HubSpot app once; no HubSpot token exists anywhere in the platform. Every CRM call names the tenant
 (Composio `userId` = our tenant id), so the credential is chosen per call.
 
-- **Gateway tools** (`crm___search_contacts`, `get_contact`, `create_contact`, `add_note`) on the
-  platform tools Lambda; the tenant comes from the Gateway interceptor, and a tenant whose row has
-  no CRM gets a refusal, never someone else's CRM.
+- **My Assistant** reaches the CRM (and Gmail) through the tenant's Composio meta-tools MCP
+  session (`composioMcpUrl`), bound at seed time to the owner's connected accounts, so the model
+  can reach nothing else.
 - **`lead.recorded`** → contact upserted by phone, note with the lead, follow-up task due the
   next business morning in the tenant's timezone, assigned to the account's first owner.
 - **`call.ended`** → transcript note on the contact, if the caller is already a contact.
@@ -234,17 +232,22 @@ starts. The `notifier` Lambda is the v1 stand-in for that worker.
 
 ## Tenancy on the tool path
 
-Every agent calls the Gateway as the **tenant's own Cognito app client** (`cognitoClientId` on the
-tenant row, minted by the seed script) with the **agent's scope** (`gateway/voice`, `gateway/email`,
-`gateway/assistant`). The Gateway validates the JWT by scope, so onboarding a tenant never changes
-the gateway or its policies. A request interceptor then maps the validated `client_id` to the
-tenant (`byClientId` index) and writes `tenant_id` and `tenant_phone` into every `tools/call`,
-overwriting anything the caller sent. Tool schemas carry no tenant fields for the model; Cedar
-permits match the scope tag and contain no client or tenant ids. A client no tenant owns is
-refused before any tool runs.
+There is no Gateway hop. The tenant is selected **before any model runs**, from an unforgeable
+input, and that selection picks the credential:
 
-The only client without a tenant is the admin/test one (`PLATFORM_CLIENT_IDS`); it passes through
-and must name the tenant in its arguments itself.
+- **Voice receptionist**: the webhook resolves the tenant from the signed called number; the two
+  tools (`record_lead`, `notify_owner`) run in-process with that call context and are one write or
+  one publish each. Everything multi-step is a consumer of the events they publish.
+- **Automations** (email responder, notifier, CRM sync): the tenant id rides in the bus event; the
+  code calls the Composio adapter, which names the tenant on every call, or refuses when the row has
+  no such service.
+- **My Assistant**: the People table maps the Telegram sender to a tenant; the workflow hands the
+  harness that tenant's Composio session URL from the row. The session is bound to the owner's
+  connected accounts, so the model's tools cannot reach another tenant's SaaS.
+
+Neither a model nor a caller ever names a tenant. AgentCore Gateway with Cedar is the option for the
+day an open-ended model needs a *platform* tool, or a SaaS Composio does not broker needs OAuth in
+front of it — a capability-by-capability choice, not a mandatory layer (last shape: commit 832360b).
 
 ## My Assistant (Telegram)
 
@@ -259,7 +262,7 @@ talking decides the tenant, not which bot.
                                                                                           │ unknown sender / assistant off? → done, silently
                                                                                           ▼
                                                                     AgentCore harness (InvokeHarness state)
-                                                       Gateway tools AS the tenant · Memory · reply text back
+                                                       Composio MCP session AS the tenant · Memory · reply text back
                                                                                           │ PutEvents telegram.reply
                                                                                           ▼
                                                                     EventBridge API destination → Bot API sendMessage
@@ -267,9 +270,10 @@ talking decides the tenant, not which bot.
 
 **No code on the path.** The assistant is a harness: model, default prompt, memory, and limits are
 configuration in the runtime stack. Per invocation the workflow passes the message, a system prompt
-built from the tenant row, and the tenant's Gateway OAuth provider (`gatewayOauthProviderArn`,
-minted by the seed), so the harness calls tools as the tenant's own client and the Gateway
-interceptor attributes every call. Cedar scopes the assistant identity to the CRM tools. The harness
+built from the tenant row, and the tenant's Composio MCP session (`composioMcpUrl`, minted by the
+seed and bound to the owner's connected accounts), so the only SaaS the model can reach is that
+tenant's; Composio's meta tools keep the context small, and the harness `allowedTools` fences the
+server. The harness
 threads the conversation and extracts facts through the platform Memory instance (actor = tenant +
 person), surviving microVM expiry. Each person gets a fresh session per day, rolling at 3 AM in the
 tenant's timezone (`sessionDayOffsetMinutes`, computed by the seed; drifts an hour across DST until

@@ -28,7 +28,7 @@ export const RATES: {
       note: 'Informational count; Gmail send costs nothing',
     },
   },
-  // Shared AWS services (Lambda, DynamoDB, SQS, Gateway, Memory, logs) are
+  // Shared AWS services (Lambda, DynamoDB, SQS, Step Functions, Memory, logs) are
   // pennies at current scale — one flat line per active tenant-month instead
   // of itemizing. Recalibrate from the AWS bill.
   monthlyOverhead: 2.0,

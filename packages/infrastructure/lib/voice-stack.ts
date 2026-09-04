@@ -33,8 +33,6 @@ export interface VoiceStackProps extends cdk.StackProps {
   readonly sessionMaxConcurrency?: number;
   /** Where alarms page. Optional: the topic exists either way; the email is the first subscriber. */
   readonly alarmEmail?: string;
-  /** Admin/test app clients the interceptor passes through without tenant attribution (they name the tenant themselves). */
-  readonly platformClientIds?: string[];
   /** Caller memory (AgentCore Memory): webhook recalls, session writes. */
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
 }
@@ -57,10 +55,6 @@ export class VoiceStack extends cdk.Stack {
   readonly composioSecret: secretsmanager.Secret;
   /** Every alarm in every stack pages this topic. */
   readonly alarmTopic: sns.Topic;
-  /** Gateway Lambda target: record_lead + notify_owner as platform tools. */
-  readonly gatewayToolsFn: NodejsFunction;
-  /** Gateway REQUEST interceptor: tenant context from the caller's client identity. */
-  readonly gatewayInterceptorFn: NodejsFunction;
   /** Channel identity -> tenant + person: `telegram:<id>` (and `sms:<e164>` later). Seeded from each tenant's `people`. */
   readonly peopleTable: dynamodb.Table;
   /** The platform's HTTP API; other stacks add their own routes to it. */
@@ -85,12 +79,6 @@ export class VoiceStack extends cdk.Stack {
       partitionKey: { name: 'phoneNumber', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY, // learning stack; flip to RETAIN for real data
-    });
-
-    // The Gateway interceptor attributes a validated client_id to its tenant.
-    this.tenantsTable.addGlobalSecondaryIndex({
-      indexName: 'byClientId',
-      partitionKey: { name: 'cognitoClientId', type: dynamodb.AttributeType.STRING },
     });
 
     this.peopleTable = new dynamodb.Table(this, 'People', {
@@ -244,64 +232,17 @@ export class VoiceStack extends cdk.Stack {
     });
     this.tenantsTable.grantReadData(crmSyncFn);
 
-    // Gateway Lambda target: the voice tools as shared platform tools. Lives in
-    // this stack (it owns the tables and bus); the gateway stack registers it.
     // Composio: Gmail + HubSpot credential broker (their verified OAuth apps;
     // tokens in their vault keyed by our tenant id). Fill after deploy:
     //   aws secretsmanager put-secret-value --secret-id <arn> --secret-string '{"COMPOSIO_API_KEY":"ak_..."}'
     this.composioSecret = new secretsmanager.Secret(this, 'ComposioSecret', {
       description: 'Composio project API key ({"COMPOSIO_API_KEY": ...})',
     });
-
-    this.gatewayToolsFn = new NodejsFunction(this, 'gateway-tools', {
-      functionName: `${prefix}-gateway-tools`,
-      description: 'Gateway Lambda target: voice tools (record_lead, notify_owner) and CRM tools via Composio',
-      tracing: lambda.Tracing.ACTIVE,
-      entry: path.resolve(here, '../../lambda/src/tools.ts'),
-      handler: 'handler',
-      runtime: lambda.Runtime.NODEJS_22_X,
-      architecture: lambda.Architecture.ARM_64,
-      timeout: cdk.Duration.seconds(15),
-      environment: {
-        LEADS_TABLE: this.leadsTable.tableName,
-        TENANTS_TABLE: this.tenantsTable.tableName,
-        EVENT_BUS_NAME: this.bus.eventBusName,
-        EVENT_SOURCE,
-        COMPOSIO_SECRET_ARN: this.composioSecret.secretArn,
-        LOG_LEVEL: 'info',
-      },
-      bundling: { format: OutputFormat.ESM, target: 'node22', banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" },
-    });
-    this.leadsTable.grantWriteData(this.gatewayToolsFn);
-    this.tenantsTable.grantReadData(this.gatewayToolsFn);
-    this.composioSecret.grantRead(this.gatewayToolsFn);
-    // CRM sync and the webhook's caller recognition reach HubSpot the same way.
+    // CRM sync and the webhook's caller recognition reach HubSpot through Composio.
     this.composioSecret.grantRead(crmSyncFn);
     crmSyncFn.addEnvironment('COMPOSIO_SECRET_ARN', this.composioSecret.secretArn);
     this.composioSecret.grantRead(webhookFn);
     webhookFn.addEnvironment('COMPOSIO_SECRET_ARN', this.composioSecret.secretArn);
-    this.bus.grantPutEventsTo(this.gatewayToolsFn);
-
-    // Runs before every Gateway tool dispatch, after the Gateway has verified
-    // the caller's JWT. Reads client_id, looks the tenant up (byClientId GSI),
-    // writes tenant_id/tenant_phone into the arguments. Lives here because it
-    // is the one thing that reads the Tenants table on the tool path.
-    this.gatewayInterceptorFn = new NodejsFunction(this, 'gateway-interceptor', {
-      functionName: `${prefix}-gateway-interceptor`,
-      description: 'Gateway REQUEST interceptor: tenant context from the validated caller identity',
-      tracing: lambda.Tracing.ACTIVE,
-      entry: path.resolve(here, '../../lambda/src/interceptor.ts'),
-      handler: 'handler',
-      runtime: lambda.Runtime.NODEJS_22_X,
-      architecture: lambda.Architecture.ARM_64,
-      timeout: cdk.Duration.seconds(5),
-      environment: {
-        TENANTS_TABLE: this.tenantsTable.tableName,
-        PLATFORM_CLIENT_IDS: (props.platformClientIds ?? []).join(','),
-      },
-      bundling: { format: OutputFormat.ESM, target: 'node22', banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" },
-    });
-    this.tenantsTable.grantReadData(this.gatewayInterceptorFn);
 
     // ---- Event routing --------------------------------------------------------
 
@@ -328,8 +269,6 @@ export class VoiceStack extends cdk.Stack {
     errorAlarm(this, 'SessionErrors', sessionFn, this.alarmTopic, 'Voice session');
     errorAlarm(this, 'NotifierErrors', notifierFn, this.alarmTopic, 'Notifier');
     errorAlarm(this, 'CrmSyncErrors', crmSyncFn, this.alarmTopic, 'CRM sync');
-    errorAlarm(this, 'GatewayToolsErrors', this.gatewayToolsFn, this.alarmTopic, 'Gateway tools');
-    errorAlarm(this, 'GatewayInterceptorErrors', this.gatewayInterceptorFn, this.alarmTopic, 'Gateway interceptor');
 
     // ---- HTTP API -------------------------------------------------------------
 

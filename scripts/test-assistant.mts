@@ -1,7 +1,7 @@
 /**
  * Drive the assistant harness for a tenant without Telegram: one turn, the
- * same arguments the Telegram workflow passes (tenant's Gateway OAuth
- * provider, actor id, prompt from the row), reply printed, nothing sent.
+ * same arguments the Telegram workflow passes (the tenant's Composio MCP
+ * session, actor id, prompt from the row), reply printed, nothing sent.
  *
  *   npx tsx scripts/test-assistant.mts "who is Sarah?" [tenantId] [name] [role]
  *
@@ -20,12 +20,11 @@ const name = process.argv[4] ?? 'Test Owner';
 const role = process.argv[5] ?? 'owner';
 const out = (stack: string, key: string) => execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', REGION], { encoding: 'utf8' }).trim();
 
-const tenant = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { businessName: string; description?: string; services?: string[]; hours?: string; timezone?: string; gatewayOauthProviderArn?: string; composioMcpUrl?: string; products?: { assistant?: { enabled?: boolean } } };
+const tenant = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { businessName: string; description?: string; services?: string[]; hours?: string; timezone?: string; composioMcpUrl?: string; products?: { assistant?: { enabled?: boolean } } };
 if (!tenant.products?.assistant?.enabled) throw new Error(`tenant ${tenantId}: products.assistant.enabled is off`);
-if (!tenant.composioMcpUrl && !tenant.gatewayOauthProviderArn) throw new Error(`tenant ${tenantId}: no composioMcpUrl or gatewayOauthProviderArn; re-run the seed`);
+if (!tenant.composioMcpUrl) throw new Error(`tenant ${tenantId}: no composioMcpUrl; connect accounts and re-run the seed`);
 const composioProviderArn = out('wnk-identity-dev', 'composioProviderArn');
 const harnessArn = out('wnk-runtime-dev', 'assistantHarnessArn');
-const gatewayArn = `arn:aws:bedrock-agentcore:${REGION}:123456789012:gateway/${out('wnk-gateway-dev', 'gatewayId')}`;
 
 const prompt = [
   `You are My Assistant for ${tenant.businessName}, chatting with ${name} (${role}) who works there.`,
@@ -44,11 +43,9 @@ const res = await client.send(new InvokeHarnessCommand({
   actorId: `${tenantId}_test_${role}`,
   messages: [{ role: 'user', content: [{ text }] }],
   systemPrompt: [{ text: prompt }],
-  // Same choice the workflow makes: the tenant's Composio session, else the Gateway.
-  tools: tenant.composioMcpUrl
-    ? [{ type: 'remote_mcp', name: 'crm', config: { remoteMcp: { url: tenant.composioMcpUrl, headers: { 'x-api-key': `\${${composioProviderArn}}` } } } }]
-    : [{ type: 'agentcore_gateway', name: 'wnkgateway', config: { agentCoreGateway: { gatewayArn, outboundAuth: { oauth: { providerArn: tenant.gatewayOauthProviderArn!, scopes: ['gateway/assistant'], grantType: 'CLIENT_CREDENTIALS' } } } } }],
-  allowedTools: tenant.composioMcpUrl ? ['@crm/*'] : ['@wnkgateway/*'],
+  // Same as the workflow: the tenant's Composio session, the key by provider ARN.
+  tools: [{ type: 'remote_mcp', name: 'crm', config: { remoteMcp: { url: tenant.composioMcpUrl, headers: { 'x-api-key': `\${${composioProviderArn}}` } } } }],
+  allowedTools: ['@crm/*'],
 }));
 let answer = ''; const tools: string[] = []; let usage: unknown;
 for await (const ev of res.stream ?? []) {

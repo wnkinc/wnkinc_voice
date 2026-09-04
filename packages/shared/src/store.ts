@@ -47,8 +47,6 @@ export interface Store {
   markDone(callId: string, key: string): Promise<boolean>;
   /** Tenant by id (table is keyed by phone; scan — tenant tables are tiny). */
   findTenantById(tenantId: string): Promise<TenantConfig | undefined>;
-  /** The tenant whose Gateway identity this is (byClientId GSI). */
-  findTenantByClientId(clientId: string): Promise<TenantConfig | undefined>;
   /** Newest-first calls for a tenant (byTenant GSI). */
   listCalls(tenantId: string, limit?: number): Promise<CallRecord[]>;
   /** Newest-first leads for a tenant. */
@@ -181,14 +179,6 @@ export function dynamoStore(): Store {
         throw err;
       }
     },
-    async findTenantByClientId(clientId) {
-      const res = await db.send(new QueryCommand({
-        TableName: tenants(), IndexName: 'byClientId',
-        KeyConditionExpression: 'cognitoClientId = :c', ExpressionAttributeValues: { ':c': clientId }, Limit: 1,
-      }));
-      const item = res.Items?.[0];
-      return item ? TenantConfigSchema.parse(item) : undefined;
-    },
     async findTenantById(tenantId) {
       const res = await db.send(new ScanCommand({
         TableName: tenants(),
@@ -258,9 +248,6 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
     async appendToolCall(id, tc) { (must(id).toolCalls ??= []).push(tc); },
     async findTenantById(tenantId) {
       return [...tenantMap.values()].find((t) => t.tenantId === tenantId);
-    },
-    async findTenantByClientId(clientId) {
-      return [...tenantMap.values()].find((t) => t.cognitoClientId === clientId);
     },
     async syncPeople(tenant) {
       for (const [k, v] of peopleMap) if (v.tenantId === tenant.tenantId) peopleMap.delete(k);

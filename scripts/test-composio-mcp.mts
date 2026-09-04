@@ -1,8 +1,10 @@
 /**
- * PROTOTYPE: the assistant harness reaching Composio's session MCP endpoint
- * directly (no Gateway, no tools Lambda) versus today's Gateway tools.
+ * Compare two Composio session shapes for the assistant harness: direct
+ * (curated raw tool schemas in context) versus meta (Composio's search and
+ * execute meta tools). The Gateway mode of the original comparison is gone
+ * with the Gateway; its numbers live in the commit history.
  *
- *   npx tsx scripts/test-composio-mcp.mts "question" [mode: both|gateway|mcp|meta] [tenantId]
+ *   npx tsx scripts/test-composio-mcp.mts "question" [mode: mcp|meta] [tenantId]
  *
  * Creates (or reuses via COMPOSIO_SESSION_ID) a direct-tools Composio session
  * for the tenant with a curated HubSpot + Gmail tool list, then invokes the
@@ -16,14 +18,13 @@ import { readFileSync } from 'node:fs';
 
 const REGION = 'us-west-2';
 const text = process.argv[2] ?? 'What can you help me with?';
-const mode = process.argv[3] ?? 'both';
+const mode = process.argv[3] ?? 'meta';
 const tenantId = process.argv[4] ?? 'wnk';
 const MODEL = process.env.MODEL; // e.g. MODEL=gpt-5.4 overrides the harness default (gpt-5-mini) for this run only
 const out = (stack: string, key: string) => execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', REGION], { encoding: 'utf8' }).trim();
 
-const tenant = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { businessName: string; description?: string; services?: string[]; hours?: string; gatewayOauthProviderArn?: string };
+const tenant = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { businessName: string; description?: string; services?: string[]; hours?: string };
 const harnessArn = out('wnk-runtime-dev', 'assistantHarnessArn');
-const gatewayArn = `arn:aws:bedrock-agentcore:${REGION}:123456789012:gateway/${out('wnk-gateway-dev', 'gatewayId')}`;
 const openaiProviderArn = out('wnk-identity-dev', 'openaiProviderArn');
 const secret = JSON.parse(execFileSync('aws', ['secretsmanager', 'get-secret-value', '--secret-id', out('wnk-voice-dev', 'composioSecretArn'), '--query', 'SecretString', '--output', 'text', '--region', REGION], { encoding: 'utf8' })) as { COMPOSIO_API_KEY: string };
 
@@ -63,7 +64,6 @@ const prompt = [
 ].filter(Boolean).join(' ');
 
 const TOOLS = {
-  gateway: { tools: [{ type: 'agentcore_gateway', name: 'wnkgateway', config: { agentCoreGateway: { gatewayArn, outboundAuth: { oauth: { providerArn: tenant.gatewayOauthProviderArn!, scopes: ['gateway/assistant'], grantType: 'CLIENT_CREDENTIALS' } } } } }], allowed: ['@wnkgateway/*'] },
   meta: { tools: [{ type: 'remote_mcp', name: 'crm', config: { remoteMcp: { url: mcp.url, headers: { ...(mcp.headers ?? {}), 'x-api-key': secret.COMPOSIO_API_KEY } } } }], allowed: ['@crm/*'] },
   mcp: { tools: [{ type: 'remote_mcp', name: 'crm', config: { remoteMcp: { url: mcp.url, headers: { ...(mcp.headers ?? {}), 'x-api-key': secret.COMPOSIO_API_KEY } } } }], allowed: ['@crm/*'] },
 } as const;
@@ -93,6 +93,5 @@ async function run(which: keyof typeof TOOLS): Promise<void> {
 }
 
 console.log(`\n> ${text}`);
-if (mode === 'both' || mode === 'gateway') await run('gateway');
-if (mode === 'both' || mode === 'mcp') await run('mcp');
+if (mode === 'mcp') await run('mcp');
 if (mode === 'meta') await run('meta');

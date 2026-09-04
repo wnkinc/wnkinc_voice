@@ -27,8 +27,6 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly openaiProviderArn: string;
   /** Identity API key provider holding the Composio key; the harness resolves it into the MCP session header. */
   readonly composioProviderArn: string;
-  /** The Gateway the assistant harness attaches per invocation (as the tenant). */
-  readonly gatewayId: string;
   /** Composio API key (voice stack owns it; the tools Lambda reads it too). */
   readonly composioSecret: secretsmanager.ISecret;
   readonly bus: events.IEventBus;
@@ -109,9 +107,9 @@ export class RuntimeStack extends cdk.Stack {
     // No code on this path. The assistant is an AgentCore HARNESS: model,
     // default prompt, memory, and limits are configuration below. Per
     // invocation the workflow passes the message, a prompt built from the
-    // tenant row, and the tenant's Gateway OAuth provider, so the harness calls
-    // tools AS the tenant's own client and the Gateway interceptor attributes
-    // every call. The reply leaves through an EventBridge API destination
+    // tenant row, and the tenant's Composio MCP session (its URL on the row,
+    // bound to the owner's connected accounts), so the only SaaS the model can
+    // reach is that tenant's. The reply leaves through an EventBridge API destination
     // (Telegram wants the bot token in the URL path, which no managed HTTP
     // target can inject — but a destination's endpoint can carry it).
 
@@ -128,11 +126,10 @@ export class RuntimeStack extends cdk.Stack {
     });
 
     const agentcoreArn = (resource: string) => `arn:aws:bedrock-agentcore:${this.region}:${this.account}:${resource}`;
-    const gatewayArn = agentcoreArn(`gateway/${props.gatewayId}`);
 
     // The harness's execution role: the documented sample, scoped to what it
-    // touches — the OpenAI key provider, ANY tenant's Gateway OAuth provider
-    // (minted per tenant by the seed), and the platform Memory instance.
+    // touches — the OpenAI and Composio key providers and the platform Memory
+    // instance.
     const harnessRole = new iam.Role(this, 'AssistantHarnessRole', {
       assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
       description: 'Execution role for the My Assistant harness',
@@ -146,21 +143,19 @@ export class RuntimeStack extends cdk.Stack {
       actions: ['cloudwatch:PutMetricData'], resources: ['*'], conditions: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } },
     }));
     harnessRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:GetWorkloadAccessToken', 'bedrock-agentcore:GetWorkloadAccessTokenForJWT', 'bedrock-agentcore:GetResourceApiKey', 'bedrock-agentcore:GetResourceOauth2Token'],
+      actions: ['bedrock-agentcore:GetWorkloadAccessToken', 'bedrock-agentcore:GetWorkloadAccessTokenForJWT', 'bedrock-agentcore:GetResourceApiKey'],
       resources: [
         agentcoreArn('workload-identity-directory/default'),
         agentcoreArn('workload-identity-directory/default/workload-identity/*'),
         agentcoreArn('token-vault/default'),
         props.openaiProviderArn,
         props.composioProviderArn,
-        agentcoreArn('token-vault/default/oauth2credentialprovider/*'),
       ],
     }));
     harnessRole.addToPolicy(new iam.PolicyStatement({
       actions: ['secretsmanager:GetSecretValue'],
       resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:bedrock-agentcore-identity!*`],
     }));
-    harnessRole.addToPolicy(new iam.PolicyStatement({ actions: ['bedrock-agentcore:InvokeGateway'], resources: [gatewayArn] }));
     if (props.callerMemory) {
       harnessRole.addToPolicy(new iam.PolicyStatement({
         actions: MEMORY_USE_ACTIONS,
@@ -173,10 +168,9 @@ export class RuntimeStack extends cdk.Stack {
       executionRoleArn: harnessRole.roleArn,
       model: { openAiModelConfig: { modelId: process.env.ASSISTANT_MODEL ?? 'gpt-5.5', apiKeyArn: props.openaiProviderArn, apiFormat: 'responses', maxTokens: 1200 } },
       systemPrompt: [{ text: 'You are My Assistant for a small business. Be brief and plain. The per-invocation prompt names the business and the person.' }],
-      // No default tools: the workflow passes the TENANT's per invocation —
-      // its Composio MCP session (SaaS, meta tools) or, failing that, the
-      // Gateway as its own client. Never the built-in shell/file tools.
-      allowedTools: ['@crm/*', '@wnkgateway/*'],
+      // No default tools: the workflow passes the TENANT's Composio MCP
+      // session per invocation. Never the built-in shell/file tools.
+      allowedTools: ['@crm/*'],
       // Attached platform Memory: the harness threads each session's history
       // from it (surviving microVM expiry) and, per turn, retrieves what is
       // relevant from every strategy across ALL of the actor's sessions —
@@ -261,7 +255,7 @@ export class RuntimeStack extends cdk.Stack {
         },
         AssistantEnabled: {
           Type: 'Choice',
-          Choices: [{ Condition: q('$exists($tenant) and $tenant.products.M.assistant.M.enabled.BOOL = true and ($exists($tenant.composioMcpUrl.S) or $exists($tenant.gatewayOauthProviderArn.S))'), Next: 'Invoke' }],
+          Choices: [{ Condition: q('$exists($tenant) and $tenant.products.M.assistant.M.enabled.BOOL = true and $exists($tenant.composioMcpUrl.S)'), Next: 'Invoke' }],
           Default: 'Ignored',
         },
         Invoke: {
@@ -276,13 +270,11 @@ export class RuntimeStack extends cdk.Stack {
             ActorId: q("$tenant.tenantId.S & '_telegram_' & $string($states.input.message.from.id)"),
             Messages: [{ Role: 'user', Content: [{ Text: q('$states.input.message.text') }] }],
             SystemPrompt: [{ Text: q(prompt) }],
-            // The tenant's SaaS tools: its Composio meta-tools session (the row
+            // The tenant's SaaS tools: its Composio meta-tools session. The row
             // selects it; the key rides by ARN and is resolved from the vault at
-            // invocation). Without one, the Gateway as the tenant's own client.
-            Tools: q(`$exists($tenant.composioMcpUrl.S)
-              ? [{ "Type": "remote_mcp", "Name": "crm", "Config": { "RemoteMcp": { "Url": $tenant.composioMcpUrl.S, "Headers": { "x-api-key": "\${${props.composioProviderArn}}" } } } }]
-              : [{ "Type": "agentcore_gateway", "Name": "wnkgateway", "Config": { "AgentCoreGateway": { "GatewayArn": "${gatewayArn}", "OutboundAuth": { "Oauth": { "ProviderArn": $tenant.gatewayOauthProviderArn.S, "Scopes": ["gateway/assistant"], "GrantType": "CLIENT_CREDENTIALS" } } } } }]`),
-            AllowedTools: q("$exists($tenant.composioMcpUrl.S) ? ['@crm/*'] : ['@wnkgateway/*']"),
+            // invocation. Nothing the model or the caller sends can pick another.
+            Tools: [{ Type: 'remote_mcp', Name: 'crm', Config: { RemoteMcp: { Url: q('$tenant.composioMcpUrl.S'), Headers: { 'x-api-key': `\${${props.composioProviderArn}}` } } } }],
+            AllowedTools: ['@crm/*'],
             TimeoutSeconds: 120,
           },
           Retry: [{ ErrorEquals: ['BedrockAgentCore.ThrottlingException'], IntervalSeconds: 5, MaxAttempts: 2, BackoffRate: 2 }],

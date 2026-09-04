@@ -45,22 +45,6 @@ export const TenantConfigSchema = z.object({
   phoneNumber: E164,
   active: z.boolean().default(true),
   /**
-   * The tenant's own Cognito app client (client-credentials). Every agent acting
-   * for this tenant calls the Gateway as THIS client; the Gateway's request
-   * interceptor maps the validated client_id back to the tenant and injects
-   * tenant context into every tool call. Created by the seed script when
-   * missing; the secret stays in Cognito (agents fetch it through IAM).
-   */
-  cognitoClientId: z.string().min(1).optional(),
-  /**
-   * AgentCore Identity OAuth2 credential provider wrapping that client
-   * (client-credentials against Cognito). The assistant harness is handed
-   * this per invocation so it reaches the Gateway AS the tenant. Minted by
-   * the seed next to the client.
-   */
-  gatewayOauthProviderArn: z.string().min(1).optional(),
-
-  /**
    * The assistant's SaaS tools: this tenant's Composio meta-tools MCP session,
    * minted by the seed (`composioAssistant.ensureSession`) and bound to the
    * tenant's connected accounts. The workflow hands it to the harness per
