@@ -319,7 +319,8 @@ export class RuntimeStack extends cdk.Stack {
       "'\\nCRM: ' & ($exists($contact) ? 'known contact ' & $join([$contact.properties.firstname, $contact.properties.lastname], ' ') & ' ' & $contact.url"
         + ` & ($exists($note.hs_note_body) ? '\\nLast note (' & $substring($note.hs_createdate, 0, 10) & '):\\n' & ${noteText} : '\\nNo notes on this contact yet.')`
         + " : 'no matching contact.') & '\\n'",
-      "($count($memories) > 0 ? '\\nWhat the platform remembers about this caller:\\n' & $join($memories.('- ' & $), '\\n') & '\\n' : '')",
+      // Preference records arrive as JSON text; show their preference sentence, not the blob.
+      "($count($memories) > 0 ? '\\nWhat the platform remembers about this caller:\\n' & $join($memories.('- ' & ($substring($, 0, 1) = '{' ? $match($, /\"preference\":\"([^\"]*)\"/)[0].groups[0] : $)), '\\n') & '\\n' : '')",
       `'\\nSuggested text: Hi ' & $split(${lead}.callerName, ' ')[0] & ', this is ' & $tenant.businessName.S & '. Thanks for calling about ' & ${lead}.reason & '. When is a good time to talk? Reply here or call ' & $tenant.phoneNumber.S & '.\\n'`,
       "'\\nCall ' & $states.input.detail.callId",
     ].join(' & ');
