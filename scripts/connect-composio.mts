@@ -10,7 +10,7 @@
  * proves it: Gmail profile, or a HubSpot owners lookup, through the adapter.
  */
 import { execFileSync } from 'node:child_process';
-import { composioConnect, composioCrm, composioGmail, type ComposioToolkit } from '@wnk/shared/composio';
+import { composioConnect, composioGmail, type ComposioToolkit } from '@wnk/shared/composio';
 
 const tenantId = process.argv[2] ?? 'wnk';
 const toolkit = (process.argv[3] ?? 'gmail') as ComposioToolkit;
@@ -31,9 +31,5 @@ console.log('\nwaiting up to 5 minutes...');
 const accountId = await link.waitForActive();
 console.log(`connected: ${accountId}`);
 
-if (toolkit === 'gmail') {
-  console.log(`proof — Gmail profile via adapter: ${await composioGmail.ownerEmail(tenantId)}`);
-} else {
-  const hit = await composioCrm(tenantId).findContactByPhone(process.env.PROOF_PHONE ?? '+10000000000');
-  console.log(`proof — HubSpot contact search via adapter: ${hit ? `${hit.firstName ?? ''} ${hit.lastName ?? ''} (${hit.id})` : 'no match (search ran)'}`);
-}
+if (toolkit === 'gmail') console.log(`proof — Gmail profile: ${await composioGmail.ownerEmail(tenantId)}`);
+else console.log('proof — run scripts/test-crm-workflows.mts to exercise HubSpot through the workflows');

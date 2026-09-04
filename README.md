@@ -15,9 +15,11 @@ call). One deployment serves many businesses.
                                                     │
                                   realtime.call.incoming webhook
                                                     ▼
-                     API Gateway (HTTP) ──▶ Webhook Lambda
-                       verify sig · To-number → tenant (DynamoDB) · claim call_id
-                       POST /v1/realtime/calls/{id}/accept {model, voice, instructions, tools}
+                     API Gateway (HTTP) ──▶ verifier Lambda (signature only)
+                                                    │ StartExecution
+                     accept workflow (Step Functions, no code): SIP headers → called number →
+                       tenant row · claim call_id · POST /v1/realtime/calls/{id}/accept {model, voice}
+                       · caller recognition (CRM note, memory) · job to SQS
                                                     │ SQS
                                                     ▼
                               Session Lambda (SQS · one call per invocation)
@@ -41,18 +43,18 @@ do, and how to verify it. Start there when changing one.
 
 | Path | What |
 |---|---|
-| `packages/voice-session/src/webhook.ts` | Lambda: `POST /openai/webhook` — verify, route by called number, claim, accept, enqueue |
+| `packages/voice-session/src/webhook.ts` | Lambda (~40 lines, stdlib): verifies the OpenAI webhook signature and starts the accept workflow. The one piece of the call path that must be code |
 | `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration |
 | `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
-| `packages/shared/src/composio.ts` | Composio adapter: Gmail and HubSpot with the tenant id as the only credential our code names (`CrmAdapter` lives in `shared/src/crm.ts`) |
+| `packages/infrastructure/lib/workflows.ts` | Builders for the JSONata state machines: HTTP tasks through Connections, Express-without-data, SIP number parsing, business-day math (unit-tested with the jsonata package) |
+| `packages/shared/src/composio.ts` | Composio SDK, scripts only (consent links, the owner's Gmail address, the assistant's session). No Lambda bundles it |
 | `packages/shared/src/store.ts` | DynamoDB (tenants, calls, people) behind one `Store` interface, plus an in-memory version for tests. No leads table: the tenant's CRM holds the lead; the call row (tool calls + once-markers) is the audit |
 | `packages/shared/src/events.ts` | EventBridge publisher |
-| `packages/voice-session/src/sip.ts` | Caller/called number extraction from SIP headers |
 | `packages/shared/src/types.ts` | `TenantConfig` schema (zod) and record/event types |
 | `packages/shared/src/config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger |
 | `packages/infrastructure/lib/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram workflow and reply path, plus four deterministic Step Functions workflows: CRM sync for leads and for call transcripts (HubSpot through Composio HTTP tasks), the lead email (CRM contact + last note and caller memory fetched → email formatted from those fields → sent from the owner's Gmail), and the owner alert (`owner.notify` → Telegram). Workflows that handle transcripts or CRM notes run as Express with execution data not logged |
-| `packages/infrastructure/` | CDK app: `bin/app.ts` + `lib/voice-stack.ts` (NodejsFunction bundles the Lambdas) |
+| `packages/infrastructure/` | CDK app: `bin/app.ts` + `lib/voice-stack.ts` (the two Lambdas and the accept workflow) |
 | `scripts/seed-tenant.ts` | Upsert tenant JSON into the Tenants table |
 | `tenants/example.json` | Example tenant config |
 | `packages/voice-session/test/` | vitest suites (each package carries its own tests) |
@@ -113,12 +115,11 @@ Edit `tenants/example.json` (one object per *called* number) and:
 TENANTS_TABLE=<tenantsTableName output> PEOPLE_TABLE=<peopleTableName output> COMPOSIO_SECRET_ARN=<composioSecretArn output> AWS_REGION=us-west-2 npm run seed -- tenants/example.json
 ```
 
-Call the number. The webhook Lambda logs every SIP header on each call
-(`"msg":"incoming call"`) — check that `to` resolved to your tenant's `phoneNumber`.
-With Twilio Elastic SIP Trunking the `To` header carries the OpenAI project id and the
-dialed number arrives in `Diversion`; `sip.ts` handles that. If another carrier puts it
-elsewhere, add the header name to `CALLED_HEADERS` there, or set `DEFAULT_TENANT_PHONE` on
-the webhook Lambda for single-tenant deployments.
+Call the number. With Twilio Elastic SIP Trunking the `To` header carries the OpenAI
+project id and the dialed number arrives in `Diversion`; the accept workflow's SIP parsing
+(`SIP_CALLED_HEADERS` in `packages/infrastructure/lib/workflows.ts`) handles that. If another
+carrier puts it elsewhere, add the header name there. An unknown called number is rejected
+(SIP 404) and fails the accept execution, which alarms; there is no default tenant.
 
 ## Tenant config
 
@@ -142,16 +143,18 @@ Unknown numbers are rejected with SIP 404.
 
 ## How a call flows
 
-1. **Webhook** — `openai.webhooks.unwrap` verifies the signature (bad → 400). Non-call
-   events are acknowledged and ignored.
-2. **Route** — `identifyParties` reads `To`/`From`; the Tenants table is keyed by called number.
+1. **Verify** — the verifier Lambda checks the Standard-Webhooks HMAC over the raw body
+   (bad → 400) and starts the accept workflow with the body; it answers 200 at once.
+2. **Route** — the accept workflow parses `To`/`Diversion`/`From` from the SIP headers; the
+   Tenants table is keyed by called number. Unknown number: reject 404 and fail (alarm);
+   inactive tenant: reject 603.
 3. **Claim** — a conditional `PutItem` on the Calls table makes webhook retries idempotent
-   (OpenAI retries non-2xx for up to 72 h). A claim in status `failed` can be re-claimed so a
-   transient `accept` failure (→ 500) is retried by OpenAI.
-4. **Accept** — `POST /v1/realtime/calls/{id}/accept` with the tenant's session config:
-   instructions, voice, semantic VAD with interruption, far-field noise reduction,
-   `gpt-4o-mini-transcribe` input transcription, and function tools.
-5. **Hand off** — the webhook puts a `SessionJob` on the SQS queue and returns 200.
+   (OpenAI re-posts on non-2xx). A claim in status `failed` can be re-claimed.
+4. **Accept** — `POST /v1/realtime/calls/{id}/accept` with the minimum: model, voice, and a
+   hold instruction. The session Lambda sends the full config (instructions, semantic VAD,
+   noise reduction, transcription, function tools) when it attaches.
+5. **Recognize and hand off** — the workflow looks the caller up in the tenant's CRM (last
+   note) and in memory, with a real time budget, and puts a `SessionJob` on the SQS queue.
 6. **Session** — the session Lambda receives the message (one call per invocation) and attaches with the Agents SDK
    (`RealtimeSession` over `OpenAIRealtimeSIP`, the same pattern as OpenAI's
    [realtime-twilio-sip example](https://github.com/openai/openai-agents-js/tree/main/examples/realtime-twilio-sip)).
@@ -219,11 +222,11 @@ HubSpot app once; no HubSpot token exists anywhere in the platform. Every CRM ca
   task due the next business morning in the tenant's timezone, assigned to the account's first owner.
 - **`call.ended`** → (CRM call workflow) transcript note on the contact, if the caller is already a
   contact. The transcript is read from the call row, not the event.
-- **Caller recognition** — before accepting, the webhook looks the caller ID up (600 ms budget;
-  skipped if slow). On a hit, the prompt gets a "Caller ID" section with the name and last note.
+- **Caller recognition** — after accepting, the accept workflow looks the caller ID up. On a hit,
+  the prompt gets a "Caller ID" section with the name and last note.
 
-A second CRM is another implementation of `CrmAdapter` in `composio.ts` (or a new adapter file)
-plus a `type` value. Prove a tenant's connection with `npx tsx scripts/test-crm.mts <id> <phone>`.
+A second CRM is another set of HTTP-task states in the workflows, selected by the row's `crm.type`.
+Prove a tenant's connection with `npx tsx scripts/test-crm-workflows.mts <id> <phone>`.
 
 ## Adding a tool
 

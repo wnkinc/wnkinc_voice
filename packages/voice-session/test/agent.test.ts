@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAcceptConfig, buildInstructions, enabledTools, greeting, handlers, spokenPhone, type CallContext } from '../src/agent.js';
+import { buildInstructions, enabledTools, greeting, handlers, spokenPhone, type CallContext } from '../src/agent.js';
 import { memoryPublisher } from '@wnk/shared';
 import { memoryStore } from '@wnk/shared';
 import { TenantConfigSchema } from '@wnk/shared';
@@ -22,24 +22,7 @@ describe('tenant config', () => {
   });
 });
 
-describe('accept config', () => {
-  it('is a realtime session with function tools derived from zod', async () => {
-    const t = parse({ ...TENANT, tools: ['record_lead', 'bogus'] });
-    expect(enabledTools(t)).toEqual(['record_lead']);
-    const p = await buildAcceptConfig(t);
-    expect(p.type).toBe('realtime');
-    expect(p.model).toBe('gpt-realtime-2.1');
-    expect(p.audio?.output?.voice).toBe('marin');
-    expect(p.audio?.input?.turn_detection).toMatchObject({ type: 'semantic_vad', interrupt_response: true });
-    const tools = p.tools as Array<{ type: string; name: string; parameters: { properties: Record<string, unknown>; required?: string[] } }>;
-    expect(tools).toHaveLength(1);
-    expect(tools[0]).toMatchObject({ type: 'function', name: 'record_lead' });
-    expect(Object.keys(tools[0]!.parameters.properties)).toContain('caller_name');
-    expect(tools[0]!.parameters.required).toEqual(expect.arrayContaining(['caller_name', 'reason']));
-    expect(p.instructions).toContain('Acme Plumbing');
-    expect(p.instructions).toContain('record_lead');
-    expect(p.instructions).not.toContain('notify_owner');
-  });
+describe('prompt', () => {
   it('includes extra instructions', () => {
     expect(buildInstructions(parse({ ...TENANT, extraInstructions: 'Always mention the spring promo.' }))).toContain('spring promo');
   });

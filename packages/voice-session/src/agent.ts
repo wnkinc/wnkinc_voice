@@ -1,12 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { OpenAIRealtimeSIP, RealtimeAgent, tool, type RealtimeContextData, type RealtimeSessionOptions } from '@openai/agents/realtime';
+import { RealtimeAgent, tool, type RealtimeContextData, type RealtimeSessionOptions } from '@openai/agents/realtime';
 import type { RunContext } from '@openai/agents';
-import type { CallAcceptParams } from 'openai/resources/realtime/calls';
 import { z } from 'zod';
 import type { Logger } from '@wnk/shared';
 import type { EventPublisher } from '@wnk/shared';
-import { buildInstructions } from '@wnk/shared';
-import { normalizePhone } from './sip.js';
+import { buildInstructions, normalizePhone } from '@wnk/shared';
 import type { Store } from '@wnk/shared';
 import type { CallExtras, CallParty, Lead, TenantConfig } from '@wnk/shared';
 
@@ -133,7 +131,7 @@ export function buildAgent(tenant: TenantConfig, extras: CallExtras = {}): Realt
   });
 }
 
-/** Shared by accept (webhook) and the live session (worker) so both sides agree. */
+/** Session config the session Lambda sends on attach (the accept workflow sends only model + voice + a hold instruction). */
 export function sessionOptions(tenant: TenantConfig): Partial<RealtimeSessionOptions<CallContext>> {
   return {
     model: tenant.model,
@@ -149,10 +147,4 @@ export function sessionOptions(tenant: TenantConfig): Partial<RealtimeSessionOpt
       },
     },
   };
-}
-
-/** Body for POST /v1/realtime/calls/{id}/accept, derived from the agent like OpenAI's example does. */
-export async function buildAcceptConfig(tenant: TenantConfig, extras: CallExtras = {}): Promise<CallAcceptParams> {
-  const payload = await OpenAIRealtimeSIP.buildInitialConfig(buildAgent(tenant, extras), sessionOptions(tenant));
-  return payload as CallAcceptParams;
 }

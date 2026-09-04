@@ -9,4 +9,3 @@ export * from './rates.js';
 export * from './usage.js';
 export * from './tenant.js';
 export * from './trace.js';
-export * from './crm.js';

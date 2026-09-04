@@ -6,13 +6,13 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as logs from 'aws-cdk-lib/aws-logs';
 import { MEMORY_USE_ACTIONS } from './memory-stack.js';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { dlqAlarm, failedExecutionsAlarm } from './alarms.js';
+import { COMPOSIO_API, esc, expressNoData, grantHttp, httpTask, nextBusinessMorningExpr, q, strOrEmpty } from './workflows.js';
 import { Construct } from 'constructs';
 
 export interface RuntimeStackProps extends cdk.StackProps {
@@ -21,8 +21,8 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly openaiProviderArn: string;
   /** Identity API key provider holding the Composio key; the harness resolves it into the MCP session header. */
   readonly composioProviderArn: string;
-  /** Composio API key (voice stack owns it); the lead email workflow's HTTP tasks carry it through an EventBridge Connection. */
-  readonly composioSecret: secretsmanager.ISecret;
+  /** EventBridge Connection carrying the Composio API key (voice stack owns it); every Composio HTTP task here authenticates through it. */
+  readonly composioConnection: events.IConnection;
   readonly bus: events.IEventBus;
   readonly usageTable: dynamodb.ITable;
   /** Agents read their tenant's row to check the service is enabled and how it is configured. */
@@ -41,7 +41,7 @@ export interface RuntimeStackProps extends cdk.StackProps {
 /**
  * The platform's agent, My Assistant (an AgentCore harness driven by the
  * Telegram workflow), and the two deterministic workflows on bus events:
- * the lead email and the owner alert. No code in this stack.
+ * CRM sync, the lead email, and the owner alert. No code in this stack.
  */
 export class RuntimeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: RuntimeStackProps) {
@@ -168,7 +168,6 @@ export class RuntimeStack extends cdk.Stack {
     dlqAlarm(this, 'TelegramReplyDlqAlarm', replyDlq, props.alarmTopic, 'Assistant (Telegram): a reply was not delivered');
 
     // ---- The workflow (JSONata). Input is Telegram's Update object. -----------
-    const q = (expr: string) => `{% ${expr} %}`;
     const prompt = [
       "'You are My Assistant for ' & $tenant.businessName.S & ', chatting with ' & $person.name.S & ' (' & $person.role.S & ') who works there. '",
       "($exists($tenant.description.S) ? 'About the business: ' & $tenant.description.S & ' ' : '')",
@@ -290,44 +289,9 @@ export class RuntimeStack extends cdk.Stack {
     // redelivery, not exactly-once. One retry per Composio call, as the adapter
     // did. Toolkit versions are not pinned here (dev); pin in prod with a
     // `version` field on the execute bodies.
-    const composioConnection = new events.Connection(this, 'ComposioConnection', {
-      description: 'Composio API key for the lead email workflow',
-      authorization: events.Authorization.apiKey('x-api-key', props.composioSecret.secretValueFromJson('COMPOSIO_API_KEY')),
-    });
-    // v3.1: the path the SDK uses; v3 does not resolve every HubSpot slug.
-    const composio = (path: string) => `https://backend.composio.dev/api/v3.1/${path}`;
-    const http = (method: 'GET' | 'POST', path: string, body?: Record<string, unknown>, query?: Record<string, string>) => ({
-      Type: 'Task', Resource: 'arn:aws:states:::http:invoke',
-      Arguments: {
-        ApiEndpoint: composio(path), Method: method,
-        Authentication: { ConnectionArn: composioConnection.connectionArn },
-        ...(body ? { RequestBody: body } : {}), ...(query ? { QueryParameters: query } : {}),
-      },
-      Retry: [{ ErrorEquals: ['States.TaskFailed'], IntervalSeconds: 2, MaxAttempts: 1 }],
-    });
-    // Express with execution data NOT logged: for workflows that handle
-    // transcripts or CRM notes. State transitions and errors still log (and the
-    // failed-executions alarm still fires); payloads are persisted nowhere.
-    const expressNoData = (logId: string) => ({
-      stateMachineType: sfn.StateMachineType.EXPRESS,
-      logs: {
-        destination: new logs.LogGroup(this, logId, { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: cdk.RemovalPolicy.DESTROY }),
-        level: sfn.LogLevel.ALL,
-        includeExecutionData: false,
-      },
-    });
-    // HTTP tasks: the endpoint allow-list, the connection, and the secret EventBridge keeps for it.
-    const grantComposioHttp = (wf: sfn.StateMachine) => {
-      wf.addToRolePolicy(new iam.PolicyStatement({
-        actions: ['states:InvokeHTTPEndpoint'], resources: ['*'],
-        conditions: { StringLike: { 'states:HTTPEndpoint': [composio('*')] } },
-      }));
-      wf.addToRolePolicy(new iam.PolicyStatement({ actions: ['events:RetrieveConnectionCredentials'], resources: [composioConnection.connectionArn] }));
-      wf.addToRolePolicy(new iam.PolicyStatement({
-        actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
-        resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:events!connection/*`],
-      }));
-    };
+    const composio = (path: string) => COMPOSIO_API + path;
+    const http = (method: 'GET' | 'POST', path: string, body?: Record<string, unknown> | string, query?: Record<string, string>) =>
+      httpTask(props.composioConnection, method, composio(path), body, query);
     // A start a rule could not deliver (after retries) parks here and alarms;
     // an execution that started and failed alarms through the workflow metric.
     const startDlq = new sqs.Queue(this, 'LeadEmailDlq', { retentionPeriod: cdk.Duration.days(14) });
@@ -344,7 +308,7 @@ export class RuntimeStack extends cdk.Stack {
       `'Reason: ' & ${lead}.reason & '\\n'`,
       `($exists(${lead}.preferredCallbackTime) ? 'Preferred callback: ' & ${lead}.preferredCallbackTime & '\\n' : '')`,
       `($exists(${lead}.notes) ? 'Notes: ' & ${lead}.notes & '\\n' : '')`,
-      "'\\nCRM: ' & ($exists($contact) ? 'known contact ' & $join([$contact.properties.firstname, $contact.properties.lastname], ' ') & ' ' & $contact.url"
+      "'\\nCRM: ' & ($exists($contact) ? 'known contact ' & $trim(($exists($contact.properties.firstname) and $contact.properties.firstname != null ? $contact.properties.firstname : '') & ' ' & ($exists($contact.properties.lastname) and $contact.properties.lastname != null ? $contact.properties.lastname : '')) & ' ' & $contact.url"
         + ` & ($exists($note.hs_note_body) ? '\\nLast note (' & $substring($note.hs_createdate, 0, 10) & '):\\n' & ${noteText} : '\\nNo notes on this contact yet.')`
         + " : 'no matching contact.') & '\\n'",
       // Preference records arrive as JSON text; show their preference sentence, not the blob.
@@ -482,12 +446,12 @@ export class RuntimeStack extends cdk.Stack {
       stateMachineName: `${prefix}-lead-email-express`,
       definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(leadDefinition)),
       timeout: cdk.Duration.minutes(5),
-      ...expressNoData('LeadEmailWorkflowLogs'),
+      ...expressNoData(this, 'LeadEmailWorkflowLogs'),
     });
     props.tenantsTable.grantReadData(leadWorkflow);
     props.callsTable.grantReadWriteData(leadWorkflow);
     props.usageTable.grantWriteData(leadWorkflow);
-    grantComposioHttp(leadWorkflow);
+    grantHttp(leadWorkflow, [props.composioConnection], [composio('*')]);
     if (props.callerMemory) {
       leadWorkflow.addToRolePolicy(new iam.PolicyStatement({
         actions: MEMORY_USE_ACTIONS,
@@ -512,7 +476,6 @@ export class RuntimeStack extends cdk.Stack {
     // The transcript never rides on the bus; the workflow reads it from the
     // call row by id. Once-marker before, mark after; a failed execution
     // alarms, as the Lambda's DLQ did.
-    const esc = (expr: string) => `$replace($replace($replace(${expr}, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')`;
     const crmOn = (phoneExpr: string) => q(`$exists(${phoneExpr}) and $tenant.crm.M.type.S = 'hubspot' and $tenant.crm.M.via.S = 'composio'`);
     const findContact = (phoneExpr: string, next: string) => ({
       ...http('POST', 'tools/execute/HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', {
@@ -546,15 +509,7 @@ export class RuntimeStack extends cdk.Stack {
         ProjectionExpression: `#k${extraProjection ? `, ${extraProjection}` : ''}`, ExpressionAttributeNames: { '#k': key },
       },
     });
-    // Next weekday at 9:00 tenant-local, from the zone offset the seed derives
-    // (sessionDayOffsetMinutes = 180 - zoneOffsetMinutes). JSONata has no tz
-    // database, so after a DST change the hour drifts by one until the next seed.
-    const nextBusinessMorning = [
-      "( $zone := (180 - ($exists($tenant.sessionDayOffsetMinutes.N) ? $number($tenant.sessionDayOffsetMinutes.N) : 600)) * 60000;",
-      '$nowMs := $millis(); $day := $floor(($nowMs + $zone) / 86400000);',
-      '$due := [0..7] ~> $map(function($i) { ( $d := $day + $i; $dow := ($d + 4) % 7; ($dow != 0 and $dow != 6) ? ($d * 86400000 + 9 * 3600000 - $zone) : 0 ) }) ~> $filter(function($t) { $t > $nowMs });',
-      '$fromMillis($due[0]) )',
-    ].join(' ');
+    const nextBusinessMorning = nextBusinessMorningExpr("($exists($tenant.sessionDayOffsetMinutes.N) ? $number($tenant.sessionDayOffsetMinutes.N) : 600)");
     const crmLeadKey = q("'done:crm:lead:' & $states.input.detail.lead.leadId");
     const crmLeadDefinition = {
       QueryLanguage: 'JSONata',
@@ -593,7 +548,7 @@ export class RuntimeStack extends cdk.Stack {
           Type: 'Pass',
           Assign: {
             contactId: q('$contact.id'),
-            props: q("$merge([($first != '' and $not($exists($contact.properties.firstname)) ? {'firstname': $first} : {}), ($last != '' and $not($exists($contact.properties.lastname)) ? {'lastname': $last} : {})])"),
+            props: q(`$merge([($first != '' and ${strOrEmpty('$contact.properties.firstname')} = '' ? {'firstname': $first} : {}), ($last != '' and ${strOrEmpty('$contact.properties.lastname')} = '' ? {'lastname': $last} : {})])`),
           },
           Output: q('$states.input'), Next: 'NeedsUpdate',
         },
@@ -694,12 +649,12 @@ export class RuntimeStack extends cdk.Stack {
       stateMachineName: `${prefix}-crm-call`,
       definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(crmCallDefinition)),
       timeout: cdk.Duration.minutes(5),
-      ...expressNoData('CrmCallWorkflowLogs'),
+      ...expressNoData(this, 'CrmCallWorkflowLogs'),
     });
     for (const wf of [crmLeadWorkflow, crmCallWorkflow]) {
       props.tenantsTable.grantReadData(wf);
       props.callsTable.grantReadWriteData(wf);
-      grantComposioHttp(wf);
+      grantHttp(wf, [props.composioConnection], [composio('*')]);
     }
     new events.Rule(this, 'CrmLeadRule', {
       eventBus: props.bus,
