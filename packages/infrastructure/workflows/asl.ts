@@ -31,9 +31,19 @@ export function httpTask(connectionArn: string, method: 'GET' | 'POST', url: str
 }
 
 // ---- Once-marker on the call row --------------------------------------------
-// Mark-after-success is hardening against redelivery, not exactly-once. The
-// marker is an attribute on the call row named by `key` (a literal or a q()
-// expression); `$states.input.detail.callId` is the bus event's call id.
+// For side effects that run under at-least-once delivery (EventBridge rule
+// retries, our own HTTP retries). Pattern: CheckDone -> Choice on $done ->
+// the side effect -> MarkDone. The marker is an attribute on the call row
+// named by `key`, a literal or a q() expression built from DOMAIN identity
+// (e.g. done:email:lead:<leadId>), never the EventBridge event id, which
+// differs between two PutEvents of the same fact. `$states.input.detail.callId`
+// is the bus event's call id.
+//
+// This is the low-risk level: it narrows the duplicate window to a crash
+// between the side effect and the mark. It is not exactly-once. Actions that
+// cost money or reach a customer irreversibly need a ledger (pending ->
+// completed with a lease) plus reconciliation instead; that need is the
+// trigger for building the ledger.
 
 /** Reads the marker (and any extra attributes) from the call row; the caller assigns `done` from the result. */
 export function checkDone(callsTable: string, key: string, extraProjection = '') {

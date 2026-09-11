@@ -1,13 +1,13 @@
 /**
  * Usage metering (the fuel gauge, not a billing system). Every money-bearing
- * action leaves a record: (tenantId, timestamp#meter, units). Costs are
+ * action leaves a record: (tenantId, timestamp#meter, units), written by the
+ * workflows (call-ended, lead-email, telegram); this module reads and prices them. Costs are
  * ESTIMATES — units x the rate card — reconciled against real invoices
  * monthly by editing rates.ts. Meters stay coarse and few: a meter earns its
  * place only if it changes a decision.
  */
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { randomUUID } from 'node:crypto';
 import { RATES, type Meter } from './rates.js';
 
 export interface UsageRecord {
@@ -24,27 +24,6 @@ export interface UsageRecord {
 
 let db: DynamoDBDocumentClient | undefined;
 const table = (): string | undefined => process.env.USAGE_TABLE || undefined;
-
-/**
- * Fire-and-forget: never throws, no-ops when USAGE_TABLE is unset (tests,
- * local dev). A metering failure must never hurt the work being metered.
- */
-export async function recordUsage(tenantId: string, meter: Meter, units: number, ref?: string): Promise<void> {
-  const t = table();
-  if (!t || !(units > 0)) return;
-  db ??= DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
-  const record: UsageRecord = {
-    tenantId,
-    sk: `${new Date().toISOString()}#${meter}#${randomUUID()}`,
-    meter,
-    units,
-    rate: RATES.meters[meter]?.rate, // snapshot: cost history stays a fact when the card changes
-    ref,
-  };
-  await db.send(new PutCommand({ TableName: t, Item: record })).catch((err) => {
-    console.warn(JSON.stringify({ msg: 'usage record failed (ignored)', meter, err: String(err) }));
-  });
-}
 
 /** All usage records for a tenant in a month ('YYYY-MM'). */
 export async function listUsage(tenantId: string, month: string): Promise<UsageRecord[]> {

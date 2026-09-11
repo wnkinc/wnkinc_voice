@@ -1,11 +1,14 @@
-import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { env } from './config.js';
 import { personChannelKeys, TenantConfigSchema, type CallRecord, type CallStatus, type PersonRecord, type TenantConfig, type TenantConfigInput, type ToolCallRecord, type TranscriptEntry } from './types.js';
 
-const CALL_TTL_DAYS = 90;
-
-/** All persistence behind one interface: DynamoDB in AWS, in-memory in tests. */
+/**
+ * The persistence the CODE still does: the session Lambda's call row, the
+ * console's reads, the seed's writes. Claiming a call, the once-markers, and
+ * the People lookup are Step Functions states now (workflows/).
+ * DynamoDB in AWS, in-memory in tests.
+ */
 export interface Store {
   getTenant(phoneNumber: string): Promise<TenantConfig | undefined>;
   putTenant(input: TenantConfigInput): Promise<TenantConfig>;
@@ -15,32 +18,10 @@ export interface Store {
    * taking someone off the tenant file takes their access away at the next seed.
    */
   syncPeople(tenant: TenantConfig): Promise<PersonRecord[]>;
-  getPerson(channelId: string): Promise<PersonRecord | undefined>;
-  /**
-   * Atomically claim a call id. Returns false if already claimed (OpenAI retried
-   * the webhook). A call whose previous attempt ended `failed` may be re-claimed.
-   */
-  claimCall(record: Omit<CallRecord, 'status' | 'expiresAt'>): Promise<boolean>;
   getCall(callId: string): Promise<CallRecord | undefined>;
   setCallStatus(callId: string, status: CallStatus, extra?: Partial<CallRecord>): Promise<void>;
   appendTranscript(callId: string, entry: TranscriptEntry): Promise<void>;
   appendToolCall(callId: string, tc: ToolCallRecord): Promise<void>;
-  /**
-   * Once-markers for side effects that run under at-least-once delivery
-   * (EventBridge, Lambda async retries, our own SDK retries). Pattern:
-   * `if (await isDone(callId, key)) return;` ... do the side effect ...
-   * `await markDone(callId, key)`. Keys are DOMAIN identity, e.g.
-   * `notify:lead:<leadId>` — never the EventBridge event id, which differs
-   * between two PutEvents of the same fact.
-   *
-   * This is the low-risk level: it narrows the duplicate window to a crash
-   * between the side effect and the mark. It is not exactly-once. Actions
-   * that cost money or reach a customer irreversibly need a ledger
-   * (pending -> completed with a lease) plus reconciliation instead.
-   */
-  isDone(callId: string, key: string): Promise<boolean>;
-  /** Marks `key` done for the call. False if it was already marked (a race lost). */
-  markDone(callId: string, key: string): Promise<boolean>;
   /** Tenant by id (table is keyed by phone; scan — tenant tables are tiny). */
   findTenantById(tenantId: string): Promise<TenantConfig | undefined>;
   /** Newest-first calls for a tenant (byTenant GSI). */
@@ -93,26 +74,6 @@ export function dynamoStore(): Store {
       for (const p of wanted) await db.send(new PutCommand({ TableName: people(), Item: p }));
       return wanted;
     },
-    async getPerson(channelId) {
-      const res = await db.send(new GetCommand({ TableName: people(), Key: { channelId } }));
-      return res.Item as PersonRecord | undefined;
-    },
-    async claimCall(record) {
-      const item: CallRecord = { ...record, status: 'claimed', expiresAt: Math.floor(Date.now() / 1000) + CALL_TTL_DAYS * 86400 };
-      try {
-        await db.send(new PutCommand({
-          TableName: calls(),
-          Item: item,
-          ConditionExpression: 'attribute_not_exists(callId) OR #status = :failed',
-          ExpressionAttributeNames: { '#status': 'status' },
-          ExpressionAttributeValues: { ':failed': 'failed' },
-        }));
-        return true;
-      } catch (err) {
-        if (err instanceof ConditionalCheckFailedException) return false;
-        throw err;
-      }
-    },
     async getCall(callId) {
       const res = await db.send(new GetCommand({ TableName: calls(), Key: { callId } }));
       return res.Item as CallRecord | undefined;
@@ -137,30 +98,6 @@ export function dynamoStore(): Store {
     },
     appendTranscript: (callId, entry) => appendList(callId, 'transcript', entry).then(() => {}),
     appendToolCall: (callId, tc) => appendList(callId, 'toolCalls', tc).then(() => {}),
-    async isDone(callId, key) {
-      const res = await db.send(new GetCommand({
-        TableName: calls(), Key: { callId },
-        ProjectionExpression: '#k', ExpressionAttributeNames: { '#k': `done:${key}` },
-      }));
-      return Boolean(res.Item?.[`done:${key}`]);
-    },
-    async markDone(callId, key) {
-      try {
-        // Upsert: a marker on a call row that somehow doesn't exist still
-        // expires (TTL), so nothing accumulates.
-        await db.send(new UpdateCommand({
-          TableName: calls(), Key: { callId },
-          UpdateExpression: 'SET #k = :at, expiresAt = if_not_exists(expiresAt, :ttl)',
-          ConditionExpression: 'attribute_not_exists(#k)',
-          ExpressionAttributeNames: { '#k': `done:${key}` },
-          ExpressionAttributeValues: { ':at': new Date().toISOString(), ':ttl': Math.floor(Date.now() / 1000) + CALL_TTL_DAYS * 86400 },
-        }));
-        return true;
-      } catch (err) {
-        if (err instanceof ConditionalCheckFailedException) return false;
-        throw err;
-      }
-    },
     async findTenantById(tenantId) {
       const res = await db.send(new ScanCommand({
         TableName: tenants(),
@@ -185,13 +122,12 @@ export function dynamoStore(): Store {
 }
 
 /** In-memory store for tests. */
-export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls: Map<string, CallRecord> } {
+export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls: Map<string, CallRecord>; people: Map<string, PersonRecord> } {
   const tenantMap = new Map(tenants.map((t) => {
     const parsed = TenantConfigSchema.parse(t);
     return [parsed.phoneNumber, parsed] as const;
   }));
   const calls = new Map<string, CallRecord>();
-  const done = new Set<string>();
   const peopleMap = new Map<string, PersonRecord>();
   const must = (id: string) => {
     const c = calls.get(id);
@@ -200,17 +136,12 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
   };
   return {
     calls,
+    people: peopleMap,
     getTenant: async (n) => tenantMap.get(n),
     async putTenant(input) {
       const t = TenantConfigSchema.parse(input);
       tenantMap.set(t.phoneNumber, t);
       return t;
-    },
-    async claimCall(record) {
-      const existing = calls.get(record.callId);
-      if (existing && existing.status !== 'failed') return false;
-      calls.set(record.callId, { ...record, status: 'claimed' });
-      return true;
     },
     getCall: async (id) => calls.get(id),
     async setCallStatus(id, status, extra = {}) { Object.assign(must(id), extra, { status }); },
@@ -225,17 +156,9 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
       for (const p of wanted) peopleMap.set(p.channelId, p);
       return wanted;
     },
-    getPerson: async (channelId) => peopleMap.get(channelId),
     async listCalls(tenantId, limit = 50) {
       return [...calls.values()].filter((c) => c.tenantId === tenantId)
         .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? '')).slice(0, limit);
-    },
-    isDone: async (id, key) => done.has(`${id}|${key}`),
-    async markDone(id, key) {
-      const k = `${id}|${key}`;
-      if (done.has(k)) return false;
-      done.add(k);
-      return true;
     },
   };
 }

@@ -7,5 +7,4 @@ export * from './memory.js';
 export * from './prompt.js';
 export * from './rates.js';
 export * from './usage.js';
-export * from './tenant.js';
 export * from './trace.js';

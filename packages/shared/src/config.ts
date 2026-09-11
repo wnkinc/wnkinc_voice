@@ -11,7 +11,6 @@ export const env = {
   get peopleTable() { return process.env.PEOPLE_TABLE ?? ''; },
   get eventBusName() { return process.env.EVENT_BUS_NAME ?? ''; },
   get eventSource() { return process.env.EVENT_SOURCE ?? 'wnkinc.voice'; },
-  get sessionQueueUrl() { return process.env.SESSION_QUEUE_URL ?? ''; },
   get openaiSecretArn() { return process.env.OPENAI_SECRET_ARN ?? ''; },
 };
 

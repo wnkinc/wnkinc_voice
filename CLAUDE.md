@@ -43,10 +43,11 @@ should live.
 - Every per-tenant resource is addressed by tenant id in its key.
 - A missing or unknown tenant fails closed.
 - A service acts for a tenant only if that tenant's config enables it.
-- Delivery is at-least-once everywhere. A once-marker after success
-  (`Store.isDone` / `markDone`) is hardening, not exactly-once. Side effects that
-  cost money or reach a customer irreversibly get a pending → completed ledger
-  with reconciliation, and that need is the trigger for building the ledger.
+- Delivery is at-least-once everywhere. A once-marker after success (the
+  `checkDone` / `markDone` states in `workflows/asl.ts`) is hardening, not
+  exactly-once. Side effects that cost money or reach a customer irreversibly
+  get a pending → completed ledger with reconciliation, and that need is the
+  trigger for building the ledger.
 
 ## Skills
 

@@ -189,8 +189,8 @@ fields @timestamp, @log, msg, tenantId, callId
 
 Delivery is at-least-once everywhere (EventBridge, Lambda async retries, SDK retries), so every
 event consumer with an external side effect checks a once-marker on the call row before acting
-and sets it after success (`Store.isDone` / `markDone`, keys like `notify:lead:<leadId>`,
-`crm:call`, `email:lead:<leadId>`). That narrows a duplicate to a crash between the send and the
+and sets it after success (`checkDone` / `markDone` states from `workflows/asl.ts`, keys like
+`done:crm:lead:<leadId>`, `done:crm:call`, `done:email:lead:<leadId>`). That narrows a duplicate to a crash between the send and the
 mark; it is not exactly-once. Anything that costs money or reaches a customer irreversibly
 should get a pending → completed ledger with reconciliation instead.
 
