@@ -314,7 +314,7 @@ with the same arguments the workflow uses).
 
 ## Cost & scale notes
 
-- Everything (HTTP API, four Lambdas, DynamoDB, SQS, EventBridge) is on-demand and ~$0 idle;
+- Everything (HTTP API, two Lambdas, Step Functions, DynamoDB, SQS, EventBridge) is on-demand and ~$0 idle;
   per call you pay OpenAI Realtime usage plus Lambda duration for the call's length
   (a 10-minute call at 512 MB is well under a cent).
 - Each call is its own invocation with its own 512 MB — the session Lambda holds a socket and
@@ -329,7 +329,7 @@ with the same arguments the workflow uses).
 
 ## Roadmap
 
-- Temporal: EventBridge rule → workflow starter for scheduling, callbacks, approvals
+- Scheduling, callbacks, and approvals as Step Functions workflows on bus events (Wait states and task tokens; no separate orchestrator)
 - `transfer_call` tool using `POST /calls/{id}/refer`
 - Business-hours awareness / after-hours script
 - Per-tenant API keys / OpenAI projects if needed for billing isolation

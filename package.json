@@ -11,7 +11,6 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -21,32 +20,22 @@
     "diff": "cdk diff"
   },
   "dependencies": {
-    "@aws-crypto/sha256-js": "^5.2.0",
     "@aws-sdk/client-bedrock-agentcore": "^3.1117.0",
     "@aws-sdk/client-dynamodb": "^3.1116.0",
     "@aws-sdk/client-eventbridge": "^3.1116.0",
-    "@aws-sdk/client-lambda": "^3.1116.0",
     "@aws-sdk/client-secrets-manager": "^3.1116.0",
-    "@aws-sdk/client-ses": "^3.1116.0",
-    "@aws-sdk/client-sns": "^3.1116.0",
-    "@aws-sdk/client-sqs": "^3.1116.0",
     "@aws-sdk/lib-dynamodb": "^3.1116.0",
     "@composio/core": "^0.18.0",
     "@openai/agents": "^0.17.0",
-    "@smithy/protocol-http": "^5.6.2",
-    "@smithy/signature-v4": "^5.7.3",
     "aws-cdk-lib": "^2.266.0",
     "constructs": "^10.4.0",
     "openai": "^7.5.0",
-    "ws": "^8.21.3",
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "@aws-sdk/client-bedrock-agentcore-control": "^3.1117.0",
     "@aws-sdk/client-sfn": "^3.1127.0",
     "@types/aws-lambda": "^8.10.0",
     "@types/node": "^22.0.0",
-    "@types/ws": "^8.18.0",
     "aws-cdk": "^2.1100.0",
     "esbuild": "^0.28.2",
     "jsonata": "^2.2.2",

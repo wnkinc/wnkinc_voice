@@ -14,6 +14,6 @@
     "noEmit": true,
     "isolatedModules": true
   },
-  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "packages/infrastructure/bin/**/*.ts", "packages/infrastructure/stacks/**/*.ts", "packages/infrastructure/infra_utils/**/*.ts", "packages/infrastructure/workflows/**/*.ts", "scripts/**/*.ts"],
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "packages/infrastructure/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "vendor", "cdk.out"]
 }
