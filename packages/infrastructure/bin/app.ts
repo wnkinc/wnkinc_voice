@@ -1,6 +1,4 @@
 import * as cdk from 'aws-cdk-lib';
-import { CognitoStack } from '../stacks/cognito-stack.js';
-import { ConsoleStack } from '../stacks/console-stack.js';
 import { IdentityStack } from '../stacks/identity-stack.js';
 import { MemoryStack } from '../stacks/memory-stack.js';
 import { RuntimeStack } from '../stacks/runtime-stack.js';
@@ -10,7 +8,6 @@ const app = new cdk.App();
 const env = { region: 'us-west-2' };
 const prefix = 'wnkinc-voice-dev';
 
-const auth = new CognitoStack(app, 'wnk-auth-dev', { prefix, env });
 const memory = new MemoryStack(app, 'wnk-memory-dev', { prefix, env });
 const callerMemory = { memoryId: memory.memory.memoryId, memoryArn: memory.memory.memoryArn };
 
@@ -42,13 +39,3 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   callerMemory,
 });
 
-new ConsoleStack(app, 'wnk-console-dev', {
-  prefix,
-  env,
-  userPool: auth.userPool,
-  authBaseUrl: auth.authBaseUrl,
-  tenantsTable: voice.tenantsTable,
-  callsTable: voice.callsTable,
-  usageTable: voice.usageTable,
-  callerMemory,
-});

@@ -24,6 +24,7 @@ fails closed.
 
 - `webhook.ts` — the one job only code can do on this path: verify the webhook HMAC over the raw body, then start the accept workflow. About 40 lines, stdlib crypto, no SDK bundle. Everything it used to do (tenant, claim, accept, recognition, enqueue) is the accept workflow in the voice stack.
 - `session.ts` / `call.ts` — hold the WebSocket for one call, log transcripts and tool calls to the call row, enforce the time limit, hang up cleanly, publish `call.ended` (ids and outcome). Nothing else: memory and usage are the call-ended workflow's. A Lambda holds it because nothing managed holds a WebSocket for fifteen minutes and runs tools.
+- `prompt.ts` — tenant row → the receptionist's system prompt and greeting.
 - `agent.ts` — tenant row → session config (prompt, voice, model, tools) sent on attach, and the three tools. Each tool is one publish. The tenant comes from the call context; the model never names it.
 - Event consumers: none here. Every consumer of `lead.recorded`, `owner.notify`, and `call.ended` is a Step Functions workflow in the runtime stack (CRM sync, lead email, owner alert). The `call.ended` event carries ids and the outcome only; the transcript stays on the call row.
 

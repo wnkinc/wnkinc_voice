@@ -4,8 +4,8 @@ import { env } from './config.js';
 import { personChannelKeys, TenantConfigSchema, type CallRecord, type CallStatus, type PersonRecord, type TenantConfig, type TenantConfigInput, type ToolCallRecord, type TranscriptEntry } from './types.js';
 
 /**
- * The persistence the CODE still does: the session Lambda's call row, the
- * console's reads, the seed's writes. Claiming a call, the once-markers, and
+ * The persistence the CODE still does: the session Lambda's call row and the
+ * seed's writes. Claiming a call, the once-markers, and
  * the People lookup are Step Functions states now (workflows/).
  * DynamoDB in AWS, in-memory in tests.
  */

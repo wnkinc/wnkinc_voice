@@ -1,9 +1,5 @@
-/**
- * The voice agent's system prompt, rendered from tenant config. Lives in shared
- * (not voice-session) because the prompt IS the per-tenant levers made visible —
- * the console renders it too.
- */
-import type { CallExtras, TenantConfig } from './types.js';
+/** The voice agent's system prompt and greeting, rendered from the tenant row: the per-tenant levers made visible. */
+import type { CallExtras, TenantConfig } from '@wnk/shared';
 
 
 export function greeting(t: TenantConfig, extras: CallExtras = {}): string {

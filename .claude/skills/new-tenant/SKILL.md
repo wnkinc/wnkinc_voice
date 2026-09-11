@@ -30,7 +30,7 @@ run it after onboarding and any time a tenant misbehaves.
 
 - **Membership model** (one person, many businesses; workspace switching):
   trigger = the first human who belongs to two tenants. Until then the
-  Cognito custom:businessId claim is the whole model. (Dify's shape:
+  tenant row's `people` list (mirrored into the People table) is the whole model. (Dify's shape:
   tenant_account_joins with a `current` flag, tenant resolved from the DB
   per request — never from the token.)
 - **Per-tenant encryption keys**: trigger = a customer contractually

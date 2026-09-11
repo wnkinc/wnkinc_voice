@@ -8,13 +8,11 @@ rented services. Nothing here runs on its own.
 | File | What | Rule it enforces |
 |---|---|---|
 | `types.ts` | `TenantConfigSchema` (zod), call and person records, `Lead`, the `VoiceEvent` union | Tenant data lives in the row, validated on write. |
-| `store.ts` | `Store` interface over DynamoDB (Tenants, Calls, People) plus an in-memory version for tests: what the code still persists (the session's call row, the console's reads, the seed's writes). Claiming a call, once-markers, and the People lookup are workflow states now. | No leads table: the CRM holds the lead, the call row is the audit. |
+| `store.ts` | `Store` interface over DynamoDB (Tenants, Calls, People) plus an in-memory version for tests: what the code still persists (the session's call row, the seed's writes). Claiming a call, once-markers, and the People lookup are workflow states now. | No leads table: the CRM holds the lead, the call row is the audit. |
 | `events.ts` | EventBridge publisher | Carries the X-Ray trace header so consumers join the call's trace. |
 | `config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger | |
-| `prompt.ts` | Tenant row → receptionist system prompt | Lives here so the console can render the same prompt. |
 | `composio.ts` | Composio SDK for the scripts: consent links, the owner's Gmail address, the harness's meta-tools session | The only file that may import `@composio/core`. Nothing at runtime imports it; the workflows call Composio's HTTP API with the tenant id as `user_id`. |
-| `memory.ts` | AgentCore Memory client for the console and scripts: recall facts, write a transcript (in production the call-ended workflow writes) | Actor id is `<tenantId>_<phone>`, so isolation is structural. |
-| `usage.ts`, `rates.ts` | Reads and prices the metering records the workflows write; the rate card | |
+| `memory.ts` | AgentCore Memory client for `scripts/test-memory.mts` (in production the workflows recall and write) | Actor id is `<tenantId>_<phone>`, so isolation is structural. |
 | `phone.ts`, `trace.ts` | E.164 normalizing; X-Ray header helpers | |
 
 ## References
@@ -26,7 +24,7 @@ rented services. Nothing here runs on its own.
 ## How to verify
 
 ```bash
-npm test            # trace, types, usage suites
+npm test            # trace, types suites
 ```
 
 Against real services, per tenant:

@@ -4,7 +4,8 @@ import type { RunContext } from '@openai/agents';
 import { z } from 'zod';
 import type { Logger } from '@wnk/shared';
 import type { EventPublisher } from '@wnk/shared';
-import { buildInstructions, normalizePhone } from '@wnk/shared';
+import { normalizePhone } from '@wnk/shared';
+import { buildInstructions } from './prompt.js';
 import type { Store } from '@wnk/shared';
 import type { CallExtras, CallParty, Lead, TenantConfig } from '@wnk/shared';
 
@@ -116,9 +117,9 @@ export function enabledTools(tenant: TenantConfig): ToolName[] {
   return tenant.tools.filter((n): n is ToolName => n in TOOLS);
 }
 
-// ---- Prompt (moved to @wnk/shared/prompt so the console can render it) -------
+// ---- Prompt (prompt.ts) -----------------------------------------------------
 
-export { buildInstructions, greeting, spokenPhone } from '@wnk/shared';
+export { buildInstructions, greeting, spokenPhone } from './prompt.js';
 
 // ---- Agent + session config -------------------------------------------------
 

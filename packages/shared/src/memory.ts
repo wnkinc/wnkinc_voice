@@ -1,7 +1,7 @@
 /**
  * Caller memory on AgentCore Memory: recall extracted facts/preferences, and
- * write a call transcript (the call-ended workflow does this in production;
- * this client is for the console and scripts). Actor id =
+ * write a call transcript. In production the workflows do both (accept
+ * recalls, call-ended writes); this client is for scripts/test-memory.mts. Actor id =
  * `<tenantId>_<phone digits>` so tenant isolation is structural; session id = callId.
  *
  * Note: long-term extraction is asynchronous — a call's facts appear in
