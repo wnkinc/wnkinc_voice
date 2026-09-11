@@ -3,7 +3,7 @@
  * same arguments the Telegram workflow passes (the tenant's Composio MCP
  * session, actor id, prompt from the row), reply printed, nothing sent.
  *
- *   npx tsx scripts/test-assistant.mts "who is Sarah?" [tenantId] [name] [role]
+ *   npx tsx scripts/test-assistant.mts "who is Sarah?" <tenantId> [name] [role]
  *
  * Repeated runs share a session id, so follow-ups see the thread (memory).
  * SESSION=<suffix> starts a different session for the same actor, to test
@@ -15,7 +15,8 @@ import { readFileSync } from 'node:fs';
 
 const REGION = 'us-west-2';
 const text = process.argv[2] ?? 'What can you help me with?';
-const tenantId = process.argv[3] ?? 'wnk';
+const tenantId = process.argv[3];
+if (!tenantId) { console.error('usage: npx tsx scripts/test-assistant.mts "<message>" <tenantId> [name] [role]'); process.exit(2); }
 const name = process.argv[4] ?? 'Test Owner';
 const role = process.argv[5] ?? 'owner';
 const out = (stack: string, key: string) => execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', REGION], { encoding: 'utf8' }).trim();

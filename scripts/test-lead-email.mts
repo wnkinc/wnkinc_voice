@@ -3,7 +3,7 @@
  * the bus for a tenant and wait for the once-marker the workflow writes after
  * the send. Sends a REAL email to the owner's own Gmail through Composio.
  *
- *   npx tsx scripts/test-lead-email.mts [tenantId] [phone] [callerName] [reason]
+ *   npx tsx scripts/test-lead-email.mts <tenantId> [phone] [callerName] [reason]
  *
  * Run it twice with the same lead id (LEAD_ID=<uuid>) to see the once-marker
  * skip. The call id is made up, so the marker lands on a throwaway call row
@@ -17,7 +17,8 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 const REGION = 'us-west-2';
-const tenantId = process.argv[2] ?? 'wnk';
+const tenantId = process.argv[2];
+if (!tenantId) { console.error('usage: npx tsx scripts/test-lead-email.mts <tenantId> [phone] [callerName] [reason]'); process.exit(2); }
 const phone = process.argv[3] ?? '+15555550155';
 const callerName = process.argv[4] ?? 'Jordan Rivera';
 const reason = process.argv[5] ?? 'wants an estimate to replace a warped exterior door';

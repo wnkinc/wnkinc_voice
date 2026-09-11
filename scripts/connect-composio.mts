@@ -3,7 +3,7 @@
  * Composio's token vault (their verified OAuth apps). The Composio-side
  * userId IS our tenantId.
  *
- *   npx tsx scripts/connect-composio.mts [tenantId] [gmail|hubspot]
+ *   npx tsx scripts/connect-composio.mts <tenantId> [gmail|hubspot]
  *
  * Reads the API key from the runtime stack's Composio secret (or
  * COMPOSIO_API_KEY env). Prints the connect link, waits for consent, then
@@ -12,7 +12,8 @@
 import { execFileSync } from 'node:child_process';
 import { composioConnect, composioGmail, type ComposioToolkit } from '@wnk/shared/composio';
 
-const tenantId = process.argv[2] ?? 'wnk';
+const tenantId = process.argv[2];
+if (!tenantId) { console.error('usage: npx tsx scripts/connect-composio.mts <tenantId> [gmail|hubspot]'); process.exit(2); }
 const toolkit = (process.argv[3] ?? 'gmail') as ComposioToolkit;
 if (toolkit !== 'gmail' && toolkit !== 'hubspot') throw new Error(`unknown toolkit ${toolkit}`);
 

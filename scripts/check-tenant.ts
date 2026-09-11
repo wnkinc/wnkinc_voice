@@ -2,7 +2,7 @@
  * Tenant provisioning pre-flight (the Dify "check-dependencies" idea, adapted):
  * prints a checklist of everything a tenant needs to be fully operational.
  *
- *   npx tsx scripts/check-tenant.ts [tenantId]      (default: wnk)
+ *   npx tsx scripts/check-tenant.ts <tenantId>
  *
  * Checks config file <-> seeded table drift, secrets, enabled services,
  * notification wiring, and the owner's Gmail connection. Exit code 1 if any
@@ -13,8 +13,8 @@ import { execFileSync } from 'node:child_process';
 import { dynamoStore, TenantConfigSchema } from '@wnk/shared';
 
 const REGION = 'us-west-2';
-const PREFIX = 'wnkinc-voice-dev';
-const tenantId = process.argv[2] ?? 'wnk';
+const tenantId = process.argv[2];
+if (!tenantId) { console.error('usage: npx tsx scripts/check-tenant.ts <tenantId>'); process.exit(2); }
 
 const out = (stack: string, key: string) =>
   execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', REGION], { encoding: 'utf8' }).trim();
@@ -49,7 +49,7 @@ else ok('seeded config', 'matches the file');
 const cfg = seeded ?? fileConfig;
 if (cfg?.crm) {
   if (cfg.crm.via !== 'composio') bad('CRM', `crm.via is "${cfg.crm.via}"; the token path is gone — consent via scripts/connect-composio.mts ${tenantId} hubspot and set via: composio`);
-  else ok('CRM', 'hubspot via composio (prove with scripts/test-crm.mts)');
+  else ok('CRM', 'hubspot via composio (prove with scripts/test-crm-workflows.mts)');
 } else ok('CRM', 'not configured (crm: none)');
 if (cfg?.products.assistant.enabled && !cfg.composioMcpUrl) bad('Assistant tools', 'assistant is on but no composioMcpUrl — connect accounts, then re-run the seed with COMPOSIO_SECRET_ARN set');
 else if (cfg?.composioMcpUrl) ok('Assistant tools', 'Composio MCP session on the row');
@@ -73,7 +73,6 @@ else console.log(`  ○ Composio: Gmail connected account for user "${tenantId}"
 
 // 7. Manual reminders (uncheckable from here)
 console.log(`  ○ Twilio: number ${cfg?.phoneNumber ?? '?'} attached to the SIP trunk (verify in Twilio console)`);
-console.log(`  ○ Employee login: a Cognito user with custom:businessId=${tenantId} (for the console)`);
 
 console.log(failed ? '\nRESULT: NOT READY — fix the ✗ items' : '\nRESULT: READY (address ⚠ items as needed)');
 process.exit(failed ? 1 : 0);

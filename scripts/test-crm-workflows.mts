@@ -5,7 +5,7 @@
  * and usage; all read from a call row this script writes). Success is judged by side effects: the once-markers on the call
  * row, then the note and task visible through Composio.
  *
- *   npx tsx scripts/test-crm-workflows.mts [tenantId] [phone] [callerName]
+ *   npx tsx scripts/test-crm-workflows.mts <tenantId> [phone] [callerName]
  *
  * Needs CALLS_TABLE (voice stack output) or it is read from the stack.
  */
@@ -17,7 +17,8 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 const REGION = 'us-west-2';
-const tenantId = process.argv[2] ?? 'wnk';
+const tenantId = process.argv[2];
+if (!tenantId) { console.error('usage: npx tsx scripts/test-crm-workflows.mts <tenantId> [phone] [callerName]'); process.exit(2); }
 const phone = process.argv[3] ?? '+15555550155';
 const callerName = process.argv[4] ?? 'Jordan Rivera';
 const out = (stack: string, key: string) => execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', REGION], { encoding: 'utf8' }).trim();
