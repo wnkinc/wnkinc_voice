@@ -14,12 +14,12 @@ Composio brokers it; the model gets Composio's meta tools over the tenant's sess
 1. Confirm Composio has the toolkit (`composio.dev/toolkits/<slug>`).
 2. Owner consent: `npx tsx scripts/connect-composio.mts <tenantId> <toolkit>` (the adapter's `connectLink` creates a managed auth config on first use).
 3. Re-mint the tenant's session so it includes the new toolkit: delete `composioMcpUrl` from `tenants/<id>.json`, then re-run the seed with `COMPOSIO_SECRET_ARN` set. Commit the new URL.
-4. If the model needs guidance the toolkit's schemas do not give (formats, ids), add one sentence to the workflow prompt in `lib/runtime-stack.ts` — data, not code.
+4. If the model needs guidance the toolkit's schemas do not give (formats, ids), add one sentence to the workflow prompt in `stacks/runtime-stack.ts` — data, not code.
 5. Prove with `npx tsx scripts/test-assistant.mts "<a question that needs it>"`.
 
 ## A workflow needs a SaaS (CRM sync, lead email, caller recognition)
 
-Add an HTTP task state: `httpTask(connection, ...)` from `lib/workflows.ts` against Composio's v3.1 execute path, the tenant id as `user_id` in the body. Spike the call with curl first to learn the response shape (see the runtime stack's comments). A second CRM is another set of states selected by the row's `crm.type`; never a default.
+Add an HTTP task state: `httpTask(connection, ...)` from `infra_utils/workflows.ts` against Composio's v3.1 execute path, the tenant id as `user_id` in the body. Spike the call with curl first to learn the response shape (see the runtime stack's comments). A second CRM is another set of states selected by the row's `crm.type`; never a default.
 
 ## The voice receptionist needs a tool
 

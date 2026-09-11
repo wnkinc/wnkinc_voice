@@ -1,10 +1,10 @@
 import * as cdk from 'aws-cdk-lib';
-import { CognitoStack } from '../lib/cognito-stack.js';
-import { ConsoleStack } from '../lib/console-stack.js';
-import { IdentityStack } from '../lib/identity-stack.js';
-import { MemoryStack } from '../lib/memory-stack.js';
-import { RuntimeStack } from '../lib/runtime-stack.js';
-import { VoiceStack } from '../lib/voice-stack.js';
+import { CognitoStack } from '../stacks/cognito-stack.js';
+import { ConsoleStack } from '../stacks/console-stack.js';
+import { IdentityStack } from '../stacks/identity-stack.js';
+import { MemoryStack } from '../stacks/memory-stack.js';
+import { RuntimeStack } from '../stacks/runtime-stack.js';
+import { VoiceStack } from '../stacks/voice-stack.js';
 
 const app = new cdk.App();
 const env = { region: 'us-west-2' };

@@ -11,8 +11,8 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
-import { dlqAlarm, failedExecutionsAlarm } from './alarms.js';
-import { COMPOSIO_API, esc, expressNoData, grantHttp, httpTask, nextBusinessMorningExpr, q, strOrEmpty } from './workflows.js';
+import { dlqAlarm, failedExecutionsAlarm } from '../infra_utils/alarms.js';
+import { COMPOSIO_API, esc, expressNoData, grantHttp, httpTask, nextBusinessMorningExpr, q, strOrEmpty } from '../infra_utils/workflows.js';
 import { Construct } from 'constructs';
 
 export interface RuntimeStackProps extends cdk.StackProps {
