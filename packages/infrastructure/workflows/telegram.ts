@@ -8,7 +8,7 @@
  * tenant's. The reply is published as telegram.reply; the runtime stack's
  * reply rule delivers it. Tokens are metered per invocation.
  */
-import { q } from '../infra_utils/asl.js';
+import { q } from './asl.js';
 
 export interface TelegramRefs {
   peopleTable: string;

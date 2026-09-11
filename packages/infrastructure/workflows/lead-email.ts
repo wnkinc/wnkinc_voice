@@ -11,7 +11,7 @@
  * against redelivery, not exactly-once. Toolkit versions are not pinned
  * here (dev); pin in prod with a `version` field on the execute bodies.
  */
-import { COMPOSIO_API, checkDone, httpTask, markDone, q } from '../infra_utils/asl.js';
+import { COMPOSIO_API, checkDone, httpTask, markDone, q } from './asl.js';
 
 export interface LeadEmailRefs {
   tenantsTable: string;

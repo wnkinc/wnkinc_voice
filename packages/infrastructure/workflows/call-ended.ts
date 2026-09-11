@@ -7,7 +7,7 @@
  * are extracted asynchronously), and meters the minutes. Once-marker, since
  * a redelivered event would otherwise double both.
  */
-import { checkDone, markDone, q } from '../infra_utils/asl.js';
+import { checkDone, markDone, q } from './asl.js';
 
 export interface CallEndedRefs {
   callsTable: string;

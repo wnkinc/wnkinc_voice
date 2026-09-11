@@ -12,7 +12,7 @@
  * on the queue message. The API keys ride in EventBridge Connections
  * (resolved from the secrets at deploy: rotate a key, redeploy).
  */
-import { COMPOSIO_API, OPENAI_API, httpTask, q } from '../infra_utils/asl.js';
+import { COMPOSIO_API, OPENAI_API, httpTask, q } from './asl.js';
 
 export interface AcceptRefs {
   tenantsTable: string;

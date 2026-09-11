@@ -12,7 +12,7 @@ import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { dlqAlarm, failedExecutionsAlarm } from '../infra_utils/alarms.js';
-import { COMPOSIO_API } from '../infra_utils/asl.js';
+import { COMPOSIO_API } from '../workflows/asl.js';
 import { expressNoData, grantHttp } from '../infra_utils/state-machine.js';
 import { callEndedDefinition } from '../workflows/call-ended.js';
 import { crmCallDefinition } from '../workflows/crm-call.js';

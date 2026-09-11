@@ -6,7 +6,7 @@
  * a follow-up task due the next business morning. Once-marker before, mark
  * after; a failed execution alarms.
  */
-import { COMPOSIO_API, checkDone, httpTask, markDone, q } from '../infra_utils/asl.js';
+import { COMPOSIO_API, checkDone, httpTask, markDone, q } from './asl.js';
 
 export interface CrmLeadRefs {
   tenantsTable: string;

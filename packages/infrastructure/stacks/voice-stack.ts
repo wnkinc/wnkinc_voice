@@ -16,7 +16,7 @@ import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { dlqAlarm, errorAlarm, failedExecutionsAlarm } from '../infra_utils/alarms.js';
-import { COMPOSIO_API, OPENAI_API } from '../infra_utils/asl.js';
+import { COMPOSIO_API, OPENAI_API } from '../workflows/asl.js';
 import { expressNoData, grantHttp } from '../infra_utils/state-machine.js';
 import { acceptDefinition } from '../workflows/accept.js';
 import { Construct } from 'constructs';
