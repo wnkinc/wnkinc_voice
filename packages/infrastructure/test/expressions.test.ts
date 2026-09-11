@@ -1,6 +1,7 @@
 import jsonata from 'jsonata';
 import { describe, expect, it } from 'vitest';
-import { nextBusinessMorningExpr, sipNumberExpr, SIP_CALLED_HEADERS, SIP_CALLER_HEADERS, htmlToTextExpr } from '../infra_utils/workflows.js';
+import { htmlToTextExpr, sipNumberExpr, SIP_CALLED_HEADERS, SIP_CALLER_HEADERS } from '../workflows/accept.js';
+import { nextBusinessMorningExpr } from '../workflows/crm-lead.js';
 
 const evalExpr = (expr: string, input: unknown) => jsonata(expr).evaluate(input);
 

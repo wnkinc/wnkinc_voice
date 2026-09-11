@@ -48,14 +48,14 @@ do, and how to verify it. Start there when changing one.
 | `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
 | `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
-| `packages/infrastructure/infra_utils/workflows.ts` | Builders for the JSONata state machines: HTTP tasks through Connections, Express-without-data, SIP number parsing, business-day math (unit-tested with the jsonata package) |
+| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, lead-email, crm-lead, crm-call, call-ended, owner-alert): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `infra_utils/asl.ts` is the grammar they share (`q`, `httpTask`, the once-marker pair); everything else lives in the workflow file, duplicated if need be |
 | `packages/shared/src/composio.ts` | Composio SDK, scripts only (consent links, the owner's Gmail address, the assistant's session). No Lambda bundles it |
 | `packages/shared/src/store.ts` | DynamoDB (tenants, calls, people) behind one `Store` interface, plus an in-memory version for tests. No leads table: the tenant's CRM holds the lead; the call row (tool calls + once-markers) is the audit |
 | `packages/shared/src/events.ts` | EventBridge publisher |
 | `packages/shared/src/types.ts` | `TenantConfig` schema (zod) and record/event types |
 | `packages/shared/src/config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger |
-| `packages/infrastructure/stacks/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram workflow and reply path, plus five deterministic Step Functions workflows: CRM sync for leads and for call transcripts (HubSpot through Composio HTTP tasks), the call-ended tail (transcript to caller memory, minutes to usage), the lead email (CRM contact + last note and caller memory fetched → email formatted from those fields → sent from the owner's Gmail), and the owner alert (`owner.notify` → Telegram). Workflows that handle transcripts or CRM notes run as Express with execution data not logged |
-| `packages/infrastructure/` | CDK app: `bin/app.ts` + `stacks/*-stack.ts` + `infra_utils/` (alarm and workflow builders) (the two Lambdas and the accept workflow) |
+| `packages/infrastructure/stacks/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram reply path, and the state machine, rule, grants, and alarm for each definition in `workflows/`: CRM sync for leads and for call transcripts (HubSpot through Composio HTTP tasks), the call-ended tail (transcript to caller memory, minutes to usage), the lead email (CRM contact + last note and caller memory fetched → email formatted from those fields → sent from the owner's Gmail), and the owner alert (`owner.notify` → Telegram). Workflows that handle transcripts or CRM notes run as Express with execution data not logged |
+| `packages/infrastructure/` | CDK app: `bin/app.ts` + `stacks/*-stack.ts` + `workflows/` (one definition per file) + `infra_utils/` (alarms, the ASL grammar, state-machine presets) (the two Lambdas and the accept workflow) |
 | `scripts/seed-tenant.ts` | Upsert tenant JSON into the Tenants table |
 | `tenants/example.json` | Example tenant config |
 | `packages/voice-session/test/` | vitest suites (each package carries its own tests) |
@@ -118,7 +118,7 @@ TENANTS_TABLE=<tenantsTableName output> PEOPLE_TABLE=<peopleTableName output> CO
 
 Call the number. With Twilio Elastic SIP Trunking the `To` header carries the OpenAI
 project id and the dialed number arrives in `Diversion`; the accept workflow's SIP parsing
-(`SIP_CALLED_HEADERS` in `packages/infrastructure/infra_utils/workflows.ts`) handles that. If another
+(`SIP_CALLED_HEADERS` in `packages/infrastructure/workflows/accept.ts`) handles that. If another
 carrier puts it elsewhere, add the header name there. An unknown called number is rejected
 (SIP 404) and fails the accept execution, which alarms; there is no default tenant.
 

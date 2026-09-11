@@ -14,7 +14,7 @@ Zero agent code.
 **Workflow second.** If the behavior is a fixed sequence of managed-service calls (read the
 tenant, check a once-marker, fetch, format, send, write usage) it is a Step Functions state
 machine on an EventBridge rule, with no package and no model. The lead email workflow in
-`stacks/runtime-stack.ts` is the worked example: JSONata states, Composio reached with HTTP tasks
+`workflows/lead-email.ts` is the worked example (one definition per file under `workflows/`, wrapped in a state machine in `stacks/runtime-stack.ts`): JSONata states, Composio reached with HTTP tasks
 through an EventBridge Connection (the tenant id as `user_id` on every call), the email formatted
 in JSONata from the data already fetched, `failedExecutionsAlarm` + a DLQ on the rule target.
 Reach for the harness only when the step is open-ended (a person chatting); a fixed sequence
