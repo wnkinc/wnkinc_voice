@@ -1,26 +1,46 @@
-[
-  {
-    "tenantId": "acme-plumbing",
-    "phoneNumber": "+15555550100",
-    "businessName": "Acme Plumbing",
-    "description": "Family-owned plumbing company serving the greater Portland area since 2009. Licensed and insured. Free estimates for most jobs.",
-    "services": ["drain cleaning", "water heater repair and replacement", "leak detection", "emergency plumbing", "bathroom and kitchen remodels"],
-    "hours": "Monday to Friday 7am-6pm, Saturday 8am-2pm, closed Sunday. 24/7 emergency service at a higher rate.",
-    "timezone": "America/Los_Angeles",
-    "agentName": "Alex",
-    "greeting": "Thanks for calling Acme Plumbing, this is Alex. How can I help you today?",
-    "extraInstructions": "If a caller describes active flooding, a burst pipe, or no water at all, treat it as urgent and notify the owner immediately after getting their address and callback number.",
-    "model": "gpt-realtime-2.1",
-    "voice": "marin",
-    "tools": ["record_lead", "notify_owner", "end_call"],
-    "maxCallSeconds": 600,
-    "products": {
-      "emailResponder": { "enabled": true },
-      "assistant": { "enabled": false }
+{
+  "tenantId": "example",
+  "phoneNumber": "+15555550100",
+  "businessName": "Example Plumbing",
+  "description": "Family-owned plumbing company serving the greater Portland area since 2009. Licensed and insured. Free estimates for most jobs.",
+  "services": [
+    "drain cleaning",
+    "water heater repair and replacement",
+    "leak detection",
+    "emergency plumbing",
+    "bathroom and kitchen remodels"
+  ],
+  "hours": "Monday to Friday 7am-6pm, Saturday 8am-2pm, closed Sunday. 24/7 emergency service at a higher rate.",
+  "timezone": "America/Los_Angeles",
+  "agentName": "Alex",
+  "greeting": "Thanks for calling Example Plumbing, this is Alex. How can I help you today?",
+  "extraInstructions": "If a caller describes active flooding, a burst pipe, or no water at all, treat it as urgent and notify the owner immediately after getting their address and callback number.",
+  "model": "gpt-realtime-2.1",
+  "voice": "marin",
+  "tools": [
+    "record_lead",
+    "notify_owner",
+    "end_call"
+  ],
+  "maxCallSeconds": 600,
+  "products": {
+    "emailResponder": {
+      "enabled": true
     },
-    "people": [
-      { "name": "Owner Name", "role": "owner", "telegramId": 123456789 },
-      { "name": "Field Tech", "role": "employee", "telegramId": 987654321 }
-    ]
-  }
-]
+    "assistant": {
+      "enabled": false
+    }
+  },
+  "people": [
+    {
+      "name": "Owner Name",
+      "role": "owner",
+      "telegramId": 123456789
+    },
+    {
+      "name": "Field Tech",
+      "role": "employee",
+      "telegramId": 987654321
+    }
+  ]
+}

@@ -62,8 +62,7 @@ if (!files.length) {
 }
 const store = dynamoStore();
 for (const file of files) {
-  const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
-  const list = Array.isArray(parsed) ? parsed : [parsed];
+  const list = [JSON.parse(readFileSync(file, 'utf8')) as unknown]; // one tenant per file, named tenants/<tenantId>.json
   for (const raw of list) {
     await ensureComposioSession(raw as Parameters<typeof ensureComposioSession>[0], file);
     const tz = (raw as { timezone?: string }).timezone ?? 'America/Los_Angeles';

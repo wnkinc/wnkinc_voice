@@ -110,10 +110,10 @@ Twilio Console → *Elastic SIP Trunking → Trunks → Create*:
 
 ### 4. Seed a tenant
 
-Edit `tenants/example.json` (one object per *called* number) and:
+Copy `tenants/example.json` to `tenants/<tenantId>.json` (one file per tenant, keyed by its *called* number; only the example is tracked) and:
 
 ```bash
-TENANTS_TABLE=<tenantsTableName output> PEOPLE_TABLE=<peopleTableName output> COMPOSIO_SECRET_ARN=<composioSecretArn output> AWS_REGION=us-west-2 npm run seed -- tenants/example.json
+TENANTS_TABLE=<tenantsTableName output> PEOPLE_TABLE=<peopleTableName output> COMPOSIO_SECRET_ARN=<composioSecretArn output> AWS_REGION=us-west-2 npm run seed -- tenants/<tenantId>.json
 ```
 
 Call the number. With Twilio Elastic SIP Trunking the `To` header carries the OpenAI
