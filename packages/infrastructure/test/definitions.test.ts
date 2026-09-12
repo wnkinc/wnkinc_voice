@@ -103,7 +103,7 @@ describe('synthesized state machine definitions', () => {
 
   it('synthesizes every workflow', () => {
     expect(defs.map((d) => d.id).sort()).toEqual([
-      'AcceptWorkflow842BBA18', 'CallEndedWorkflow7253F29B', 'CrmCallWorkflowD095AD4A', 'CrmLeadWorkflow3E31F026',
+      'AcceptWorkflow842BBA18', 'CallEndedWorkflow7253F29B', 'ComposioHealthWorkflowC5FF9B2D', 'CrmCallWorkflowD095AD4A', 'CrmLeadWorkflow3E31F026',
       'LeadEmailWorkflowE6E42485', 'OwnerAlertWorkflowD38F6F45', 'TelegramWorkflow48A0C9CE',
     ]);
   });

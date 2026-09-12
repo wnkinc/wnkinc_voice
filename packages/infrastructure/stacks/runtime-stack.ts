@@ -16,6 +16,7 @@ import { COMPOSIO_API } from '../workflows/asl.js';
 import { expressNoData, grantHttp } from '../infra_utils/state-machine.js';
 import { callEndedDefinition } from '../workflows/call-ended.js';
 import { crmCallDefinition } from '../workflows/crm-call.js';
+import { composioHealthDefinition } from '../workflows/composio-health.js';
 import { crmLeadDefinition } from '../workflows/crm-lead.js';
 import { leadEmailDefinition } from '../workflows/lead-email.js';
 import { ownerAlertDefinition } from '../workflows/owner-alert.js';
@@ -180,6 +181,7 @@ export class RuntimeStack extends cdk.Stack {
     // ---- The Telegram workflow --------------------------------------------------
     const workflow = new sfn.StateMachine(this, 'TelegramWorkflow', {
       stateMachineName: `${prefix}-telegram`,
+      tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
       definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(telegramDefinition({
         peopleTable: props.peopleTable.tableName,
         tenantsTable: props.tenantsTable.tableName,
@@ -241,6 +243,7 @@ export class RuntimeStack extends cdk.Stack {
     // before deleting the old one of the same name.)
     const leadWorkflow = new sfn.StateMachine(this, 'LeadEmailWorkflow', {
       stateMachineName: `${prefix}-lead-email-express`,
+      tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
       definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(leadEmailDefinition({
         tenantsTable: props.tenantsTable.tableName,
         callsTable: props.callsTable.tableName,
@@ -262,6 +265,7 @@ export class RuntimeStack extends cdk.Stack {
     // CRM sync (workflows/crm-lead.ts, workflows/crm-call.ts).
     const crmLeadWorkflow = new sfn.StateMachine(this, 'CrmLeadWorkflow', {
       stateMachineName: `${prefix}-crm-lead`,
+      tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
       definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(crmLeadDefinition({
         tenantsTable: props.tenantsTable.tableName,
         callsTable: props.callsTable.tableName,
@@ -271,6 +275,7 @@ export class RuntimeStack extends cdk.Stack {
     });
     const crmCallWorkflow = new sfn.StateMachine(this, 'CrmCallWorkflow', {
       stateMachineName: `${prefix}-crm-call`,
+      tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
       definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(crmCallDefinition({
         tenantsTable: props.tenantsTable.tableName,
         callsTable: props.callsTable.tableName,
@@ -292,6 +297,7 @@ export class RuntimeStack extends cdk.Stack {
     // Call ended (workflows/call-ended.ts): transcript -> memory, minutes -> usage.
     const endedWorkflow = new sfn.StateMachine(this, 'CallEndedWorkflow', {
       stateMachineName: `${prefix}-call-ended`,
+      tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
       definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(callEndedDefinition({
         callsTable: props.callsTable.tableName,
         usageTable: props.usageTable.tableName,
@@ -309,6 +315,7 @@ export class RuntimeStack extends cdk.Stack {
     // Owner alert (workflows/owner-alert.ts): owner.notify -> the Telegram reply path.
     const alertWorkflow = new sfn.StateMachine(this, 'OwnerAlertWorkflow', {
       stateMachineName: `${prefix}-owner-alert`,
+      tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
       definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(ownerAlertDefinition({
         tenantsTable: props.tenantsTable.tableName,
         busName: props.bus.eventBusName,
@@ -321,6 +328,28 @@ export class RuntimeStack extends cdk.Stack {
     failedExecutionsAlarm(this, 'OwnerAlertWorkflowFailed', alertWorkflow, props.alarmTopic, 'Owner alert');
     dlqAlarm(this, 'LeadEmailDlqAlarm', startDlq, props.alarmTopic, 'Workflows: a lead.recorded or owner.notify event could not start its workflow');
 
+    // Composio health canary (workflows/composio-health.ts): every morning,
+    // prove each tenant's connections are still ACTIVE. A revoked connection
+    // fails nothing on its own (every CRM and Gmail state catches and carries
+    // on), so this turns the silence into a failed execution, which alarms.
+    const healthWorkflow = new sfn.StateMachine(this, 'ComposioHealthWorkflow', {
+      stateMachineName: `${prefix}-composio-health`,
+      tracingEnabled: true,
+      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(composioHealthDefinition({
+        tenantsTable: props.tenantsTable.tableName,
+        composioConnectionArn,
+      }))),
+      timeout: cdk.Duration.minutes(5),
+    });
+    props.tenantsTable.grantReadData(healthWorkflow);
+    grantHttp(healthWorkflow, [props.composioConnection], [`${COMPOSIO_API}*`]);
+    new events.Rule(this, 'ComposioHealthSchedule', {
+      description: 'Daily Composio connection check for every tenant (15:00 UTC = morning in the US)',
+      schedule: events.Schedule.cron({ minute: '0', hour: '15' }),
+      targets: [new targets.SfnStateMachine(healthWorkflow, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: startDlq })],
+    });
+    failedExecutionsAlarm(this, 'ComposioHealthFailed', healthWorkflow, props.alarmTopic, 'Composio health: a tenant has lost a connection');
+
     new cdk.CfnOutput(this, 'assistantHarnessArn', { value: harness.attrArn });
     new cdk.CfnOutput(this, 'leadEmailWorkflowArn', { value: leadWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'ownerAlertWorkflowArn', { value: alertWorkflow.stateMachineArn });
@@ -329,5 +358,6 @@ export class RuntimeStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'callEndedWorkflowArn', { value: endedWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'telegramWorkflowArn', { value: workflow.stateMachineArn });
+    new cdk.CfnOutput(this, 'composioHealthWorkflowArn', { value: healthWorkflow.stateMachineArn });
   }
 }

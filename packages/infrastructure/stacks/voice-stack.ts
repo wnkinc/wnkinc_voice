@@ -215,6 +215,7 @@ export class VoiceStack extends cdk.Stack {
     });
     const acceptWorkflow = new sfn.StateMachine(this, 'AcceptWorkflow', {
       stateMachineName: `${prefix}-accept`,
+      tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
       definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(acceptDefinition({
         tenantsTable: this.tenantsTable.tableName,
         callsTable: this.callsTable.tableName,

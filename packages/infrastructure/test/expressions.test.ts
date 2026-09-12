@@ -1,6 +1,7 @@
 import jsonata from 'jsonata';
 import { describe, expect, it } from 'vitest';
 import { htmlToTextExpr, sipNumberExpr, SIP_CALLED_HEADERS, SIP_CALLER_HEADERS } from '../workflows/accept.js';
+import { expectedToolkitsExpr, missingToolkitsExpr } from '../workflows/composio-health.js';
 import { nextBusinessMorningExpr } from '../workflows/crm-lead.js';
 
 const evalExpr = (expr: string, input: unknown) => jsonata(expr).evaluate(input);
@@ -48,5 +49,19 @@ describe('nextBusinessMorningExpr', () => {
 describe('htmlToTextExpr', () => {
   it('strips tags and collapses whitespace', async () => {
     expect(await evalExpr(htmlToTextExpr('b'), { b: 'Call to <b>WNK</b> line<br><br>Agent: hi<br>Caller:  yo' })).toBe('Call to WNK line Agent: hi Caller: yo');
+  });
+});
+
+describe('composio health expressions', () => {
+  const row = (crm: boolean, email: boolean) => ({ crm: crm ? { M: { via: { S: 'composio' } } } : undefined, products: { M: { emailResponder: { M: { enabled: { BOOL: email } } } } } });
+  it('expects hubspot for crm via composio and gmail for the email responder', async () => {
+    expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(true, true) })).toEqual(['hubspot', 'gmail']);
+    expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(true, false) })).toEqual(['hubspot']);
+    expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(false, false) })).toEqual([]);
+  });
+  it('reports the expected toolkits Composio does not list as active', async () => {
+    expect(await evalExpr(missingToolkitsExpr('expected', 'active'), { expected: ['hubspot', 'gmail'], active: ['gmail'] })).toEqual(['hubspot']);
+    expect(await evalExpr(missingToolkitsExpr('expected', 'active'), { expected: ['hubspot'], active: ['hubspot', 'gmail'] })).toEqual([]);
+    expect(await evalExpr(missingToolkitsExpr('expected', 'active'), { expected: ['hubspot'], active: [] })).toEqual(['hubspot']);
   });
 });

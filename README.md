@@ -48,7 +48,7 @@ do, and how to verify it. Start there when changing one.
 | `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
 | `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
-| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, lead-email, crm-lead, crm-call, call-ended, owner-alert): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `workflows/asl.ts` is the grammar they share (`q`, `httpTask`, the once-marker pair); everything else lives in the workflow file, duplicated if need be |
+| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, lead-email, crm-lead, crm-call, call-ended, owner-alert, composio-health): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `workflows/asl.ts` is the grammar they share (`q`, `httpTask`, the once-marker pair); everything else lives in the workflow file, duplicated if need be |
 | `packages/shared/src/composio.ts` | Composio SDK, scripts only (consent links, the owner's Gmail address, the assistant's session). No Lambda bundles it |
 | `packages/shared/src/store.ts` | DynamoDB (tenants, calls, people) behind one `Store` interface, plus an in-memory version for tests. No leads table: the tenant's CRM holds the lead; the call row (tool calls + once-markers) is the audit |
 | `packages/shared/src/events.ts` | EventBridge publisher |
@@ -200,6 +200,15 @@ metric. Standard workflows (Telegram, owner alert, CRM lead) keep their history 
 workflows that handle transcripts or CRM notes (lead email, CRM call) are Express with execution
 data not logged, so only the state path and the error are kept. Events carry ids and outcomes;
 the transcript stays on the call row and is fetched by id where needed.
+
+Silent degradation gets a canary: every day at 15:00 UTC the `composio-health` workflow scans the
+Tenants table and asks Composio for each tenant's ACTIVE connected accounts, expecting HubSpot when
+`crm.via` is composio, Gmail when the email responder is on, and at least one when the assistant is
+on. A missing connection would otherwise fail nothing (every CRM and Gmail state catches and carries
+on); here it fails the execution, which alarms with the tenant and the reconnect command.
+
+Every state machine runs with X-Ray tracing on, so a trace started at the webhook continues through
+the accept workflow, the session Lambda, the bus event, and the workflow it starts.
 
 ## Operating the session Lambda
 
