@@ -29,6 +29,9 @@
     },
     "assistant": {
       "enabled": false
+    },
+    "browser": {
+      "enabled": false
     }
   },
   "people": [

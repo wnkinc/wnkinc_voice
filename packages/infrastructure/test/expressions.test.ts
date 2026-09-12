@@ -1,6 +1,7 @@
 import jsonata from 'jsonata';
 import { describe, expect, it } from 'vitest';
 import { htmlToTextExpr, sipNumberExpr, SIP_CALLED_HEADERS, SIP_CALLER_HEADERS } from '../workflows/accept.js';
+import { loginSiteExpr } from '../workflows/browser-login.js';
 import { expectedToolkitsExpr, missingToolkitsExpr } from '../workflows/composio-health.js';
 import { nextBusinessMorningExpr } from '../workflows/crm-lead.js';
 
@@ -63,5 +64,17 @@ describe('composio health expressions', () => {
     expect(await evalExpr(missingToolkitsExpr('expected', 'active'), { expected: ['hubspot', 'gmail'], active: ['gmail'] })).toEqual(['hubspot']);
     expect(await evalExpr(missingToolkitsExpr('expected', 'active'), { expected: ['hubspot'], active: ['hubspot', 'gmail'] })).toEqual([]);
     expect(await evalExpr(missingToolkitsExpr('expected', 'active'), { expected: ['hubspot'], active: [] })).toEqual(['hubspot']);
+  });
+});
+
+describe('loginSiteExpr', () => {
+  const site = (text: string) => evalExpr(loginSiteExpr('text'), { text });
+  it('the words after /login, trimmed', async () => {
+    expect(await site('/login supplier portal')).toBe('supplier portal');
+    expect(await site('/login   https://portal.example.com ')).toBe('https://portal.example.com');
+  });
+  it("'' for a bare /login", async () => {
+    expect(await site('/login')).toBe('');
+    expect(await site('/login ')).toBe('');
   });
 });

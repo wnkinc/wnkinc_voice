@@ -18,6 +18,8 @@ export interface TelegramRefs {
   harnessArn: string;
   /** Identity API key provider holding the Composio key; resolved into the MCP session header at invocation. */
   composioProviderArn: string;
+  /** The browser-login workflow: an owner's `/login` starts it instead of the assistant. */
+  browserLoginArn: string;
 }
 
 export function telegramDefinition(refs: TelegramRefs) {
@@ -50,7 +52,23 @@ export function telegramDefinition(refs: TelegramRefs) {
       LookupTenant: {
         Type: 'Task', Resource: 'arn:aws:states:::dynamodb:getItem',
         Arguments: { TableName: refs.tenantsTable, Key: { phoneNumber: { S: q('$person.tenantPhone.S') } } },
-        Assign: { tenant: q('$states.result.Item') }, Output: q('$states.input'), Next: 'AssistantEnabled',
+        Assign: { tenant: q('$states.result.Item') }, Output: q('$states.input'), Next: 'IsLogin',
+      },
+      // `/login ...` from the owner, with the browser product on: the login
+      // handoff (workflows/browser-login.ts), not the assistant. The command
+      // opens a browser the business signs into, so only the owner may send it.
+      IsLogin: {
+        Type: 'Choice',
+        Choices: [{ Condition: q("$substring($lowercase($states.input.message.text), 0, 6) = '/login' and $person.role.S = 'owner' and $exists($tenant) and $tenant.products.M.browser.M.enabled.BOOL = true"), Next: 'StartLogin' }],
+        Default: 'AssistantEnabled',
+      },
+      StartLogin: {
+        Type: 'Task', Resource: 'arn:aws:states:::states:startExecution',
+        Arguments: {
+          StateMachineArn: refs.browserLoginArn,
+          Input: { tenantId: q('$tenant.tenantId.S'), tenantPhoneNumber: q('$tenant.phoneNumber.S'), chatId: q('$states.input.message.chat.id'), text: q('$states.input.message.text') },
+        },
+        End: true,
       },
       AssistantEnabled: {
         Type: 'Choice',

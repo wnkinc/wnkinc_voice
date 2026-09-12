@@ -52,6 +52,13 @@ export const TenantConfigSchema = z.object({
    */
   composioMcpUrl: z.url().optional(),
   /**
+   * The tenant's saved browser: a Browserbase context (cookies and logins,
+   * encrypted in their vault) created by the browser-login workflow on the
+   * owner's first `/login` and written to the row. Copy it into the file when
+   * the workflow says so; a re-seed without it starts a fresh browser.
+   */
+  browserContextId: z.string().optional(),
+  /**
    * Minutes to subtract from UTC so that calendar days roll at 3 AM in the
    * tenant's timezone — the assistant starts a fresh conversation session each
    * day at that cutoff. COMPUTED by the seed from `timezone` (Step Functions
@@ -108,6 +115,8 @@ export const TenantConfigSchema = z.object({
     emailResponder: z.object({ enabled: z.boolean().default(false) }).prefault({}),
     /** Chat assistant for the tenant's own people (Telegram now, SMS later). */
     assistant: z.object({ enabled: z.boolean().default(false) }).prefault({}),
+    /** A saved browser for the business: the owner signs into sites over a live view (`/login` on Telegram); logins persist in Browserbase. */
+    browser: z.object({ enabled: z.boolean().default(false) }).prefault({}),
   }).prefault({}),
 });
 export type TenantConfig = z.infer<typeof TenantConfigSchema>;

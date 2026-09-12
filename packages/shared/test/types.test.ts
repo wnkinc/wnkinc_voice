@@ -7,7 +7,7 @@ const minimal = { tenantId: 't1', phoneNumber: '+15555550100', businessName: 'T1
 describe('TenantConfigSchema.products', () => {
   it('defaults every service to off (fail closed)', () => {
     const t = TenantConfigSchema.parse(minimal);
-    expect(t.products).toEqual({ emailResponder: { enabled: false }, assistant: { enabled: false } });
+    expect(t.products).toEqual({ emailResponder: { enabled: false }, assistant: { enabled: false }, browser: { enabled: false } });
   });
 
   it('fills defaults inside a partially specified service', () => {

@@ -12,8 +12,9 @@ import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { dlqAlarm, failedExecutionsAlarm } from '../infra_utils/alarms.js';
-import { COMPOSIO_API } from '../workflows/asl.js';
+import { BROWSERBASE_API, COMPOSIO_API } from '../workflows/asl.js';
 import { expressNoData, grantHttp } from '../infra_utils/state-machine.js';
+import { browserLoginDefinition } from '../workflows/browser-login.js';
 import { callEndedDefinition } from '../workflows/call-ended.js';
 import { crmCallDefinition } from '../workflows/crm-call.js';
 import { composioHealthDefinition } from '../workflows/composio-health.js';
@@ -178,6 +179,41 @@ export class RuntimeStack extends cdk.Stack {
     });
     dlqAlarm(this, 'TelegramReplyDlqAlarm', replyDlq, props.alarmTopic, 'Assistant (Telegram): a reply was not delivered');
 
+    // ---- Browser login handoff (workflows/browser-login.ts) ---------------------
+    // The owner's `/login` opens a Browserbase session on the tenant's saved
+    // browser and sends them the live view to sign in; the login persists for
+    // later sessions. One platform project; each tenant's browser is a context
+    // keyed on the row. Fill the secret after deploy, then redeploy (the project
+    // id is resolved into the definition; the key into the Connection):
+    //   aws secretsmanager put-secret-value --secret-id <arn> --secret-string '{"BROWSERBASE_API_KEY":"bb_live_...","BROWSERBASE_PROJECT_ID":"..."}'
+    const browserbaseSecret = new secretsmanager.Secret(this, 'BrowserbaseSecret', {
+      description: 'Browserbase: {"BROWSERBASE_API_KEY": <project API key>, "BROWSERBASE_PROJECT_ID": <project id>}',
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ BROWSERBASE_PROJECT_ID: 'set-me' }),
+        generateStringKey: 'BROWSERBASE_API_KEY',
+        excludePunctuation: true,
+      },
+    });
+    const browserbaseConnection = new events.Connection(this, 'BrowserbaseConnection', {
+      description: 'Browserbase API key for the browser workflows',
+      authorization: events.Authorization.apiKey('X-BB-API-Key', browserbaseSecret.secretValueFromJson('BROWSERBASE_API_KEY')),
+    });
+    const loginWorkflow = new sfn.StateMachine(this, 'BrowserLoginWorkflow', {
+      stateMachineName: `${prefix}-browser-login`,
+      tracingEnabled: true,
+      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(browserLoginDefinition({
+        tenantsTable: props.tenantsTable.tableName,
+        busName: props.bus.eventBusName,
+        browserbaseConnectionArn: browserbaseConnection.connectionArn,
+        browserbaseProjectId: browserbaseSecret.secretValueFromJson('BROWSERBASE_PROJECT_ID').unsafeUnwrap(),
+      }))),
+      timeout: cdk.Duration.minutes(20),
+    });
+    props.tenantsTable.grantReadWriteData(loginWorkflow);
+    props.bus.grantPutEventsTo(loginWorkflow);
+    grantHttp(loginWorkflow, [browserbaseConnection], [`${BROWSERBASE_API}*`]);
+    failedExecutionsAlarm(this, 'BrowserLoginWorkflowFailed', loginWorkflow, props.alarmTopic, 'Browser login handoff');
+
     // ---- The Telegram workflow --------------------------------------------------
     const workflow = new sfn.StateMachine(this, 'TelegramWorkflow', {
       stateMachineName: `${prefix}-telegram`,
@@ -189,6 +225,7 @@ export class RuntimeStack extends cdk.Stack {
         busName: props.bus.eventBusName,
         harnessArn: harness.attrArn,
         composioProviderArn: props.composioProviderArn,
+        browserLoginArn: loginWorkflow.stateMachineArn,
       }))),
       timeout: cdk.Duration.minutes(5),
     });
@@ -196,6 +233,7 @@ export class RuntimeStack extends cdk.Stack {
     props.tenantsTable.grantReadData(workflow);
     props.usageTable.grantWriteData(workflow);
     props.bus.grantPutEventsTo(workflow);
+    loginWorkflow.grantStartExecution(workflow);
     workflow.addToRolePolicy(new iam.PolicyStatement({
       actions: ['bedrock-agentcore:InvokeHarness', 'bedrock-agentcore:InvokeAgentRuntime'],
       resources: [harness.attrArn, `${harness.attrArn}/*`],
@@ -359,5 +397,7 @@ export class RuntimeStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'telegramWorkflowArn', { value: workflow.stateMachineArn });
     new cdk.CfnOutput(this, 'composioHealthWorkflowArn', { value: healthWorkflow.stateMachineArn });
+    new cdk.CfnOutput(this, 'browserbaseSecretArn', { value: browserbaseSecret.secretArn });
+    new cdk.CfnOutput(this, 'browserLoginWorkflowArn', { value: loginWorkflow.stateMachineArn });
   }
 }

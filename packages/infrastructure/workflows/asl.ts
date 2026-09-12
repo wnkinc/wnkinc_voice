@@ -17,6 +17,7 @@ export const q = (expr: string) => `{% ${expr} %}`;
 /** v3.1: the path the Composio SDK uses; v3 does not resolve every HubSpot slug. */
 export const COMPOSIO_API = 'https://backend.composio.dev/api/v3.1/';
 export const OPENAI_API = 'https://api.openai.com/v1/';
+export const BROWSERBASE_API = 'https://api.browserbase.com/v1/';
 
 /** An HTTP task through an EventBridge Connection. One retry, as the SDK adapter had. */
 export function httpTask(connectionArn: string, method: 'GET' | 'POST', url: string, body?: Record<string, unknown> | string, query?: Record<string, string>) {

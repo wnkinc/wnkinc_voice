@@ -48,7 +48,7 @@ do, and how to verify it. Start there when changing one.
 | `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
 | `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
-| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, lead-email, crm-lead, crm-call, call-ended, owner-alert, composio-health): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `workflows/asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair); everything else lives in the workflow file, duplicated if need be |
+| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, lead-email, crm-lead, crm-call, call-ended, owner-alert, composio-health, browser-login): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `workflows/asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair); everything else lives in the workflow file, duplicated if need be |
 | `packages/shared/src/composio.ts` | Composio SDK, scripts only (consent links, the owner's Gmail address, the assistant's session). No Lambda bundles it |
 | `packages/shared/src/store.ts` | DynamoDB (tenants, calls, people) behind one `Store` interface, plus an in-memory version for tests. No leads table: the tenant's CRM holds the lead; the call row (tool calls + once-markers) is the audit |
 | `packages/shared/src/events.ts` | EventBridge publisher |
@@ -138,7 +138,8 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `active` | `false` → calls rejected with SIP 603 |
 | `crm` | `{ "type": "hubspot", "via": "composio" }` enables CRM sync, caller recognition, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
 | `composioMcpUrl` | The assistant's SaaS tools: the tenant's Composio meta-tools MCP session, minted by the seed once the owner has connected accounts. The workflow hands it to the harness per invocation; no URL, no SaaS tools. |
-| `products` | Which platform services are on for this tenant: `emailResponder: { enabled }`, `assistant: { enabled }`. The email responder sends from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default all off; agents refuse to act for a tenant whose flag is off. |
+| `products` | Which platform services are on for this tenant: `emailResponder: { enabled }`, `assistant: { enabled }`, `browser: { enabled }`. The email responder sends from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default all off; agents refuse to act for a tenant whose flag is off. |
+| `browserContextId` | The tenant's saved browser in Browserbase (cookies, logins). The browser-login workflow creates it on the owner's first `/login` and writes it to the row; copy it into the file when the reply says so, or a re-seed starts a fresh browser. |
 
 Unknown numbers are rejected with SIP 404.
 
@@ -320,6 +321,29 @@ file and re-seeding removes their access.
 
 Prove it without Telegram: `npx tsx scripts/test-assistant.mts "who is Sarah?"` (invokes the harness
 with the same arguments the workflow uses).
+
+### Saved browser: `/login`
+
+A business signs into the sites it uses once, and the platform keeps that browser. The owner sends
+`/login <site>` to the bot; the Telegram workflow starts the browser-login workflow
+(`workflows/browser-login.ts`) instead of the assistant. It opens a Browserbase session on the
+tenant's context (the saved browser: cookies and logins, encrypted in Browserbase's vault, keyed on
+the row as `browserContextId`), sends the owner the interactive live view link, waits ten minutes,
+and releases the session so the context syncs. Captcha solving is Browserbase's, on by default.
+Only the owner's Telegram id may send `/login`, and only for a tenant with `products.browser.enabled`.
+
+Setup, once: create a Browserbase project, then fill the secret and redeploy (the project id is
+resolved into the workflow definition, the key into an EventBridge Connection):
+
+```bash
+aws secretsmanager put-secret-value --secret-id <browserbaseSecretArn> \
+  --secret-string '{"BROWSERBASE_API_KEY":"bb_live_...","BROWSERBASE_PROJECT_ID":"..."}'
+npm run deploy
+```
+
+The first `/login` for a tenant creates its context and the reply names the id; paste it into the
+tenant file as `browserContextId` so a re-seed keeps it. What the assistant does with that browser
+is step two (a per-tenant Stagehand session); today nothing but the owner drives it.
 
 ## Cost & scale notes
 
