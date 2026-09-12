@@ -59,10 +59,25 @@ export function browserLoginDefinition(refs: BrowserLoginRefs) {
       },
       BrowserEnabled: {
         Type: 'Choice',
-        Choices: [{ Condition: q('$exists($tenant) and $tenant.products.M.browser.M.enabled.BOOL = true'), Next: 'HasContext' }],
+        Choices: [{ Condition: q('$exists($tenant) and $tenant.products.M.browser.M.enabled.BOOL = true'), Next: 'ClaimWindow' }],
         Default: 'NotEnabled',
       },
       NotEnabled: { Type: 'Fail', Error: 'BrowserNotEnabled', Cause: 'products.browser.enabled is not true on the tenant row' },
+      // ---- One window at a time: two sessions on one context race on release,
+      // and the later one overwrites the earlier one's logins. The row carries
+      // the window's end; a conditional update claims it. Cleared at release.
+      ClaimWindow: {
+        Type: 'Task', Resource: 'arn:aws:states:::dynamodb:updateItem',
+        Arguments: {
+          TableName: refs.tenantsTable, Key: { phoneNumber: { S: q('$tenant.phoneNumber.S') } },
+          UpdateExpression: 'SET browserLoginUntil = :until',
+          ConditionExpression: 'attribute_not_exists(browserLoginUntil) OR browserLoginUntil < :now',
+          ExpressionAttributeValues: { ':until': { S: q(`$fromMillis($millis() + ${(windowSeconds + 300) * 1000})`) }, ':now': { S: q('$now()') } },
+        },
+        Catch: [{ ErrorEquals: ['DynamoDB.ConditionalCheckFailedException'], Output: q('$states.input'), Next: 'TellBusy' }],
+        Output: q('$states.input'), Next: 'HasContext',
+      },
+      TellBusy: { ...tell("'A browser is already open for this business. Use the link you have, or try again once it closes.'"), End: true },
       // ---- The tenant's saved browser: reuse it, or create it once ------------
       HasContext: { Type: 'Choice', Choices: [{ Condition: q('$exists($tenant.browserContextId.S)'), Next: 'UseContext' }], Default: 'CreateContext' },
       UseContext: { Type: 'Pass', Assign: { contextId: q('$tenant.browserContextId.S'), created: false }, Output: q('$states.input'), Next: 'StartSession' },
@@ -108,7 +123,12 @@ export function browserLoginDefinition(refs: BrowserLoginRefs) {
       // Release syncs the context. A failed release still tells the owner; Browserbase's timeout ends the session either way.
       Release: {
         ...httpTask(refs.browserbaseConnectionArn, 'POST', sessionPath, { projectId: refs.browserbaseProjectId, status: 'REQUEST_RELEASE' }),
-        Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'TellClosed' }],
+        Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'ClearWindow' }],
+        Output: q('$states.input'), Next: 'ClearWindow',
+      },
+      ClearWindow: {
+        Type: 'Task', Resource: 'arn:aws:states:::dynamodb:updateItem',
+        Arguments: { TableName: refs.tenantsTable, Key: { phoneNumber: { S: q('$tenant.phoneNumber.S') } }, UpdateExpression: 'REMOVE browserLoginUntil' },
         Output: q('$states.input'), Next: 'TellClosed',
       },
       TellClosed: { ...tell("'Browser closed. Whatever you signed into is saved for this business.'"), End: true },

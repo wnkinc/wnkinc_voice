@@ -329,7 +329,11 @@ A business signs into the sites it uses once, and the platform keeps that browse
 (`workflows/browser-login.ts`) instead of the assistant. It opens a Browserbase session on the
 tenant's context (the saved browser: cookies and logins, encrypted in Browserbase's vault, keyed on
 the row as `browserContextId`), sends the owner the interactive live view link, waits ten minutes,
-and releases the session so the context syncs. Captcha solving is Browserbase's, on by default.
+and releases the session so the context syncs. One window at a time per tenant: two sessions on one
+context race on release and the later one overwrites the earlier one's logins, so the row carries the
+window's end (`browserLoginUntil`) and a second `/login` meanwhile is answered, not started. Captcha
+solving is Browserbase's, on by default. The windowed live view has an address bar; the owner types the
+site's URL there.
 Only the owner's Telegram id may send `/login`, and only for a tenant with `products.browser.enabled`.
 
 Setup, once: create a Browserbase project. Its id goes in `cdk.json` context as
