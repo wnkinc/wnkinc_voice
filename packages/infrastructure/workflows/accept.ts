@@ -10,7 +10,8 @@
  * session Lambda re-sends the full agent config when it attaches); caller
  * recognition then runs with a real time budget and rides to the session
  * on the queue message. The API keys ride in EventBridge Connections
- * (resolved from the secrets at deploy: rotate a key, redeploy).
+ * (resolved from the secrets when the Connection is created or changed; a
+ * rotated key also needs `aws events update-connection`).
  */
 import { OPENAI_API, composio, httpTask, q } from './asl.js';
 

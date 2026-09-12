@@ -2,6 +2,7 @@
   "app": "npx tsx packages/infrastructure/bin/app.ts",
   "output": "cdk.out",
   "context": {
+    "browserbaseProjectId": "cb1054bf-305b-4a28-8955-f74859c780ce",
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/aws-iam:minimizePolicies": true,

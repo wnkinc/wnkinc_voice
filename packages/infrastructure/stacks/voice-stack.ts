@@ -204,7 +204,8 @@ export class VoiceStack extends cdk.Stack {
     // ---- Accept workflow (workflows/accept.ts): verified webhook -> tenant ->
     // claim -> accept -> recognize -> enqueue. Express, execution data not
     // logged. The API keys ride in EventBridge Connections (resolved from the
-    // secrets at deploy: rotate a key, redeploy).
+    // secrets when the Connection is created or changed; CloudFormation does
+    // not re-resolve on a rotation alone, so also `aws events update-connection`).
     this.composioConnection = new events.Connection(this, 'ComposioConnection', {
       description: 'Composio API key for the platform workflows (voice + runtime stacks)',
       authorization: events.Authorization.apiKey('x-api-key', this.composioSecret.secretValueFromJson('COMPOSIO_API_KEY')),

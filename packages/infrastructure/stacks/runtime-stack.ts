@@ -182,10 +182,19 @@ export class RuntimeStack extends cdk.Stack {
     // ---- Browser login handoff (workflows/browser-login.ts) ---------------------
     // The owner's `/login` opens a Browserbase session on the tenant's saved
     // browser and sends them the live view to sign in; the login persists for
-    // later sessions. One platform project; each tenant's browser is a context
-    // keyed on the row. Fill the secret after deploy, then redeploy (the project
-    // id is resolved into the definition; the key into the Connection):
-    //   aws secretsmanager put-secret-value --secret-id <arn> --secret-string '{"BROWSERBASE_API_KEY":"bb_live_...","BROWSERBASE_PROJECT_ID":"..."}'
+    // later sessions. One platform project (its id is cdk.json context: not a
+    // secret, and a literal in the definition); each tenant's browser is a
+    // context keyed on the row. The key: fill the secret after the first
+    // deploy, then write it to the Connection too, because CloudFormation
+    // resolves a secret reference only when the resource itself changes:
+    //   aws secretsmanager put-secret-value --secret-id <arn> --secret-string '{"BROWSERBASE_API_KEY":"bb_live_..."}'
+    //   aws events update-connection --name <connection> --auth-parameters '{"ApiKeyAuthParameters":{"ApiKeyName":"X-BB-API-Key","ApiKeyValue":"bb_live_..."}}'
+    const browserbaseProjectId = this.node.tryGetContext('browserbaseProjectId') as string | undefined;
+    if (!browserbaseProjectId) throw new Error('cdk.json context "browserbaseProjectId" is required (the Browserbase project id; not a secret)');
+    // Do not touch generateSecretString once deployed: any change to it makes
+    // CloudFormation generate a NEW value, overwriting the key you stored. (The
+    // BROWSERBASE_PROJECT_ID placeholder in the template is a leftover of the
+    // first deploy, kept for that reason; the project id lives in cdk.json.)
     const browserbaseSecret = new secretsmanager.Secret(this, 'BrowserbaseSecret', {
       description: 'Browserbase: {"BROWSERBASE_API_KEY": <project API key>, "BROWSERBASE_PROJECT_ID": <project id>}',
       generateSecretString: {
@@ -205,7 +214,7 @@ export class RuntimeStack extends cdk.Stack {
         tenantsTable: props.tenantsTable.tableName,
         busName: props.bus.eventBusName,
         browserbaseConnectionArn: browserbaseConnection.connectionArn,
-        browserbaseProjectId: browserbaseSecret.secretValueFromJson('BROWSERBASE_PROJECT_ID').unsafeUnwrap(),
+        browserbaseProjectId,
       }))),
       timeout: cdk.Duration.minutes(20),
     });

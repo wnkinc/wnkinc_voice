@@ -332,13 +332,15 @@ the row as `browserContextId`), sends the owner the interactive live view link, 
 and releases the session so the context syncs. Captcha solving is Browserbase's, on by default.
 Only the owner's Telegram id may send `/login`, and only for a tenant with `products.browser.enabled`.
 
-Setup, once: create a Browserbase project, then fill the secret and redeploy (the project id is
-resolved into the workflow definition, the key into an EventBridge Connection):
+Setup, once: create a Browserbase project. Its id goes in `cdk.json` context as
+`browserbaseProjectId` (not a secret; a literal in the definition). The key goes in the secret and,
+because CloudFormation resolves a secret reference only when the resource itself changes, into the
+EventBridge Connection directly (the same applies to every Connection here after a rotation):
 
 ```bash
-aws secretsmanager put-secret-value --secret-id <browserbaseSecretArn> \
-  --secret-string '{"BROWSERBASE_API_KEY":"bb_live_...","BROWSERBASE_PROJECT_ID":"..."}'
-npm run deploy
+aws secretsmanager put-secret-value --secret-id <browserbaseSecretArn> --secret-string '{"BROWSERBASE_API_KEY":"bb_live_..."}'
+aws events update-connection --name <BrowserbaseConnection name> \
+  --auth-parameters '{"ApiKeyAuthParameters":{"ApiKeyName":"X-BB-API-Key","ApiKeyValue":"bb_live_..."}}'
 ```
 
 The first `/login` for a tenant creates its context and the reply names the id; paste it into the
