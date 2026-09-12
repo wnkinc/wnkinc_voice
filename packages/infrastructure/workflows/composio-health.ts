@@ -14,7 +14,7 @@
  * A new toolkit is one more line in `expectedToolkitsExpr`. A new tenant is
  * covered by the scan; nothing here names one.
  */
-import { COMPOSIO_API, httpTask, q } from './asl.js';
+import { composio, q } from './asl.js';
 
 export interface ComposioHealthRefs {
   tenantsTable: string;
@@ -68,7 +68,7 @@ export function composioHealthDefinition(refs: ComposioHealthRefs) {
             UsesComposio: { Type: 'Choice', Choices: [{ Condition: q('$count($expected) > 0 or $needsAny'), Next: 'ActiveAccounts' }], Default: 'NotUsed' },
             NotUsed: { Type: 'Succeed' },
             ActiveAccounts: {
-              ...httpTask(refs.composioConnectionArn, 'GET', `${COMPOSIO_API}connected_accounts`, undefined, { user_ids: q('$tenantId'), statuses: 'ACTIVE' }),
+              ...composio(refs.composioConnectionArn, q('$tenantId')).accounts(),
               Assign: { active: q('[$states.result.ResponseBody.items.toolkit.slug]') },
               Output: q('$states.input'), Next: 'AllPresent',
             },

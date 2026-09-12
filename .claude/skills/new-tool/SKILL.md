@@ -19,7 +19,7 @@ Composio brokers it; the model gets Composio's meta tools over the tenant's sess
 
 ## A workflow needs a SaaS (CRM sync, lead email, caller recognition)
 
-Add an HTTP task state to the workflow file under `workflows/`: `httpTask(connectionArn, ...)` from `workflows/asl.ts` against Composio's v3.1 execute path, the tenant id as `user_id` in the body. Spike the call with curl first to learn the response shape (see the runtime stack's comments). A second CRM is another set of states selected by the row's `crm.type`; never a default.
+Add a task state to the workflow file under `workflows/`: `composio(connectionArn, tenantIdExpr)` from `workflows/asl.ts`, then `.execute(slug, args)` for a toolkit tool, `.accounts(toolkit)` for the connected account id, or `.proxy(accountId, ...)` for a REST call no tool covers. The helper names the tenant on every call; the definitions test rejects a Composio task that does not. Spike the call with curl first to learn the response shape (see the runtime stack's comments). A second CRM is another set of states selected by the row's `crm.type`; never a default.
 
 ## The voice receptionist needs a tool
 

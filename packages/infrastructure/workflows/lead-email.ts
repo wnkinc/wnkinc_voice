@@ -11,7 +11,7 @@
  * against redelivery, not exactly-once. Toolkit versions are not pinned
  * here (dev); pin in prod with a `version` field on the execute bodies.
  */
-import { COMPOSIO_API, checkDone, httpTask, markDone, q } from './asl.js';
+import { checkDone, composio, markDone, q } from './asl.js';
 
 export interface LeadEmailRefs {
   tenantsTable: string;
@@ -23,10 +23,9 @@ export interface LeadEmailRefs {
 }
 
 export function leadEmailDefinition(refs: LeadEmailRefs) {
-  const http = (method: 'GET' | 'POST', path: string, body?: Record<string, unknown> | string, query?: Record<string, string>) =>
-    httpTask(refs.composioConnectionArn, method, COMPOSIO_API + path, body, query);
-  const onceKey = q("'done:email:lead:' & $states.input.detail.lead.leadId");
   const tenantId = q('$tenant.tenantId.S');
+  const saas = composio(refs.composioConnectionArn, tenantId);
+  const onceKey = q("'done:email:lead:' & $states.input.detail.lead.leadId");
   const lead = '$states.input.detail.lead';
   const phoneFilter = (propertyName: string) => ({ filters: [{ propertyName, operator: 'EQ', value: q(`${lead}.phone`) }] });
   // The email, from existing data only. JSONata strings: no quotes or apostrophes inside.
@@ -74,10 +73,7 @@ export function leadEmailDefinition(refs: LeadEmailRefs) {
         Default: 'HasPhone',
       },
       FindContact: {
-        ...http('POST', 'tools/execute/HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', {
-          user_id: tenantId,
-          arguments: { filterGroups: [phoneFilter('phone'), phoneFilter('mobilephone')], properties: ['firstname', 'lastname', 'phone', 'email'], limit: 1 },
-        }),
+        ...saas.execute('HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', { filterGroups: [phoneFilter('phone'), phoneFilter('mobilephone')], properties: ['firstname', 'lastname', 'phone', 'email'], limit: 1 }),
         Assign: { contact: q('$states.result.ResponseBody.data.results[0]') },
         Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasPhone' }],
         Output: q('$states.input'), Next: 'HasContact',
@@ -85,19 +81,16 @@ export function leadEmailDefinition(refs: LeadEmailRefs) {
       HasContact: { Type: 'Choice', Choices: [{ Condition: q('$exists($contact.id)'), Next: 'HubspotAccount' }], Default: 'HasPhone' },
       // Notes have no Composio tool; the proxy needs the connected account id.
       HubspotAccount: {
-        ...http('GET', 'connected_accounts', undefined, { user_ids: tenantId, toolkit_slugs: 'hubspot', statuses: 'ACTIVE' }),
+        ...saas.accounts('hubspot'),
         Assign: { accountId: q('$states.result.ResponseBody.items[0].id') },
         Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasPhone' }],
         Output: q('$states.input'), Next: 'LastNote',
       },
       LastNote: {
-        ...http('POST', 'tools/execute/proxy', {
-          endpoint: '/crm/v3/objects/notes/search', method: 'POST', connected_account_id: q('$accountId'),
-          body: {
-            filterGroups: [{ filters: [{ propertyName: 'associations.contact', operator: 'EQ', value: q('$contact.id') }] }],
-            sorts: [{ propertyName: 'hs_timestamp', direction: 'DESCENDING' }],
-            properties: ['hs_note_body', 'hs_timestamp'], limit: 1,
-          },
+        ...saas.proxy(q('$accountId'), 'POST', '/crm/v3/objects/notes/search', {
+          filterGroups: [{ filters: [{ propertyName: 'associations.contact', operator: 'EQ', value: q('$contact.id') }] }],
+          sorts: [{ propertyName: 'hs_timestamp', direction: 'DESCENDING' }],
+          properties: ['hs_note_body', 'hs_timestamp'], limit: 1,
         }),
         Assign: { note: q('$states.result.ResponseBody.data.results[0].properties') },
         Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasPhone' }],
@@ -120,20 +113,17 @@ export function leadEmailDefinition(refs: LeadEmailRefs) {
       } } : {}),
       // ---- Send from the owner's own Gmail to the owner ----------------------
       OwnerEmail: {
-        ...http('POST', 'tools/execute/GMAIL_GET_PROFILE', { user_id: tenantId, arguments: {} }),
+        ...saas.execute('GMAIL_GET_PROFILE', {}),
         Assign: { ownerEmail: q('$states.result.ResponseBody.data.emailAddress') },
         Output: q('$states.input'), Next: 'HasOwnerEmail',
       },
       HasOwnerEmail: { Type: 'Choice', Choices: [{ Condition: q('$exists($ownerEmail)'), Next: 'Send' }], Default: 'NoGmail' },
       NoGmail: { Type: 'Fail', Error: 'NoGmailConnection', Cause: 'No Gmail profile for the tenant in Composio; run scripts/connect-composio.mts <tenantId> gmail' },
       Send: {
-        ...http('POST', 'tools/execute/GMAIL_SEND_EMAIL', {
-          user_id: tenantId,
-          arguments: {
-            recipient_email: q('$ownerEmail'),
-            subject: q(`'New lead: ' & ${lead}.callerName & ' - ' & $substring(${lead}.reason, 0, 60)`),
-            body: q(bodyExpr),
-          },
+        ...saas.execute('GMAIL_SEND_EMAIL', {
+          recipient_email: q('$ownerEmail'),
+          subject: q(`'New lead: ' & ${lead}.callerName & ' - ' & $substring(${lead}.reason, 0, 60)`),
+          body: q(bodyExpr),
         }),
         Assign: { sent: q('$states.result.ResponseBody.successful = true') },
         Output: q('$states.input'), Next: 'SentOk',

@@ -6,7 +6,7 @@
  * a follow-up task due the next business morning. Once-marker before, mark
  * after; a failed execution alarms.
  */
-import { COMPOSIO_API, checkDone, httpTask, markDone, q } from './asl.js';
+import { checkDone, composio, markDone, q } from './asl.js';
 
 export interface CrmLeadRefs {
   tenantsTable: string;
@@ -38,9 +38,7 @@ const esc = (expr: string) => `$replace($replace($replace(${expr}, '&', '&amp;')
 // ---- Definition ----------------------------------------------------------------
 
 export function crmLeadDefinition(refs: CrmLeadRefs) {
-  const http = (method: 'GET' | 'POST', path: string, body?: Record<string, unknown> | string, query?: Record<string, string>) =>
-    httpTask(refs.composioConnectionArn, method, COMPOSIO_API + path, body, query);
-  const tenantId = q('$tenant.tenantId.S');
+  const crm = composio(refs.composioConnectionArn, q('$tenant.tenantId.S'));
   const lead = '$states.input.detail.lead';
   const onceKey = q("'done:crm:lead:' & $states.input.detail.lead.leadId");
   const nextBusinessMorning = nextBusinessMorningExpr("($exists($tenant.sessionDayOffsetMinutes.N) ? $number($tenant.sessionDayOffsetMinutes.N) : 600)");
@@ -68,25 +66,19 @@ export function crmLeadDefinition(refs: CrmLeadRefs) {
       },
       HasCrm: { Type: 'Choice', Choices: [{ Condition: q(`$exists(${lead}.phone) and $tenant.crm.M.type.S = 'hubspot' and $tenant.crm.M.via.S = 'composio'`), Next: 'FindContact' }], Default: 'Skipped' },
       FindContact: {
-        ...http('POST', 'tools/execute/HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', {
-          user_id: tenantId,
-          arguments: {
-            filterGroups: [
-              { filters: [{ propertyName: 'phone', operator: 'EQ', value: q(`${lead}.phone`) }] },
-              { filters: [{ propertyName: 'mobilephone', operator: 'EQ', value: q(`${lead}.phone`) }] },
-            ],
-            properties: ['firstname', 'lastname', 'phone'], limit: 1,
-          },
+        ...crm.execute('HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', {
+          filterGroups: [
+            { filters: [{ propertyName: 'phone', operator: 'EQ', value: q(`${lead}.phone`) }] },
+            { filters: [{ propertyName: 'mobilephone', operator: 'EQ', value: q(`${lead}.phone`) }] },
+          ],
+          properties: ['firstname', 'lastname', 'phone'], limit: 1,
         }),
         Assign: { contact: q('$states.result.ResponseBody.data.results[0]') },
         Output: q('$states.input'), Next: 'HasContact',
       },
       HasContact: { Type: 'Choice', Choices: [{ Condition: q('$exists($contact.id)'), Next: 'MissingNames' }], Default: 'CreateContact' },
       CreateContact: {
-        ...http('POST', 'tools/execute/HUBSPOT_CREATE_CONTACT', {
-          user_id: tenantId,
-          arguments: q(`$merge([{'phone': ${lead}.phone}, ($first != '' ? {'firstname': $first} : {}), ($last != '' ? {'lastname': $last} : {})])`),
-        }),
+        ...crm.execute('HUBSPOT_CREATE_CONTACT', q(`$merge([{'phone': ${lead}.phone}, ($first != '' ? {'firstname': $first} : {}), ($last != '' ? {'lastname': $last} : {})])`)),
         Assign: { contactId: q('$states.result.ResponseBody.data.id') },
         Output: q('$states.input'), Next: 'AddNote',
       },
@@ -101,46 +93,40 @@ export function crmLeadDefinition(refs: CrmLeadRefs) {
       },
       NeedsUpdate: { Type: 'Choice', Choices: [{ Condition: q('$count($keys($props)) > 0'), Next: 'UpdateContact' }], Default: 'AddNote' },
       UpdateContact: {
-        ...http('POST', 'tools/execute/HUBSPOT_UPDATE_CONTACT', { user_id: tenantId, arguments: { contactId: q('$contactId'), properties: q('$props') } }),
+        ...crm.execute('HUBSPOT_UPDATE_CONTACT', { contactId: q('$contactId'), properties: q('$props') }),
         Output: q('$states.input'), Next: 'AddNote',
       },
       AddNote: {
-        ...http('POST', 'tools/execute/HUBSPOT_CREATE_NOTE', {
-          user_id: tenantId,
-          arguments: {
-            hs_timestamp: q('$now()'),
-            hs_note_body: q([
-              "'Phone lead via receptionist (' & $tenant.businessName.S & ' line)<br><br>'",
-              `'Reason: ' & ${esc(`${lead}.reason`)} & '<br>'`,
-              `($exists(${lead}.preferredCallbackTime) ? 'Preferred callback: ' & ${esc(`${lead}.preferredCallbackTime`)} & '<br>' : '')`,
-              `($exists(${lead}.notes) ? 'Notes: ' & ${esc(`${lead}.notes`)} & '<br>' : '')`,
-              "'<br>Call ID: ' & $states.input.detail.callId",
-            ].join(' & ')),
-            associations: [{ to: { id: q('$contactId') }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 202 }] }],
-          },
+        ...crm.execute('HUBSPOT_CREATE_NOTE', {
+          hs_timestamp: q('$now()'),
+          hs_note_body: q([
+            "'Phone lead via receptionist (' & $tenant.businessName.S & ' line)<br><br>'",
+            `'Reason: ' & ${esc(`${lead}.reason`)} & '<br>'`,
+            `($exists(${lead}.preferredCallbackTime) ? 'Preferred callback: ' & ${esc(`${lead}.preferredCallbackTime`)} & '<br>' : '')`,
+            `($exists(${lead}.notes) ? 'Notes: ' & ${esc(`${lead}.notes`)} & '<br>' : '')`,
+            "'<br>Call ID: ' & $states.input.detail.callId",
+          ].join(' & ')),
+          associations: [{ to: { id: q('$contactId') }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 202 }] }],
         }),
         Output: q('$states.input'), Next: 'DefaultOwner',
       },
       // The account's first owner gets the task; no owner is not an error.
       DefaultOwner: {
-        ...http('POST', 'tools/execute/HUBSPOT_RETRIEVE_OWNERS', { user_id: tenantId, arguments: { limit: 1 } }),
+        ...crm.execute('HUBSPOT_RETRIEVE_OWNERS', { limit: 1 }),
         Assign: { ownerId: q('$states.result.ResponseBody.data.results[0].id') },
         Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'AddTask' }],
         Output: q('$states.input'), Next: 'AddTask',
       },
       AddTask: {
-        ...http('POST', 'tools/execute/HUBSPOT_CREATE_TASK', {
-          user_id: tenantId,
-          arguments: q([
-            "$merge([{",
-            `'hs_timestamp': ${nextBusinessMorning},`,
-            `'hs_task_subject': 'Follow up with ' & $name & ' (' & ${lead}.phone & ')',`,
-            `'hs_task_body': ${esc(`${lead}.reason`)} & ($exists(${lead}.preferredCallbackTime) ? '<br>Preferred: ' & ${esc(`${lead}.preferredCallbackTime`)} : ''),`,
-            "'hs_task_status': 'NOT_STARTED', 'hs_task_priority': 'MEDIUM', 'hs_task_type': 'TODO',",
-            `'associations': [{'to': {'id': $contactId}, 'types': [{'associationCategory': 'HUBSPOT_DEFINED', 'associationTypeId': 204}]}]`,
-            "}, ($exists($ownerId) ? {'hubspot_owner_id': $ownerId} : {})])",
-          ].join(' ')),
-        }),
+        ...crm.execute('HUBSPOT_CREATE_TASK', q([
+          "$merge([{",
+          `'hs_timestamp': ${nextBusinessMorning},`,
+          `'hs_task_subject': 'Follow up with ' & $name & ' (' & ${lead}.phone & ')',`,
+          `'hs_task_body': ${esc(`${lead}.reason`)} & ($exists(${lead}.preferredCallbackTime) ? '<br>Preferred: ' & ${esc(`${lead}.preferredCallbackTime`)} : ''),`,
+          "'hs_task_status': 'NOT_STARTED', 'hs_task_priority': 'MEDIUM', 'hs_task_type': 'TODO',",
+          `'associations': [{'to': {'id': $contactId}, 'types': [{'associationCategory': 'HUBSPOT_DEFINED', 'associationTypeId': 204}]}]`,
+          "}, ($exists($ownerId) ? {'hubspot_owner_id': $ownerId} : {})])",
+        ].join(' '))),
         Output: q('$states.input'), Next: 'MarkDone',
       },
       MarkDone: { ...markDone(refs.callsTable, onceKey), End: true },

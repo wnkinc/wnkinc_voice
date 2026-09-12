@@ -12,7 +12,7 @@
  * on the queue message. The API keys ride in EventBridge Connections
  * (resolved from the secrets at deploy: rotate a key, redeploy).
  */
-import { COMPOSIO_API, OPENAI_API, httpTask, q } from './asl.js';
+import { OPENAI_API, composio, httpTask, q } from './asl.js';
 
 export interface AcceptRefs {
   tenantsTable: string;
@@ -60,10 +60,8 @@ const strOrEmpty = (expr: string) => `($exists(${expr}) and ${expr} != null ? ${
 // ---- Definition ----------------------------------------------------------------
 
 export function acceptDefinition(refs: AcceptRefs) {
-  const composioHttp = (method: 'GET' | 'POST', path: string, body?: Record<string, unknown>, query?: Record<string, string>) =>
-    httpTask(refs.composioConnectionArn, method, COMPOSIO_API + path, body, query);
   const callUrl = (action: 'accept' | 'reject') => q(`'${OPENAI_API}realtime/calls/' & $callId & '/${action}'`);
-  const tenantId = q('$tenant.tenantId.S');
+  const crm = composio(refs.composioConnectionArn, q('$tenant.tenantId.S'));
   const callKey = { TableName: refs.callsTable, Key: { callId: { S: q('$callId') } } };
   const setStatus = (status: string, error?: string) => ({
     Type: 'Task', Resource: 'arn:aws:states:::dynamodb:updateItem',
@@ -171,15 +169,12 @@ export function acceptDefinition(refs: AcceptRefs) {
         Default: 'HasCaller',
       },
       FindContact: {
-        ...composioHttp('POST', 'tools/execute/HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', {
-          user_id: tenantId,
-          arguments: {
-            filterGroups: [
-              { filters: [{ propertyName: 'phone', operator: 'EQ', value: q('$from') }] },
-              { filters: [{ propertyName: 'mobilephone', operator: 'EQ', value: q('$from') }] },
-            ],
-            properties: ['firstname', 'lastname', 'phone'], limit: 1,
-          },
+        ...crm.execute('HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', {
+          filterGroups: [
+            { filters: [{ propertyName: 'phone', operator: 'EQ', value: q('$from') }] },
+            { filters: [{ propertyName: 'mobilephone', operator: 'EQ', value: q('$from') }] },
+          ],
+          properties: ['firstname', 'lastname', 'phone'], limit: 1,
         }),
         Assign: { contact: q('$states.result.ResponseBody.data.results[0]') },
         Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasCaller' }],
@@ -187,19 +182,16 @@ export function acceptDefinition(refs: AcceptRefs) {
       },
       HasContact: { Type: 'Choice', Choices: [{ Condition: q('$exists($contact.id)'), Next: 'HubspotAccount' }], Default: 'HasCaller' },
       HubspotAccount: {
-        ...composioHttp('GET', 'connected_accounts', undefined, { user_ids: tenantId, toolkit_slugs: 'hubspot', statuses: 'ACTIVE' }),
+        ...crm.accounts('hubspot'),
         Assign: { accountId: q('$states.result.ResponseBody.items[0].id') },
         Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasCaller' }],
         Output: q('$states.input'), Next: 'LastNote',
       },
       LastNote: {
-        ...composioHttp('POST', 'tools/execute/proxy', {
-          endpoint: '/crm/v3/objects/notes/search', method: 'POST', connected_account_id: q('$accountId'),
-          body: {
-            filterGroups: [{ filters: [{ propertyName: 'associations.contact', operator: 'EQ', value: q('$contact.id') }] }],
-            sorts: [{ propertyName: 'hs_timestamp', direction: 'DESCENDING' }],
-            properties: ['hs_note_body', 'hs_timestamp'], limit: 1,
-          },
+        ...crm.proxy(q('$accountId'), 'POST', '/crm/v3/objects/notes/search', {
+          filterGroups: [{ filters: [{ propertyName: 'associations.contact', operator: 'EQ', value: q('$contact.id') }] }],
+          sorts: [{ propertyName: 'hs_timestamp', direction: 'DESCENDING' }],
+          properties: ['hs_note_body', 'hs_timestamp'], limit: 1,
         }),
         Assign: { note: q('$states.result.ResponseBody.data.results[0].properties') },
         Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasCaller' }],

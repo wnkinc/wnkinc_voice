@@ -1,10 +1,11 @@
 /**
- * The grammar every workflow definition shares. Three things, on purpose:
- * the expression wrapper, the HTTP task (retry + Connection auth), and the
- * once-marker pair. A helper earns a place here only when it encodes a rule
- * every workflow must get identical; anything else lives in the workflow's
- * own file, duplicated if need be. No CDK imports: definitions built from
- * these are plain objects a test can import and walk.
+ * The grammar every workflow definition shares. Four things, on purpose:
+ * the expression wrapper, the HTTP task (retry + Connection auth), the
+ * Composio calls (every one names the tenant), and the once-marker pair. A
+ * helper earns a place here only when it encodes a rule every workflow must
+ * get identical; anything else lives in the workflow's own file, duplicated
+ * if need be. No CDK imports: definitions built from these are plain objects
+ * a test can import and walk.
  *
  * JSONata strings in definitions: no quotes or apostrophes inside a string
  * literal (Step Functions rejects the escapes). The definitions test
@@ -27,6 +28,30 @@ export function httpTask(connectionArn: string, method: 'GET' | 'POST', url: str
       ...(body ? { RequestBody: body } : {}), ...(query ? { QueryParameters: query } : {}),
     },
     Retry: [{ ErrorEquals: ['States.TaskFailed'], IntervalSeconds: 2, MaxAttempts: 1 }],
+  };
+}
+
+// ---- Composio ------------------------------------------------------------------
+// The tenant's SaaS credentials live in Composio's vault under our tenant id
+// (Composio user_id = tenantId), so every call names the tenant, and the
+// definitions test checks that no Composio task lacks it. These are the
+// three shapes a workflow uses; the tool slugs and arguments stay in the
+// workflow file. `tenantId` is a q() expression for the tenant id in scope.
+// This changes the edit surface when Composio moves an endpoint (one place),
+// not the blast radius (still one deploy): there is no runtime fallback.
+
+/** Composio's HTTP API for one tenant, through the Connection that holds the platform key. */
+export function composio(connectionArn: string, tenantId: string) {
+  return {
+    /** Run a toolkit tool (`HUBSPOT_CREATE_NOTE`, `GMAIL_SEND_EMAIL`, ...) with the tenant's connected account. `args` may be a q() expression. */
+    execute: (slug: string, args: Record<string, unknown> | string) =>
+      httpTask(connectionArn, 'POST', `${COMPOSIO_API}tools/execute/${slug}`, { user_id: tenantId, arguments: args }),
+    /** The tenant's ACTIVE connected accounts, for one toolkit or all. */
+    accounts: (toolkit?: string) =>
+      httpTask(connectionArn, 'GET', `${COMPOSIO_API}connected_accounts`, undefined, { user_ids: tenantId, ...(toolkit ? { toolkit_slugs: toolkit } : {}), statuses: 'ACTIVE' }),
+    /** The toolkit's own REST API on one of those accounts (`accountId` from `accounts`), for what no tool covers. */
+    proxy: (accountId: string, method: 'GET' | 'POST', endpoint: string, body?: Record<string, unknown>) =>
+      httpTask(connectionArn, 'POST', `${COMPOSIO_API}tools/execute/proxy`, { endpoint, method, connected_account_id: accountId, ...(body ? { body } : {}) }),
   };
 }
 
