@@ -58,7 +58,7 @@ export const TenantConfigSchema = z.object({
    * the workflow says so; a re-seed without it starts a fresh browser.
    */
   browserContextId: z.string().optional(),
-  /** Workflow-owned: ISO time until which a `/login` window is open on that browser (one at a time). Cleared at release; a re-seed clears it too. */
+  /** Owned by whoever holds the browser (the browser-login workflow today): ISO time until which a window is open on it, one at a time. Cleared at release; a re-seed clears it too. */
   browserLoginUntil: z.string().optional(),
   /**
    * Minutes to subtract from UTC so that calendar days roll at 3 AM in the
