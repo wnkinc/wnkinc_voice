@@ -14,6 +14,14 @@
 
 export const q = (expr: string) => `{% ${expr} %}`;
 
+/**
+ * The CRM gate, as a JSONata fragment over a tenant row bound to `$tenant`
+ * (or the row expression you pass). One definition: every read of the
+ * tenant's CRM (caller lookup, email enrichment, lead and call sync) and the
+ * health canary must agree on what "this tenant has a CRM" means.
+ */
+export const hasCrm = (row = '$tenant') => `${row}.crm.M.type.S = 'hubspot' and ${row}.crm.M.via.S = 'composio'`;
+
 /** v3.1: the path the Composio SDK uses; v3 does not resolve every HubSpot slug. */
 export const COMPOSIO_API = 'https://backend.composio.dev/api/v3.1/';
 export const OPENAI_API = 'https://api.openai.com/v1/';

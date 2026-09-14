@@ -11,7 +11,7 @@
  * against redelivery, not exactly-once. Toolkit versions are not pinned
  * here (dev); pin in prod with a `version` field on the execute bodies.
  */
-import { checkDone, composio, markDone, q } from './asl.js';
+import { checkDone, composio, hasCrm, markDone, q } from './asl.js';
 
 export interface LeadEmailRefs {
   tenantsTable: string;
@@ -69,7 +69,7 @@ export function leadEmailDefinition(refs: LeadEmailRefs) {
       // ---- Enrichment: the tenant's CRM (by its row), best effort ----------
       HasCrm: {
         Type: 'Choice',
-        Choices: [{ Condition: q(`$exists(${lead}.phone) and $tenant.crm.M.type.S = 'hubspot' and $tenant.crm.M.via.S = 'composio'`), Next: 'FindContact' }],
+        Choices: [{ Condition: q(`$exists(${lead}.phone) and ${hasCrm()}`), Next: 'FindContact' }],
         Default: 'HasPhone',
       },
       FindContact: {

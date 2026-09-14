@@ -14,7 +14,7 @@
  * A new toolkit is one more line in `expectedToolkitsExpr`. A new tenant is
  * covered by the scan; nothing here names one.
  */
-import { composio, q } from './asl.js';
+import { composio, hasCrm, q } from './asl.js';
 
 export interface ComposioHealthRefs {
   tenantsTable: string;
@@ -26,7 +26,7 @@ export interface ComposioHealthRefs {
 /** Toolkit slugs a tenant row (DynamoDB AttributeValue shape) must have ACTIVE in Composio. */
 export const expectedToolkitsExpr = (rowExpr: string) => [
   '$append(',
-  `(${rowExpr}.crm.M.via.S = 'composio' ? ['hubspot'] : []),`,
+  `(${hasCrm(rowExpr)} ? ['hubspot'] : []),`,
   `(${rowExpr}.products.M.emailResponder.M.enabled.BOOL = true ? ['gmail'] : [])`,
   ')',
 ].join(' ');

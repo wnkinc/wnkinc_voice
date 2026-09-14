@@ -6,7 +6,7 @@
  * transcript never rides on the bus; the workflow reads it from the call row
  * by id. Once-marker before, mark after; a failed execution alarms.
  */
-import { checkDone, composio, markDone, q } from './asl.js';
+import { checkDone, composio, hasCrm, markDone, q } from './asl.js';
 
 export interface CrmCallRefs {
   tenantsTable: string;
@@ -39,7 +39,7 @@ export function crmCallDefinition(refs: CrmCallRefs) {
         Arguments: { TableName: refs.tenantsTable, Key: { phoneNumber: { S: q('$states.input.detail.tenantPhoneNumber') } } },
         Assign: { tenant: q('$states.result.Item') }, Output: q('$states.input'), Next: 'HasCrm',
       },
-      HasCrm: { Type: 'Choice', Choices: [{ Condition: q("$exists($states.input.detail.callerPhone) and $tenant.crm.M.type.S = 'hubspot' and $tenant.crm.M.via.S = 'composio'"), Next: 'FindContact' }], Default: 'Skipped' },
+      HasCrm: { Type: 'Choice', Choices: [{ Condition: q(`$exists($states.input.detail.callerPhone) and ${hasCrm()}`), Next: 'FindContact' }], Default: 'Skipped' },
       FindContact: {
         ...crm.execute('HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', {
           filterGroups: [

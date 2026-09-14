@@ -13,7 +13,7 @@
  * (resolved from the secrets when the Connection is created or changed; a
  * rotated key also needs `aws events update-connection`).
  */
-import { OPENAI_API, composio, httpTask, q } from './asl.js';
+import { composio, hasCrm, httpTask, OPENAI_API, q } from './asl.js';
 
 export interface AcceptRefs {
   tenantsTable: string;
@@ -166,7 +166,7 @@ export function acceptDefinition(refs: AcceptRefs) {
       // ---- Caller recognition, best effort: the tenant's CRM, then memory ----
       HasCrm: {
         Type: 'Choice',
-        Choices: [{ Condition: q("$from != '' and $tenant.crm.M.type.S = 'hubspot' and $tenant.crm.M.via.S = 'composio'"), Next: 'FindContact' }],
+        Choices: [{ Condition: q(`$from != '' and ${hasCrm()}`), Next: 'FindContact' }],
         Default: 'HasCaller',
       },
       FindContact: {

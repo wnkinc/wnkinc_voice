@@ -6,7 +6,7 @@
  * a follow-up task due the next business morning. Once-marker before, mark
  * after; a failed execution alarms.
  */
-import { checkDone, composio, markDone, q } from './asl.js';
+import { checkDone, composio, hasCrm, markDone, q } from './asl.js';
 
 export interface CrmLeadRefs {
   tenantsTable: string;
@@ -64,7 +64,7 @@ export function crmLeadDefinition(refs: CrmLeadRefs) {
         },
         Output: q('$states.input'), Next: 'HasCrm',
       },
-      HasCrm: { Type: 'Choice', Choices: [{ Condition: q(`$exists(${lead}.phone) and $tenant.crm.M.type.S = 'hubspot' and $tenant.crm.M.via.S = 'composio'`), Next: 'FindContact' }], Default: 'Skipped' },
+      HasCrm: { Type: 'Choice', Choices: [{ Condition: q(`$exists(${lead}.phone) and ${hasCrm()}`), Next: 'FindContact' }], Default: 'Skipped' },
       FindContact: {
         ...crm.execute('HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', {
           filterGroups: [
