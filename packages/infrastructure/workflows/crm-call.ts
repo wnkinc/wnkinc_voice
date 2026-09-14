@@ -7,7 +7,6 @@
  * by id. Once-marker before, mark after; a failed execution alarms.
  */
 import { checkDone, composio, hasCrm, markDone, q } from './asl.js';
-import type { UnitOutcomes } from '@wnk/shared';
 
 export interface CrmCallRefs {
   tenantsTable: string;
@@ -70,11 +69,3 @@ export function crmCallDefinition(refs: CrmCallRefs) {
     },
   };
 }
-
-/** The four answers the catalog shows for this unit (see UnitOutcomes). */
-export const outcomes: UnitOutcomes = {
-  in: 'call.ended from the session Lambda, by call id.',
-  out: 'A note with the transcript on the HubSpot contact whose number matches the caller. A done marker on the Calls row.',
-  also: 'Skipped when the tenant has no CRM, the caller withheld their number, the caller is not a contact, or the marker is already there.',
-  fails: 'A HubSpot call through Composio fails: the execution fails and alarms. No note was added.',
-};

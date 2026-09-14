@@ -57,8 +57,6 @@ do, and how to verify it. Start there when changing one.
 | `packages/infrastructure/stacks/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram reply path, and the state machine, rule, grants, and alarm for each definition in `workflows/`: CRM sync for leads and for call transcripts (HubSpot through Composio HTTP tasks), the call-ended tail (transcript to caller memory, minutes to usage), the lead email (CRM contact + last note and caller memory fetched → email formatted from those fields → sent from the owner's Gmail), and the owner alert (`owner.notify` → Telegram). Workflows that handle transcripts or CRM notes run as Express with execution data not logged |
 | `packages/infrastructure/` | CDK app: `bin/app.ts` + `stacks/*-stack.ts` + `workflows/` (one definition per file) + `infra_utils/` (alarms, state-machine presets) (the two Lambdas and the accept workflow) |
 | `scripts/seed-tenant.ts` | Upsert tenant JSON into the Tenants table |
-| `scripts/catalog.ts` | Platform catalog: every unit (state machine, Lambda, harness) by four answers — what comes in, what goes out, what else it leaves behind, how it ends badly and who hears — each from the unit's exported `outcomes`, with triggers, side effects, exits, gates, markers, alarms and logging read from cdk.out → `tenant-profiles/catalog.md` (gitignored) |
-| `scripts/tenant-profile.ts` | What one tenant gets, in plain language, from its row → `tenant-profiles/<id>.md` |
 | `tenants/example.json` | Example tenant config |
 | `packages/voice-session/test/` | vitest suites (each package carries its own tests) |
 

@@ -7,7 +7,6 @@
  * after; a failed execution alarms.
  */
 import { checkDone, composio, hasCrm, markDone, q } from './asl.js';
-import type { UnitOutcomes } from '@wnk/shared';
 
 export interface CrmLeadRefs {
   tenantsTable: string;
@@ -134,11 +133,3 @@ export function crmLeadDefinition(refs: CrmLeadRefs) {
     },
   };
 }
-
-/** The four answers the catalog shows for this unit (see UnitOutcomes). */
-export const outcomes: UnitOutcomes = {
-  in: 'lead.recorded from the session Lambda, with the lead fields.',
-  out: 'A HubSpot contact created or updated for the caller\'s number, a note with the lead, and a follow-up task due the next business morning. A done marker on the Calls row.',
-  also: 'Skipped when the tenant has no CRM, the lead has no phone, or the marker is already there.',
-  fails: 'A HubSpot call through Composio fails: the execution fails and alarms. HubSpot may be partly updated; the marker is not written, so a redelivery retries the whole thing.',
-};

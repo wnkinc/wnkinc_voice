@@ -12,7 +12,6 @@
  * here (dev); pin in prod with a `version` field on the execute bodies.
  */
 import { checkDone, composio, hasCrm, markDone, q } from './asl.js';
-import type { UnitOutcomes } from '@wnk/shared';
 
 export interface LeadEmailRefs {
   tenantsTable: string;
@@ -151,11 +150,3 @@ export function leadEmailDefinition(refs: LeadEmailRefs) {
     },
   };
 }
-
-/** The four answers the catalog shows for this unit (see UnitOutcomes). */
-export const outcomes: UnitOutcomes = {
-  in: 'lead.recorded from the session Lambda, with the lead fields.',
-  out: 'One email to the owner from the owner\'s own Gmail through Composio, carrying the CRM contact, its last note and caller memory when they exist. An emails_sent usage row and a done marker on the Calls row.',
-  also: 'Skipped when the tenant has the email responder off or the marker is already there. CRM and memory enrichment fail quietly, so the email goes out shorter.',
-  fails: 'No Gmail connection for the tenant in Composio, or Gmail refused the send: the execution fails and alarms. No email was sent.',
-};

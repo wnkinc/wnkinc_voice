@@ -13,7 +13,6 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import type { UnitOutcomes } from '@wnk/shared';
 
 const TOLERANCE_S = 300;
 
@@ -73,11 +72,3 @@ export const handler = createVerifier({
     .catch((err) => { secretPromise = undefined; throw err; })),
   start: async (body) => { await sfn.send(new StartExecutionCommand({ stateMachineArn: env('ACCEPT_WORKFLOW_ARN'), input: body })); },
 });
-
-/** The four answers the catalog shows for this unit (see UnitOutcomes). */
-export const outcomes: UnitOutcomes = {
-  in: 'An HTTP POST from OpenAI for every webhook event on the platform account, signed with the shared webhook secret.',
-  out: 'One accept workflow execution started with the body untouched. Nothing is written.',
-  also: 'A 400 for a bad or stale signature, with a log line. Nothing is started.',
-  fails: 'The secret cannot be read or the start call fails: OpenAI sees a 5xx and retries; the Lambda error alarm fires on the first error.',
-};

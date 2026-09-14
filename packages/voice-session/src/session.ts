@@ -6,7 +6,7 @@
  */
 import type { Context, SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { runCall, type CallDeps, type CallOutcome } from './call.js';
-import { createLogger, getOpenAISecrets, type Logger, type UnitOutcomes } from '@wnk/shared';
+import { createLogger, getOpenAISecrets, type Logger } from '@wnk/shared';
 import { eventBridgePublisher } from '@wnk/shared';
 import { dynamoStore } from '@wnk/shared';
 import type { SessionJob } from '@wnk/shared';
@@ -52,11 +52,3 @@ export const handler = createSessionHandler({
     return runCall(job, deps, { deadlineMs });
   },
 });
-
-/** The four answers the catalog shows for this unit (see UnitOutcomes). */
-export const outcomes: UnitOutcomes = {
-  in: 'One session queue message per call: the call id, the tenant, and whatever caller recognition found.',
-  out: 'The call held to completion over a WebSocket to OpenAI: greeting, conversation, tools. The transcript and tool calls saved on the Calls row, then one call.ended event with the outcome and duration.',
-  also: 'lead.recorded when the receptionist takes a lead. owner.notify when it decides something is urgent. A spoken time notice and a forced goodbye near the call cap.',
-  fails: 'A thrown error returns the message to the queue once, then to the dead-letter queue, which alarms; the Lambda error alarm fires too. The caller is cut off.',
-};

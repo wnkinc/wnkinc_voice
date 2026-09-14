@@ -28,10 +28,6 @@ A tenant is data: a config row keyed by their phone number and their credentials
 (config drift, secrets, services, owner alert channel, Gmail connection) —
 run it after onboarding and any time a tenant misbehaves.
 
-`npx tsx scripts/tenant-profile.ts <id>` writes the tenant's service profile to `tenant-profiles/<id>.md` (gitignored)
-in plain language (what they get, derived from the row with the workflows'
-own gates) — hand it to the customer or read it before a support call.
-
 ## Deliberately deferred (build when the trigger fires, not before)
 
 - **Membership model** (one person, many businesses; workspace switching):

@@ -8,7 +8,6 @@
  * a redelivered event would otherwise double both.
  */
 import { checkDone, markDone, q } from './asl.js';
-import type { UnitOutcomes } from '@wnk/shared';
 
 export interface CallEndedRefs {
   callsTable: string;
@@ -61,11 +60,3 @@ export function callEndedDefinition(refs: CallEndedRefs) {
     },
   };
 }
-
-/** The four answers the catalog shows for this unit (see UnitOutcomes). */
-export const outcomes: UnitOutcomes = {
-  in: 'call.ended from the session Lambda, by call id.',
-  out: 'The transcript written to the caller\'s memory under the tenant-prefixed actor id, a voice_minutes usage row, and a done marker on the Calls row.',
-  also: 'Skipped when the marker is already there, so a redelivered event does nothing.',
-  fails: 'A memory or table write fails: the execution fails and alarms. The minutes were not metered and memory has no record of the call.',
-};
