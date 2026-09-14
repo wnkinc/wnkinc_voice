@@ -7,7 +7,8 @@
  * A mirror, not a summary: every field is shown under its JSON name with its
  * exact value, so a change agreed on this page maps one-to-one onto the JSON
  * file. Hidden: ids and URLs the platform manages (tenantId, browserContextId,
- * browserLoginUntil, composioMcpUrl, sessionDayOffsetMinutes).
+ * browserLoginUntil, composioMcpUrl, sessionDayOffsetMinutes) and the receptionist
+ * engine settings (model, voice, tools).
  * Writes tenant-profiles/<id>.md (gitignored) and prints the path.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -33,7 +34,7 @@ if (arg.endsWith('.json')) {
   source = 'the seeded row';
 }
 
-const HIDDEN = new Set(['tenantId', 'browserContextId', 'browserLoginUntil', 'composioMcpUrl', 'sessionDayOffsetMinutes']);
+const HIDDEN = new Set(['tenantId', 'browserContextId', 'browserLoginUntil', 'composioMcpUrl', 'sessionDayOffsetMinutes', 'model', 'voice', 'tools']);
 const L: string[] = [`# ${cfg.businessName}`, '', `From ${source}. Field names are the JSON keys; values are exact.`, ''];
 
 function show(key: string, value: unknown, depth = 0) {
