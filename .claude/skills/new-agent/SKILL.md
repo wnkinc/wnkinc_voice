@@ -43,7 +43,8 @@ An agent = a `packages/<name>/` folder (behavior) + wiring in `packages/infrastr
 7. **Allow-list**: for a harness, the Composio session's toolkits (minted by the seed) and the harness `allowedTools`; for a Lambda, the code is the policy. A platform tool for an open-ended model is the trigger for a Gateway + Cedar (new-tool skill).
 7b. **Tenant opt-in**: add a key under `products` in `TenantConfigSchema` (`packages/shared/src/types.ts`, default `enabled: false`) and pass `TENANTS_TABLE` + `grantReadData` in the runtime stack. The agent's first states are the tenant lookup by the event's `tenantPhoneNumber` and a Choice on its flag (see `workflows/lead-email.ts` LookupTenant → ResponderEnabled); a missing row or a false flag ends in Succeed without acting — no `?? 'wnk'` defaults, ever. Tenants turn the service on in their row; no deploy per tenant.
 8. **Prove it**: a `scripts/test-<name>.mts` that puts a real event on the bus (or invokes the function) and checks the side effect.
-9. `npx tsc --noEmit && npm test`, `npx cdk deploy wnk-runtime-dev` (plus auth/policy stacks if touched), run the test script, commit.
+9. **Describe it**: the doc comment at the top of the definition or handler file is the service's catalog entry. `npm run synth && npx tsx scripts/catalog.ts` regenerates `tenant-profiles/catalog.md` from cdk.out and those comments; a service without one shows as UNDESCRIBED.
+10. `npx tsc --noEmit && npm test`, `npx cdk deploy wnk-runtime-dev` (plus auth/policy stacks if touched), run the test script, commit.
 
 ## Logs
 
