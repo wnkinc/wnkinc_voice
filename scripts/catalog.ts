@@ -162,20 +162,46 @@ for (const u of units) {
   for (const _ of u.facts?.harness ?? []) { const t = units.find((x) => x.kind === 'AgentCore harness'); if (t) t.triggers.push(`invoked by ${u.name}`); }
 }
 
-// ---- Render ------------------------------------------------------------------
-const order = ['webhook', 'accept', 'session', 'call-ended', 'lead-email', 'crm-lead', 'crm-call', 'owner-alert', 'telegram', 'assistant', 'browser-login', 'composio-health'];
-units.sort((a, b) => order.findIndex((o) => a.name.includes(o)) - order.findIndex((o) => b.name.includes(o)));
+// ---- Render: three timelines ---------------------------------------------------
+// Every unit sits on exactly one timeline, in the order it runs.
+const TIMELINES: { title: string; steps: { unit: string; when: string }[] }[] = [
+  { title: 'A phone call comes in', steps: [
+    { unit: 'webhook', when: '1. Checks it is really OpenAI.' },
+    { unit: 'accept', when: '2. Picks the tenant and answers the call.' },
+    { unit: 'session', when: '3. The call itself, start to hang-up.' },
+    { unit: 'owner-alert', when: '3a. During the call, if the receptionist decides it is urgent.' },
+    { unit: 'call-ended', when: '4. After hang-up, always: memory and minutes.' },
+    { unit: 'crm-call', when: '4. After hang-up, if HubSpot: transcript note.' },
+    { unit: 'lead-email', when: '4. After hang-up, if a lead was taken and email is on.' },
+    { unit: 'crm-lead', when: '4. After hang-up, if a lead was taken and HubSpot.' },
+  ] },
+  { title: 'A Telegram message comes in', steps: [
+    { unit: 'telegram', when: '1. Works out who sent it and which tenant.' },
+    { unit: 'assistant', when: '2. Thinks and replies.' },
+    { unit: 'browser-login', when: '2. Or, if the message was /login: opens the saved browser.' },
+  ] },
+  { title: 'The clock hits 15:00 UTC', steps: [
+    { unit: 'composio-health', when: '1. Checks every tenant\'s Composio connections.' },
+  ] },
+];
+const find = (key: string) => units.find((u) => u.name.includes(key));
+const placed = new Set(TIMELINES.flatMap((t) => t.steps.map((st) => find(st.unit)?.id)));
+const orphans = units.filter((u) => !placed.has(u.id));
+
 const rented = (u: Unit) => [...(u.facts?.services ?? [])].map((x) => x.replace(/ \(.*\)$/, '')).filter((x, i, arr) => arr.indexOf(x) === i);
 const list = (xs: Iterable<string>) => [...xs].join('; ');
 const isRead = (op: string) => /get|query|scan/i.test(op);
 
-const L: string[] = [`# Platform catalog`, '', `Generated from cdk.out (${stackNames.join(', ')}) and each unit's source file. ${units.length} units.`, '',
-  '| Unit | Kind | What comes in | Rented pieces | Tenant gate |', '|---|---|---|---|---|'];
-for (const u of units) L.push(`| ${u.name} | ${u.kind}${u.type ? ` (${u.type})` : ''} | ${u.triggers[0] ?? '—'} | ${rented(u).join(', ') || '—'} | ${u.facts?.gates.size ? 'yes' : 'no'} |`);
+const L: string[] = [`# Platform catalog`, '', `Generated from cdk.out (${stackNames.join(', ')}) and each unit's source file. ${units.length} units on three timelines.`];
+for (const t of TIMELINES) {
+  L.push('', `**${t.title}.**`, '');
+  for (const st of t.steps) { const u = find(st.unit); if (u) L.push(`- ${st.when} → ${u.name} (${u.kind}${u.type ? `, ${u.type}` : ''})`); }
+}
+if (orphans.length) L.push('', `**On no timeline (add them to TIMELINES in scripts/catalog.ts):** ${orphans.map((u) => u.name).join(', ')}`);
 
-for (const u of units) {
+function card(u: Unit, when: string) {
   const o = u.outcomes; const f = u.facts;
-  L.push('', `## ${u.name}`, '', `${u.kind}${u.type ? `, ${u.type}` : ''}, stack ${u.stack}, source ${u.file}.`);
+  L.push('', `### ${u.name}`, '', `${when} ${u.kind}${u.type ? `, ${u.type}` : ''}, stack ${u.stack}, source ${u.file}.`);
   if (!o) L.push('', '**UNDESCRIBED** — export `outcomes: UnitOutcomes` from the source file.');
 
   L.push('', `**What comes in.** ${o?.in ?? ''}`, '', `- Triggered by: ${u.triggers.join('; ') || '—'}`);
@@ -204,10 +230,16 @@ for (const u of units) {
   L.push(`- Record: ${u.logging}${u.extra.includes('X-Ray tracing on') ? '; X-Ray tracing on' : ''}`);
 
   L.push('', '<details><summary>How (from the source file)</summary>', '');
-  if (f) L.push(`- Calls out to: ${list(f.services) || 'nothing'}`);
+  if (f) L.push(`- Calls out to: ${list(f.services) || 'nothing'}`, `- Rented pieces: ${rented(u).join(', ') || 'none'}`);
   for (const e of u.extra.filter((x) => !x.startsWith('starts ') && x !== 'X-Ray tracing on')) L.push(`- ${e.charAt(0).toUpperCase()}${e.slice(1)}`);
   L.push('', u.how ?? '(no doc comment)', '', '</details>');
 }
+
+for (const t of TIMELINES) {
+  L.push('', `## ${t.title}`);
+  for (const st of t.steps) { const u = find(st.unit); if (u) card(u, st.when); }
+}
+if (orphans.length) { L.push('', '## On no timeline'); for (const u of orphans) card(u, ''); }
 
 mkdirSync('tenant-profiles', { recursive: true });
 writeFileSync('tenant-profiles/catalog.md', L.join('\n') + '\n');
