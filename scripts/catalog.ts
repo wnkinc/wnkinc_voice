@@ -185,6 +185,25 @@ const TIMELINES: { title: string; steps: { unit: string; when: string }[] }[] = 
   ] },
 ];
 const find = (key: string) => units.find((u) => u.name.includes(key));
+
+// ---- Default behavior and flags -------------------------------------------------
+// Default: what every tenant gets by having an active row. Flags: row fields
+// that switch a branch on; the units that branch on each are read from the
+// gates in the definitions, so the list cannot drift.
+const DEFAULT = {
+  text: 'Calls to the tenant\'s number are answered by the receptionist; a lead is taken; the call record is kept 90 days; the caller is remembered for next time; minutes are metered. The owner is alerted when the receptionist judges a call urgent, provided the row lists an owner with a Telegram id.',
+  units: ['webhook', 'accept', 'session', 'owner-alert', 'call-ended'],
+};
+const FLAGS: { field: string; gate: RegExp; does: string }[] = [
+  { field: 'active: false', gate: /\$tenant\.active/, does: 'Turns the tenant off: every call is rejected (SIP 603). Default true.' },
+  { field: 'products.emailResponder.enabled', gate: /products\.M\.emailResponder/, does: 'Each lead becomes a follow-up email from the owner\'s Gmail.' },
+  { field: 'crm: { type: hubspot, via: composio }', gate: /\$tenant\.crm\.M/, does: 'Callers are looked up in HubSpot; leads and call transcripts are synced to it; the email carries the contact\'s history.' },
+  { field: 'products.assistant.enabled (+ composioMcpUrl)', gate: /products\.M\.assistant/, does: 'People on the row can message the assistant on Telegram.' },
+  { field: 'products.browser.enabled', gate: /products\.M\.browser/, does: 'The owner can /login to open the saved browser.' },
+];
+const PROMPT_MATERIAL = 'businessName, description, services, hours, timezone, agentName, greeting, extraInstructions, voice, model, tools, maxCallSeconds — change what the receptionist says and how long it talks, not which units run.';
+const branchers = (gate: RegExp) => units.filter((u) => [...(u.facts?.gates ?? [])].some((g) => gate.test(g))).map((u) => u.name);
+
 const placed = new Set(TIMELINES.flatMap((t) => t.steps.map((st) => find(st.unit)?.id)));
 const orphans = units.filter((u) => !placed.has(u.id));
 
@@ -197,6 +216,9 @@ for (const t of TIMELINES) {
   L.push('', `**${t.title}.**`, '');
   for (const st of t.steps) { const u = find(st.unit); if (u) L.push(`- ${st.when} → ${u.name} (${u.kind}${u.type ? `, ${u.type}` : ''})`); }
 }
+L.push('', '## What every tenant gets, and what a flag adds', '', `**Default, for any active row.** ${DEFAULT.text}`, '', `- Units: ${DEFAULT.units.map((k) => find(k)?.name ?? k).join(', ')}`, '', '**Flags.** A row field that switches a branch on. Missing means off.', '');
+for (const fl of FLAGS) L.push(`- \`${fl.field}\` — ${fl.does} Branches on it: ${branchers(fl.gate).join(', ') || 'none found'}.`);
+L.push('', `**Prompt material.** ${PROMPT_MATERIAL}`);
 if (orphans.length) L.push('', `**On no timeline (add them to TIMELINES in scripts/catalog.ts):** ${orphans.map((u) => u.name).join(', ')}`);
 
 function card(u: Unit, when: string) {
