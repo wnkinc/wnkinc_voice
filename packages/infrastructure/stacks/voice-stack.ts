@@ -247,6 +247,23 @@ export class VoiceStack extends cdk.Stack {
 
     // Every consumer of lead.recorded / owner.notify / call.ended is a Step
     // Functions workflow in the runtime stack; the rules live there.
+    //
+    // Except this one: every event from both sources lands in one log group
+    // as the platform's activity record. Nothing else retains bus events. It
+    // is per tenant by construction (each event carries detail.tenantId) and
+    // keeps the same 90-day window as the Calls row TTL, so both stores
+    // answer "what happened for tenant X" over the same period.
+    const activityLog = new logs.LogGroup(this, 'ActivityLog', {
+      logGroupName: `/wnk/${prefix}/activity`,
+      retention: logs.RetentionDays.THREE_MONTHS,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    new events.Rule(this, 'ActivityLogRule', {
+      eventBus: this.bus,
+      description: 'Record every platform event in the activity log group',
+      eventPattern: { source: ['wnkinc.voice', 'wnkinc.assistant'] },
+      targets: [new targets.CloudWatchLogGroup(activityLog)],
+    });
 
     // ---- Alarms ---------------------------------------------------------------
     // Two questions, answered by CloudWatch: is anything failing right now
