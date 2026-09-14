@@ -14,6 +14,7 @@
  * rotated key also needs `aws events update-connection`).
  */
 import { composio, hasCrm, httpTask, OPENAI_API, q } from './asl.js';
+import type { UnitOutcomes } from '@wnk/shared';
 
 export interface AcceptRefs {
   tenantsTable: string;
@@ -218,3 +219,11 @@ export function acceptDefinition(refs: AcceptRefs) {
     },
   };
 }
+
+/** The four answers the catalog shows for this unit (see UnitOutcomes). */
+export const outcomes: UnitOutcomes = {
+  in: 'A verified webhook saying a call is ringing on some number, from the verifier Lambda.',
+  out: 'The call accepted at OpenAI, a claimed row in the Calls table, and one message on the session queue carrying the tenant and whatever caller recognition found.',
+  also: 'A rejected call for an unknown number (SIP 404) or an inactive tenant (SIP 603). A Duplicate exit for a re-sent webhook. A HubSpot lookup and a memory recall that may find nothing.',
+  fails: 'Unknown called number: alarms, because the Twilio trunk and the Tenants table disagree. Accept failed: alarms, the Calls row is marked failed, and the caller heard nothing.',
+};

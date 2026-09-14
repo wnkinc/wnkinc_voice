@@ -15,6 +15,7 @@
  * covered by the scan; nothing here names one.
  */
 import { composio, hasCrm, q } from './asl.js';
+import type { UnitOutcomes } from '@wnk/shared';
 
 export interface ComposioHealthRefs {
   tenantsTable: string;
@@ -89,3 +90,11 @@ export function composioHealthDefinition(refs: ComposioHealthRefs) {
     },
   };
 }
+
+/** The four answers the catalog shows for this unit (see UnitOutcomes). */
+export const outcomes: UnitOutcomes = {
+  in: 'A schedule, 15:00 UTC daily. No event.',
+  out: 'Nothing written. One execution that succeeds when every tenant\'s expected Composio connections are ACTIVE.',
+  also: 'Tenants using no Composio feature are skipped.',
+  fails: 'Any tenant missing an expected connection: the execution fails and alarms, naming the tenant and the toolkit. Nothing is repaired; the owner has to reconnect.',
+};

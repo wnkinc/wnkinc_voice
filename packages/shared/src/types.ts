@@ -211,3 +211,11 @@ export type VoiceEvent =
   | { type: 'owner.notify'; tenantId: string; tenantPhoneNumber: string; callId: string; summary: string; urgency: 'normal' | 'urgent'; callerPhone?: string }
   // Ids and outcome only: the transcript stays on the call row, fetched by id by whoever needs it.
   | { type: 'call.ended'; tenantId: string; tenantPhoneNumber: string; callId: string; callerPhone?: string; status: CallStatus; durationSeconds: number };
+
+/**
+ * The four answers the platform catalog shows for one unit (a workflow, a
+ * Lambda, the harness): what comes in, what goes out when it works, what
+ * else it leaves behind, and how it ends badly and who hears. Written next
+ * to the unit; the catalog reads it. The middle (how) stays in the file.
+ */
+export interface UnitOutcomes { in: string; out: string; also: string; fails: string }

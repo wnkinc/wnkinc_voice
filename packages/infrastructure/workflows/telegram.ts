@@ -9,6 +9,7 @@
  * reply rule delivers it. Tokens are metered per invocation.
  */
 import { q } from './asl.js';
+import type { UnitOutcomes } from '@wnk/shared';
 
 export interface TelegramRefs {
   peopleTable: string;
@@ -120,3 +121,11 @@ export function telegramDefinition(refs: TelegramRefs) {
     },
   };
 }
+
+/** The four answers the catalog shows for this unit (see UnitOutcomes). */
+export const outcomes: UnitOutcomes = {
+  in: 'One Telegram update per message, through the API route with the secret path.',
+  out: 'The harness invoked with the message, the tenant\'s prompt and the tenant\'s Composio session; its reply published as telegram.reply and delivered; an llm_tokens usage row.',
+  also: 'Ignored for a non-message update. UnknownSender, silently, for a Telegram id not in the People table. Ignored when the assistant is off or the row has no Composio session. /login from an owner with the browser on starts the browser-login workflow instead.',
+  fails: 'The harness errors: the execution fails and alarms. The person gets no reply.',
+};

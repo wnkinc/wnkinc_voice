@@ -14,6 +14,7 @@
  * Input (from the Telegram workflow): { tenantId, tenantPhoneNumber, chatId, text }.
  */
 import { BROWSERBASE_API, httpTask, q } from './asl.js';
+import type { UnitOutcomes } from '@wnk/shared';
 
 export interface BrowserLoginRefs {
   tenantsTable: string;
@@ -135,3 +136,11 @@ export function browserLoginDefinition(refs: BrowserLoginRefs) {
     },
   };
 }
+
+/** The four answers the catalog shows for this unit (see UnitOutcomes). */
+export const outcomes: UnitOutcomes = {
+  in: 'A /login command from an owner on Telegram, handed over by the Telegram workflow with the tenant and chat.',
+  out: 'A Browserbase session on the tenant\'s saved browser, the live-view link sent to the owner, and after the window the session released with whatever they signed into kept. On first use the saved browser is created and its id written to the tenant row.',
+  also: 'A \'browser already open\' message when a window is still claimed. A \'browser closed\' message at the end.',
+  fails: 'Browser product off on the row: fails and alarms. A Browserbase call fails: fails and alarms; the owner may have to wait for the window to expire before trying again.',
+};

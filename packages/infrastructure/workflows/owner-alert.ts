@@ -9,6 +9,7 @@
  * the tool on but no owner channel fails loudly (alarm).
  */
 import { q } from './asl.js';
+import type { UnitOutcomes } from '@wnk/shared';
 
 export interface OwnerAlertRefs {
   tenantsTable: string;
@@ -46,3 +47,11 @@ export function ownerAlertDefinition(refs: OwnerAlertRefs) {
     },
   };
 }
+
+/** The four answers the catalog shows for this unit (see UnitOutcomes). */
+export const outcomes: UnitOutcomes = {
+  in: 'owner.notify from the session Lambda, with a summary and urgency.',
+  out: 'One telegram.reply event addressed to the owner\'s Telegram chat; the reply rule delivers it.',
+  also: 'Nothing. No marker, so a redelivered event alerts twice, which is accepted.',
+  fails: 'The tenant has no owner with a Telegram id: the execution fails and alarms. The alert was lost.',
+};
