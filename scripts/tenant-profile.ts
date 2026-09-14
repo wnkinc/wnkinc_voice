@@ -7,9 +7,10 @@
  * Derived from the tenant row alone, using the same gates the workflows use,
  * so the profile cannot claim a service the platform would refuse. The
  * pre-flight (check-tenant.ts) asks "is it wired up"; this asks "what do
- * they get". Read-only; prints Markdown.
+ * they get". Writes Markdown to tenant-profiles/<id>.md (gitignored) and
+ * prints the path.
  */
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dynamoStore, TenantConfigSchema, type TenantConfig } from '@wnk/shared';
 
@@ -98,4 +99,7 @@ else p('Nobody listed. Alerts, the assistant, and the browser all need at least 
 h('Metered');
 p(['voice minutes', email ? 'emails sent' : '', assistant ? 'assistant tokens' : ''].filter(Boolean).join(', ') + '.');
 
-console.log(lines.join('\n'));
+mkdirSync('tenant-profiles', { recursive: true });
+const outPath = `tenant-profiles/${cfg.tenantId}.md`;
+writeFileSync(outPath, lines.join('\n') + '\n');
+console.log(outPath);
