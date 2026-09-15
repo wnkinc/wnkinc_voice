@@ -29,12 +29,14 @@ call). One deployment serves many businesses.
                                        EventBridge bus (wnkinc.voice)
                               lead.recorded · owner.notify · call.ended
                                                     │
-                      Step Functions workflows (runtime stack, no code, no model):
+                      Step Functions workflows (no code, no model):
+                       per tenant, in that tenant's stack, rules filtered on its id:
                         lead.recorded → HubSpot contact + note + task (via Composio HTTP)
                         lead.recorded → CRM + memory → owner's Gmail
                         call.ended    → transcript note on the HubSpot contact
-                        call.ended    → transcript to caller memory, minutes to usage
                         owner.notify  → owner on Telegram
+                       platform (runtime stack), the same for every tenant:
+                        call.ended    → transcript to caller memory, minutes to usage
 ```
 
 ## Layout
@@ -48,13 +50,15 @@ do, and how to verify it. Start there when changing one.
 | `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
 | `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
-| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, lead-email, crm-lead, crm-call, call-ended, owner-alert, composio-health, browser-login): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `workflows/asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair); everything else lives in the workflow file, duplicated if need be |
+| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, lead-email, crm-lead, crm-call, call-ended, owner-alert, composio-health, browser-login): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `workflows/asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair); everything else lives in the workflow file, duplicated if need be. The tenant-varied ones (lead-email, crm-lead, crm-call, owner-alert) also export an `Automation` descriptor (`workflows/automation.ts`: event, Express or not, timeout, grants, definition), which is what a tenant file lists |
+| `tenants/<id>.ts` | What that tenant runs on the bus: its id and the automation descriptors it gets, stock or variant. `tenants/index.ts` is the registry (one line per tenant). Tracked, unlike the rows |
+| `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant (`wnk-tenant-<id>-dev`): for each descriptor a state machine named for the tenant, a rule matching only events carrying that tenant's id, the grants it declares, and an alarm. Deploying one touches no other tenant |
 | `packages/shared/src/composio.ts` | Composio SDK, scripts only (consent links, the owner's Gmail address, the assistant's session). No Lambda bundles it |
 | `packages/shared/src/store.ts` | DynamoDB (tenants, calls, people) behind one `Store` interface, plus an in-memory version for tests. No leads table: the tenant's CRM holds the lead; the call row (tool calls + once-markers) is the audit |
 | `packages/shared/src/events.ts` | EventBridge publisher |
 | `packages/shared/src/types.ts` | `TenantConfig` schema (zod) and record/event types |
 | `packages/shared/src/config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger |
-| `packages/infrastructure/stacks/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram reply path, and the state machine, rule, grants, and alarm for each definition in `workflows/`: CRM sync for leads and for call transcripts (HubSpot through Composio HTTP tasks), the call-ended tail (transcript to caller memory, minutes to usage), the lead email (CRM contact + last note and caller memory fetched → email formatted from those fields → sent from the owner's Gmail), and the owner alert (`owner.notify` → Telegram). Workflows that handle transcripts or CRM notes run as Express with execution data not logged |
+| `packages/infrastructure/stacks/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram reply path, and the platform workflows every tenant shares: the Telegram workflow, the browser login handoff, the call-ended tail (transcript to caller memory, minutes to usage), and the Composio health canary. Workflows that handle transcripts or CRM notes run as Express with execution data not logged |
 | `packages/infrastructure/` | CDK app: `bin/app.ts` + `stacks/*-stack.ts` + `workflows/` (one definition per file) + `infra_utils/` (alarms, state-machine presets) (the two Lambdas and the accept workflow) |
 | `scripts/seed-tenant.ts` | Upsert tenant JSON into the Tenants table |
 | `tenants/example.json` | Example tenant config |
@@ -259,10 +263,12 @@ input, and that selection picks the credential:
 - **Voice receptionist**: the webhook resolves the tenant from the signed called number; the two
   tools (`record_lead`, `notify_owner`) run in-process with that call context and are one write or
   one publish each. Everything multi-step is a consumer of the events they publish.
-- **Workflows** (CRM sync, lead email, owner alert): no code, no model. Each reads the tenant row
-  by the event's phone number and acts only if the row enables the service; every Composio HTTP
-  call names that tenant as Composio's user, and the owner alert delivers to the owner listed on
-  the row.
+- **Tenant automations** (CRM sync, lead email, owner alert): no code, no model. Each is that
+  tenant's own state machine in that tenant's stack, started by a rule that matches only events
+  carrying the tenant's id (published by our own session Lambda). It reads the tenant row by the
+  event's phone number; every Composio HTTP call names that tenant as Composio's user, and the
+  owner alert delivers to the owner listed on the row. A variation for one tenant is a descriptor
+  in that tenant's file, never a Choice in a definition another tenant runs on.
 - **My Assistant**: the People table maps the Telegram sender to a tenant; the workflow hands the
   harness that tenant's Composio session URL from the row. The session is bound to the owner's
   connected accounts, so the model's tools cannot reach another tenant's SaaS.

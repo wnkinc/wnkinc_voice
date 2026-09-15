@@ -20,9 +20,14 @@ should live.
 
 - Before proposing code, ask whether a managed service, a config row, or a CDK
   declaration can do it instead. Prefer data > declarative config > code.
-- Tenant data (anything that differs between two customers) belongs in the tenant
-  row, a tenant-named secret, or a vault keyed by tenant id. Never in CDK, env
-  vars, Cedar literals, or `?? 'wnk'` fallbacks.
+- Tenant config and secrets (phone, persona, flags, people, tokens) belong in the
+  tenant row, a tenant-named secret, or a vault keyed by tenant id. Never in CDK,
+  env vars, Cedar literals, or `?? 'wnk'` fallbacks.
+- Tenant behavior (which automations a tenant runs, and in what shape) belongs in
+  that tenant's file, `tenants/<id>.ts`, deployed as that tenant's own stack with
+  rules filtered on its id. A variation for one tenant is a parameter on the
+  definition, a recomposition, or a copied definition in that file, in that order
+  of preference. Never a Choice state inside a definition another tenant runs on.
 - Build deferred items only when their trigger fires. The `new-tenant` skill keeps
   the trigger list. Don't pre-build membership models, per-tenant KMS keys, or
   config lineage.

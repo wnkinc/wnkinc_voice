@@ -1,11 +1,11 @@
 ---
 name: new-tenant
-description: Onboard a new business (tenant) onto the platform — config row, secrets, OAuth consents, service flags. Pure data, zero deploys, no code. Use when adding a second (or Nth) business.
+description: Onboard a new business (tenant) onto the platform — config row, secrets, OAuth consents, service flags, and the tenant's automations file deployed as its own stack. Use when adding a second (or Nth) business.
 ---
 
 # Onboard a tenant
 
-A tenant is data: a config row keyed by their phone number and their credentials under tenant-named keys. Onboarding is zero-deploy — no stack, policy, or env change; if a step below seems to need one, something is misfiled. The tenant id threads everything — pick it once, lowercase, short (like `wnk`).
+A tenant is a config row keyed by their phone number, their credentials under tenant-named keys, and a short file naming the automations they run. The row and secrets never touch a deploy; the automations file is the one deploy, and it deploys that tenant's stack alone (no platform stack, policy, or env change; if a step below seems to need one, something is misfiled). The tenant id threads everything — pick it once, lowercase, short (like `wnk`).
 
 ## Steps
 
@@ -20,6 +20,7 @@ A tenant is data: a config row keyed by their phone number and their credentials
 
 6b. **Assistant tools** (if `products.assistant.enabled`): re-run the seed with `COMPOSIO_SECRET_ARN` set AFTER the consents above; it mints the tenant's Composio meta-tools MCP session bound to those connected accounts and writes `composioMcpUrl` into the file. Commit it. To change which toolkits the assistant sees, delete the field and reseed after connecting/disconnecting accounts.
 7. **Memory**: nothing to do — actor ids are `<tenantId>_<phone>`, so the new tenant's caller memory is isolated by construction.
+7b. **Automations**: create `tenants/<id>.ts` (copy `tenants/wnk.ts`): the tenant id and the list of descriptors it runs (`leadEmail`, `crmLead`, `crmCall`, `ownerAlert` from `packages/infrastructure/workflows/`, or a variant: a descriptor with options, or a copied definition). Add it to `tenants/index.ts`, then `npx cdk deploy wnk-tenant-<id>-dev`. That stack's rules match only events carrying this tenant's id; the definitions test asserts it. Nothing else deploys.
 8. **Verify**: call the new number; check the webhook log resolved the tenant (`"msg":"incoming call"` → correct `to`); confirm a lead lands with the right `tenantId` and, if enabled, the owner gets the email.
 
 ## Pre-flight
