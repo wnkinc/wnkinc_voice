@@ -54,7 +54,7 @@ describe('htmlToTextExpr', () => {
 });
 
 describe('composio health expressions', () => {
-  const row = (crm: boolean, email: boolean) => ({ crm: crm ? { M: { type: { S: 'hubspot' }, via: { S: 'composio' } } } : undefined, products: { M: { emailResponder: { M: { enabled: { BOOL: email } } } } } });
+  const row = (crm: boolean, email: boolean) => ({ crm: crm ? { M: { type: { S: 'hubspot' }, via: { S: 'composio' } } } : undefined, emailResponder: { M: { enabled: { BOOL: email } } } });
   it('expects hubspot for crm via composio and gmail for the email responder', async () => {
     expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(true, true) })).toEqual(['hubspot', 'gmail']);
     expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(true, false) })).toEqual(['hubspot']);

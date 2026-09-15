@@ -10,7 +10,7 @@
  *
  * And, when the assistant is on, mints the tenant's Composio meta-tools MCP
  * session (bound to the owner's connected accounts) and writes its URL back
- * as `composioMcpUrl`. Needs COMPOSIO_SECRET_ARN (voice stack output) or
+ * as `assistant.composioMcpUrl`. Needs COMPOSIO_SECRET_ARN (voice stack output) or
  * COMPOSIO_API_KEY; the owner must have run connect-composio first.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -18,15 +18,15 @@ import { dynamoStore } from '@wnk/shared';
 import { composioAssistant } from '@wnk/shared/composio';
 
 /** The assistant's SaaS tools: one Composio meta-tools session per tenant. */
-async function ensureComposioSession(raw: { tenantId?: string; composioMcpUrl?: string; products?: { assistant?: { enabled?: boolean } } }, file: string): Promise<void> {
-  if (raw.composioMcpUrl || !raw.tenantId || !raw.products?.assistant?.enabled) return;
+async function ensureComposioSession(raw: { tenantId?: string; assistant?: { enabled?: boolean; composioMcpUrl?: string } }, file: string): Promise<void> {
+  if (raw.assistant?.composioMcpUrl || !raw.tenantId || !raw.assistant?.enabled) return;
   if (!process.env.COMPOSIO_SECRET_ARN && !process.env.COMPOSIO_API_KEY) {
     console.warn(`${raw.tenantId}: assistant is on but no composioMcpUrl and COMPOSIO_SECRET_ARN unset; the assistant has no SaaS tools until one exists`);
     return;
   }
   const s = await composioAssistant.ensureSession(raw.tenantId);
-  raw.composioMcpUrl = s.url;
-  writeBack(file, raw.tenantId, 'composioMcpUrl', s.url);
+  raw.assistant.composioMcpUrl = s.url;
+  writeBack(file, 'assistant', 'composioMcpUrl', s.url);
   console.log(`minted Composio session for ${raw.tenantId}: ${s.sessionId} (toolkits: ${s.toolkits.join(', ')})`);
 }
 
@@ -44,12 +44,12 @@ export function sessionDayOffsetMinutes(timeZone: string, now = new Date()): num
   return 180 - zoneOffset;
 }
 
-/** Write a minted value back next to tenantId, keeping the file's formatting. */
-function writeBack(file: string, tenantId: string, key: string, value: string): void {
+/** Write a minted value into its service block (`"<block>": {`), keeping the file's formatting. */
+function writeBack(file: string, block: string, key: string, value: string): void {
   const text = readFileSync(file, 'utf8');
-  const marker = `"tenantId": "${tenantId}"`;
-  if (text.includes(marker) && !text.includes(`"${key}"`)) {
-    writeFileSync(file, text.replace(marker, `${marker},\n  "${key}": "${value}"`));
+  const marker = new RegExp(`"${block}":\\s*\\{`);
+  if (marker.test(text) && !text.includes(`"${key}"`)) {
+    writeFileSync(file, text.replace(marker, (m) => `${m}\n    "${key}": "${value}",`));
   } else {
     console.warn(`add "${key}": "${value}" to ${file} by hand`);
   }
@@ -65,10 +65,10 @@ for (const file of files) {
   const list = [JSON.parse(readFileSync(file, 'utf8')) as unknown]; // one tenant per file, named tenants/<tenantId>.json
   for (const raw of list) {
     await ensureComposioSession(raw as Parameters<typeof ensureComposioSession>[0], file);
-    const tz = (raw as { timezone?: string }).timezone ?? 'America/Los_Angeles';
+    const tz = (raw as { business?: { timezone?: string } }).business?.timezone ?? 'America/Los_Angeles';
     (raw as { sessionDayOffsetMinutes?: number }).sessionDayOffsetMinutes = sessionDayOffsetMinutes(tz);
     const t = await store.putTenant(raw as Parameters<typeof store.putTenant>[0]);
     const people = await store.syncPeople(t);
-    console.log(`seeded ${t.tenantId} (${t.phoneNumber}) from ${file}; people: ${people.map((p) => `${p.name}=${p.channelId}`).join(', ') || 'none'}; session day rolls at 3 AM ${t.timezone} (UTC-${t.sessionDayOffsetMinutes}min)`);
+    console.log(`seeded ${t.tenantId} (${t.phoneNumber}) from ${file}; people: ${people.map((p) => `${p.name}=${p.channelId}`).join(', ') || 'none'}; session day rolls at 3 AM ${t.business.timezone} (UTC-${t.sessionDayOffsetMinutes}min)`);
   }
 }

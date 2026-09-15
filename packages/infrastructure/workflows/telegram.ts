@@ -24,11 +24,11 @@ export interface TelegramRefs {
 
 export function telegramDefinition(refs: TelegramRefs) {
   const prompt = [
-    "'You are My Assistant for ' & $tenant.businessName.S & ', chatting with ' & $person.name.S & ' (' & $person.role.S & ') who works there. '",
-    "($exists($tenant.description.S) ? 'About the business: ' & $tenant.description.S & ' ' : '')",
-    "($exists($tenant.services.L) and $count($tenant.services.L) > 0 ? 'Services: ' & $join($tenant.services.L.S, ', ') & '. ' : '')",
-    "($exists($tenant.hours.S) ? 'Hours: ' & $tenant.hours.S & '. ' : '')",
-    "($exists($tenant.composioMcpUrl.S) ? 'Your tools reach the business systems the owner connected (CRM, email): search for the right tool, then run it; do not stop at search results. CRM phone numbers are stored in E.164 form such as +15095551234, so search the phone property with that exact format. ' : '')",
+    "'You are My Assistant for ' & $tenant.business.M.name.S & ', chatting with ' & $person.name.S & ' (' & $person.role.S & ') who works there. '",
+    "($exists($tenant.business.M.description.S) ? 'About the business: ' & $tenant.business.M.description.S & ' ' : '')",
+    "($exists($tenant.business.M.services.L) and $count($tenant.business.M.services.L) > 0 ? 'Services: ' & $join($tenant.business.M.services.L.S, ', ') & '. ' : '')",
+    "($exists($tenant.business.M.hours.S) ? 'Hours: ' & $tenant.business.M.hours.S & '. ' : '')",
+    "($exists($tenant.assistant.M.composioMcpUrl.S) ? 'Your tools reach the business systems the owner connected (CRM, email): search for the right tool, then run it; do not stop at search results. CRM phone numbers are stored in E.164 form such as +15095551234, so search the phone property with that exact format. ' : '')",
     "'This is a chat: be brief and plain, no markdown. Use your tools to look things up or record things; say what you did and what you found. Never invent records. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 3000 characters.'",
   ].join(' & ');
 
@@ -59,7 +59,7 @@ export function telegramDefinition(refs: TelegramRefs) {
       // opens a browser the business signs into, so only the owner may send it.
       IsLogin: {
         Type: 'Choice',
-        Choices: [{ Condition: q("$substring($lowercase($states.input.message.text), 0, 6) = '/login' and $person.role.S = 'owner' and $exists($tenant) and $tenant.products.M.browser.M.enabled.BOOL = true"), Next: 'StartLogin' }],
+        Choices: [{ Condition: q("$substring($lowercase($states.input.message.text), 0, 6) = '/login' and $person.role.S = 'owner' and $exists($tenant) and $tenant.browser.M.enabled.BOOL = true"), Next: 'StartLogin' }],
         Default: 'AssistantEnabled',
       },
       StartLogin: {
@@ -72,7 +72,7 @@ export function telegramDefinition(refs: TelegramRefs) {
       },
       AssistantEnabled: {
         Type: 'Choice',
-        Choices: [{ Condition: q('$exists($tenant) and $tenant.products.M.assistant.M.enabled.BOOL = true and $exists($tenant.composioMcpUrl.S)'), Next: 'Invoke' }],
+        Choices: [{ Condition: q('$exists($tenant) and $tenant.assistant.M.enabled.BOOL = true and $exists($tenant.assistant.M.composioMcpUrl.S)'), Next: 'Invoke' }],
         Default: 'Ignored',
       },
       Invoke: {
@@ -90,7 +90,7 @@ export function telegramDefinition(refs: TelegramRefs) {
           // The tenant's SaaS tools: its Composio meta-tools session. The row
           // selects it; the key rides by ARN and is resolved from the vault at
           // invocation. Nothing the model or the caller sends can pick another.
-          Tools: [{ Type: 'remote_mcp', Name: 'crm', Config: { RemoteMcp: { Url: q('$tenant.composioMcpUrl.S'), Headers: { 'x-api-key': `\${${refs.composioProviderArn}}` } } } }],
+          Tools: [{ Type: 'remote_mcp', Name: 'crm', Config: { RemoteMcp: { Url: q('$tenant.assistant.M.composioMcpUrl.S'), Headers: { 'x-api-key': `\${${refs.composioProviderArn}}` } } } }],
           AllowedTools: ['@crm/*'],
           TimeoutSeconds: 120,
         },

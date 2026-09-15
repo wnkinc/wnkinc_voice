@@ -9,8 +9,8 @@
  *
  * What each tenant row promises, read from its own flags:
  *   crm.via = composio                 -> an ACTIVE hubspot account
- *   products.emailResponder.enabled    -> an ACTIVE gmail account
- *   products.assistant.enabled         -> at least one ACTIVE account (its session binds them)
+ *   emailResponder.enabled             -> an ACTIVE gmail account
+ *   assistant.enabled                  -> at least one ACTIVE account (its session binds them)
  * A new toolkit is one more line in `expectedToolkitsExpr`. A new tenant is
  * covered by the scan; nothing here names one.
  */
@@ -27,7 +27,7 @@ export interface ComposioHealthRefs {
 export const expectedToolkitsExpr = (rowExpr: string) => [
   '$append(',
   `(${hasCrm(rowExpr)} ? ['hubspot'] : []),`,
-  `(${rowExpr}.products.M.emailResponder.M.enabled.BOOL = true ? ['gmail'] : [])`,
+  `(${rowExpr}.emailResponder.M.enabled.BOOL = true ? ['gmail'] : [])`,
   ')',
 ].join(' ');
 
@@ -61,7 +61,7 @@ export function composioHealthDefinition(refs: ComposioHealthRefs) {
               Assign: {
                 tenantId: q('$states.input.tenantId.S'),
                 expected: q(expectedToolkitsExpr('$states.input')),
-                needsAny: q('$states.input.products.M.assistant.M.enabled.BOOL = true'),
+                needsAny: q('$states.input.assistant.M.enabled.BOOL = true'),
               },
               Output: q('$states.input'), Next: 'UsesComposio',
             },

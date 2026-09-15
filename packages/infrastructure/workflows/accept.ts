@@ -208,9 +208,9 @@ export function acceptDefinition(refs: AcceptRefs) {
       Accept: {
         ...httpTask(refs.openaiConnectionArn, 'POST', callUrl('accept'), {
           type: 'realtime',
-          model: q('$tenant.model.S'),
-          instructions: q("'You are ' & $tenant.agentName.S & ', the phone receptionist for ' & $tenant.businessName.S & '. The call has just connected and the receptionist system will start the conversation in a moment. Until you receive new instructions, do not speak.'"),
-          audio: { output: { voice: q('$tenant.voice.S') } },
+          model: q('$tenant.receptionist.M.session.M.model.S'),
+          instructions: q("'You are ' & $tenant.receptionist.M.instructions.M.agentName.S & ', the phone receptionist for ' & $tenant.business.M.name.S & '. The call has just connected and the receptionist system will start the conversation in a moment. Until you receive new instructions, do not speak.'"),
+          audio: { output: { voice: q('$tenant.receptionist.M.session.M.audio.M.output.M.voice.S') } },
         }),
         Catch: [
           // The caller hung up while ringing: not an error worth paging for.

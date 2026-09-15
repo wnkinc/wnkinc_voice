@@ -24,8 +24,8 @@ const callerName = process.argv[4] ?? 'Jordan Rivera';
 const reason = process.argv[5] ?? 'wants an estimate to replace a warped exterior door';
 const out = (stack: string, key: string) => execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', REGION], { encoding: 'utf8' }).trim();
 
-const tenant = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { phoneNumber: string; products?: { emailResponder?: { enabled?: boolean } } };
-if (!tenant.products?.emailResponder?.enabled) throw new Error(`tenant ${tenantId}: products.emailResponder.enabled is off`);
+const tenant = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { phoneNumber: string; emailResponder?: { enabled?: boolean } };
+if (!tenant.emailResponder?.enabled) throw new Error(`tenant ${tenantId}: emailResponder.enabled is off`);
 const bus = out('wnk-voice-dev', 'eventBusName');
 
 const callId = `test-lead-${Date.now()}`;

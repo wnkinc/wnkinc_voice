@@ -2,18 +2,23 @@ import { describe, expect, it } from 'vitest';
 import { memoryStore } from '../src/store.js';
 import { TenantConfigSchema } from '../src/types.js';
 
-const minimal = { tenantId: 't1', phoneNumber: '+15555550100', businessName: 'T1' };
+const minimal = { tenantId: 't1', phoneNumber: '+15555550100', business: { name: 'T1' } };
 
-describe('TenantConfigSchema.products', () => {
+describe('TenantConfigSchema service blocks', () => {
   it('defaults every service to off (fail closed)', () => {
     const t = TenantConfigSchema.parse(minimal);
-    expect(t.products).toEqual({ emailResponder: { enabled: false }, assistant: { enabled: false }, browser: { enabled: false } });
+    expect(t.emailResponder).toEqual({ enabled: false });
+    expect(t.assistant).toEqual({ enabled: false });
+    expect(t.browser).toEqual({ enabled: false });
   });
 
-  it('fills defaults inside a partially specified service', () => {
-    const t = TenantConfigSchema.parse({ ...minimal, products: { emailResponder: { enabled: true } } });
-    expect(t.products.emailResponder).toEqual({ enabled: true });
-    expect(t.products.assistant.enabled).toBe(false);
+  it('fills defaults inside a partially specified block', () => {
+    const t = TenantConfigSchema.parse({ ...minimal, emailResponder: { enabled: true }, receptionist: { session: { tools: ['end_call'] } } });
+    expect(t.emailResponder).toEqual({ enabled: true });
+    expect(t.assistant.enabled).toBe(false);
+    expect(t.receptionist.session.tools).toEqual(['end_call']);
+    expect(t.receptionist.session.audio.output.voice).toBe('marin');
+    expect(t.business.timezone).toBe('America/Los_Angeles');
   });
 
 });

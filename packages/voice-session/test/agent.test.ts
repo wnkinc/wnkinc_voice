@@ -10,24 +10,25 @@ const parse = (t: object) => TenantConfigSchema.parse(t);
 describe('tenant config', () => {
   it('applies defaults', () => {
     const t = parse(TENANT);
-    expect(t.model).toBe('gpt-realtime-2.1');
-    expect(t.voice).toBe('marin');
-    expect(t.tools).toEqual(['record_lead', 'notify_owner', 'end_call']);
-    expect(t.maxCallSeconds).toBe(600);
+    expect(t.receptionist.session.model).toBe('gpt-realtime-2.1');
+    expect(t.receptionist.session.audio.output.voice).toBe('marin');
+    expect(t.receptionist.session.tools).toEqual(['record_lead', 'notify_owner', 'end_call']);
+    expect(t.receptionist.maxCallSeconds).toBe(600);
+    expect(t.emailResponder.enabled).toBe(false);
     expect(t.active).toBe(true);
   });
   it('rejects bad phone numbers and calls beyond the Lambda ceiling', () => {
     expect(() => parse({ ...TENANT, phoneNumber: '555-0100' })).toThrow();
-    expect(() => parse({ ...TENANT, maxCallSeconds: 900 })).toThrow();
+    expect(() => parse({ ...TENANT, receptionist: { maxCallSeconds: 900 } })).toThrow();
   });
 });
 
 describe('prompt', () => {
   it('includes extra instructions', () => {
-    expect(buildInstructions(parse({ ...TENANT, extraInstructions: 'Always mention the spring promo.' }))).toContain('spring promo');
+    expect(buildInstructions(parse({ ...TENANT, receptionist: { instructions: { extra: 'Always mention the spring promo.' } } }))).toContain('spring promo');
   });
   it('scopes the agent to the business and states the time limit', () => {
-    const text = buildInstructions(parse({ ...TENANT, maxCallSeconds: 300 }));
+    const text = buildInstructions(parse({ ...TENANT, receptionist: { maxCallSeconds: 300 } }));
     expect(text).toContain('## Scope');
     expect(text).toContain('Politely decline anything else');
     expect(text).toContain('new instructions');
@@ -100,7 +101,7 @@ describe('caller id', () => {
 
 describe('greeting', () => {
   it('asks for identity when the caller is known', () => {
-    const t = parse({ ...TENANT, greeting: 'Thanks for calling Acme, this is Alex. How can I help you today?' });
+    const t = parse({ ...TENANT, receptionist: { greeting: 'Thanks for calling Acme, this is Alex. How can I help you today?' } });
     expect(greeting(t)).toBe('Thanks for calling Acme, this is Alex. How can I help you today?');
     expect(greeting(t, { knownCaller: { contactId: '1', name: 'Jordan Rivera' } })).toBe('Thanks for calling Acme, this is Alex. Am I speaking with Jordan?');
     expect(greeting(parse(TENANT), { knownCaller: { contactId: '1', name: 'Sam' } })).toBe('Thanks for calling Acme Plumbing, this is Alex. Am I speaking with Sam?');

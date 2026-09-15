@@ -7,9 +7,7 @@ export const silentLog = createLogger({ test: true });
 export const TENANT: TenantConfigInput = {
   tenantId: 'acme',
   phoneNumber: '+15555550100',
-  businessName: 'Acme Plumbing',
-  services: ['drains'],
-  hours: '9-5',
+  business: { name: 'Acme Plumbing', services: ['drains'], hours: '9-5' },
 };
 
 export function makeWebhookSecret(): string {

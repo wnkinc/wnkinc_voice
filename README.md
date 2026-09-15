@@ -133,17 +133,17 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | Field | Notes |
 |---|---|
 | `phoneNumber` | E.164, the **called** number; partition key |
-| `businessName`, `description`, `services`, `hours`, `timezone` | Fed into the system prompt |
-| `agentName`, `greeting`, `extraInstructions` | Persona and tenant-specific rules |
-| `model` (default `gpt-realtime-2.1`), `voice` (default `marin`) | Passed to `accept` |
-| `tools` | Subset of `record_lead`, `notify_owner`, `end_call` |
+| `business` | `name`, `description`, `services`, `hours`, `timezone`: the facts every service draws on (receptionist prompt, assistant prompt, lead email, CRM notes) |
 | `people` | The tenant's own people with their channel ids. `notify_owner` alerts go to the person with role `owner` and a `telegramId`; the assistant answers anyone listed. |
-| `maxCallSeconds` (default 600, max 840) | Agent is asked to wrap up, then the call is hung up |
+| `receptionist.session` | Passed to OpenAI Realtime under these same keys: `model` (default `gpt-realtime-2.1`), `audio.output.voice` (default `marin`), `tools` (subset of `record_lead`, `notify_owner`, `end_call`). Levers not yet built are listed in `packages/voice-session/README.md` |
+| `receptionist.instructions` | What the platform composes into the prompt alongside `business`: `agentName` (default `Alex`), `extra` (tenant-specific rules) |
+| `receptionist.greeting` | Spoken verbatim on connect, through a separate response request |
+| `receptionist.maxCallSeconds` (default 600, max 840) | Ours, not OpenAI's: the agent is asked to wrap up, then the call is hung up |
 | `active` | `false` → calls rejected with SIP 603 |
 | `crm` | `{ "type": "hubspot", "via": "composio" }` enables CRM sync, caller recognition, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
-| `composioMcpUrl` | The assistant's SaaS tools: the tenant's Composio meta-tools MCP session, minted by the seed once the owner has connected accounts. The workflow hands it to the harness per invocation; no URL, no SaaS tools. |
-| `products` | Which platform services are on for this tenant: `emailResponder: { enabled }`, `assistant: { enabled }`, `browser: { enabled }`. The email responder sends from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default all off; agents refuse to act for a tenant whose flag is off. |
-| `browserContextId` | The tenant's saved browser in Browserbase (cookies, logins). The browser-login workflow creates it on the owner's first `/login` and writes it to the row; copy it into the file when the reply says so, or a re-seed starts a fresh browser. |
+| `emailResponder` | `{ enabled }`: owner follow-up email per lead, from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default off; the workflow refuses a tenant whose flag is off. |
+| `assistant` | `{ enabled, composioMcpUrl }`: the chat assistant for the tenant's people. `composioMcpUrl` is the tenant's Composio meta-tools MCP session, minted by the seed once the owner has connected accounts; the workflow hands it to the harness per invocation; no URL, no SaaS tools. |
+| `browser` | `{ enabled, contextId }`: the tenant's saved browser in Browserbase (cookies, logins). The browser-login workflow creates the context on the owner's first `/login` and writes it to the row; copy it into the file when the reply says so, or a re-seed starts a fresh browser. |
 
 Unknown numbers are rejected with SIP 404.
 
@@ -232,7 +232,7 @@ HubSpot app once; no HubSpot token exists anywhere in the platform. Every CRM ca
 (Composio `userId` = our tenant id), so the credential is chosen per call.
 
 - **My Assistant** reaches the CRM (and Gmail) through the tenant's Composio meta-tools MCP
-  session (`composioMcpUrl`), bound at seed time to the owner's connected accounts, so the model
+  session (`assistant.composioMcpUrl`), bound at seed time to the owner's connected accounts, so the model
   can reach nothing else.
 - **`lead.recorded`** → (CRM lead workflow) contact upserted by phone, note with the lead, follow-up
   task due the next business morning in the tenant's timezone, assigned to the account's first owner.
@@ -298,7 +298,7 @@ talking decides the tenant, not which bot.
 
 **No code on the path.** The assistant is a harness: model, default prompt, memory, and limits are
 configuration in the runtime stack. Per invocation the workflow passes the message, a system prompt
-built from the tenant row, and the tenant's Composio MCP session (`composioMcpUrl`, minted by the
+built from the tenant row, and the tenant's Composio MCP session (`assistant.composioMcpUrl`, minted by the
 seed and bound to the owner's connected accounts), so the only SaaS the model can reach is that
 tenant's; Composio's meta tools keep the context small, and the harness `allowedTools` fences the
 server. The harness
@@ -334,13 +334,13 @@ A business signs into the sites it uses once, and the platform keeps that browse
 `/login <site>` to the bot; the Telegram workflow starts the browser-login workflow
 (`workflows/browser-login.ts`) instead of the assistant. It opens a Browserbase session on the
 tenant's context (the saved browser: cookies and logins, encrypted in Browserbase's vault, keyed on
-the row as `browserContextId`), sends the owner the interactive live view link, waits ten minutes,
+the row as `browser.contextId`), sends the owner the interactive live view link, waits ten minutes,
 and releases the session so the context syncs. One window at a time per tenant: two sessions on one
 context race on release and the later one overwrites the earlier one's logins, so the row carries the
-window's end (`browserLoginUntil`) and a second `/login` meanwhile is answered, not started. Captcha
+window's end (`browser.loginUntil`) and a second `/login` meanwhile is answered, not started. Captcha
 solving is Browserbase's, on by default. The windowed live view has an address bar; the owner types the
 site's URL there.
-Only the owner's Telegram id may send `/login`, and only for a tenant with `products.browser.enabled`.
+Only the owner's Telegram id may send `/login`, and only for a tenant with `browser.enabled`.
 
 Setup, once: create a Browserbase project. Its id goes in `cdk.json` context as
 `browserbaseProjectId` (not a secret; a literal in the definition). The key goes in the secret and,
@@ -354,7 +354,7 @@ aws events update-connection --name <BrowserbaseConnection name> \
 ```
 
 The first `/login` for a tenant creates its context and the reply names the id; paste it into the
-tenant file as `browserContextId` so a re-seed keeps it. What the assistant does with that browser
+tenant file as `browser.contextId` so a re-seed keeps it. What the assistant does with that browser
 is step two (a per-tenant Stagehand session); today nothing but the owner drives it.
 
 ## Cost & scale notes

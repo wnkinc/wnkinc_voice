@@ -43,7 +43,7 @@ export function leadEmailDefinition(refs: LeadEmailRefs) {
       + " : 'no matching contact.') & '\\n'",
     // Preference records arrive as JSON text; show their preference sentence, not the blob.
     "($count($memories) > 0 ? '\\nCaller preferences (from earlier calls):\\n' & $join($memories.('- ' & ($substring($, 0, 1) = '{' ? $match($, /\"preference\":\"([^\"]*)\"/)[0].groups[0] : $)), '\\n') & '\\n' : '')",
-    `'\\nSuggested text: Hi ' & $split(${lead}.callerName, ' ')[0] & ', this is ' & $tenant.businessName.S & '. Thanks for calling about ' & ${lead}.reason & '. When is a good time to talk? Reply here or call ' & $tenant.phoneNumber.S & '.\\n'`,
+    `'\\nSuggested text: Hi ' & $split(${lead}.callerName, ' ')[0] & ', this is ' & $tenant.business.M.name.S & '. Thanks for calling about ' & ${lead}.reason & '. When is a good time to talk? Reply here or call ' & $tenant.phoneNumber.S & '.\\n'`,
     "'\\nCall ' & $states.input.detail.callId",
   ].join(' & ');
 
@@ -58,7 +58,7 @@ export function leadEmailDefinition(refs: LeadEmailRefs) {
       },
       ResponderEnabled: {
         Type: 'Choice',
-        Choices: [{ Condition: q('$exists($tenant) and $tenant.products.M.emailResponder.M.enabled.BOOL = true'), Next: 'CheckDone' }],
+        Choices: [{ Condition: q('$exists($tenant) and $tenant.emailResponder.M.enabled.BOOL = true'), Next: 'CheckDone' }],
         Default: 'Skipped',
       },
       Skipped: { Type: 'Succeed' },

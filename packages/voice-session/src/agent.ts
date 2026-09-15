@@ -114,7 +114,7 @@ export const TOOLS = {
 export type ToolName = keyof typeof TOOLS;
 
 export function enabledTools(tenant: TenantConfig): ToolName[] {
-  return tenant.tools.filter((n): n is ToolName => n in TOOLS);
+  return tenant.receptionist.session.tools.filter((n): n is ToolName => n in TOOLS);
 }
 
 // ---- Prompt (prompt.ts) -----------------------------------------------------
@@ -125,17 +125,23 @@ export { buildInstructions, greeting, spokenPhone } from './prompt.js';
 
 export function buildAgent(tenant: TenantConfig, extras: CallExtras = {}): RealtimeAgent<CallContext> {
   return new RealtimeAgent<CallContext>({
-    name: tenant.agentName,
+    name: tenant.receptionist.instructions.agentName,
     instructions: buildInstructions(tenant, extras),
-    voice: tenant.voice,
+    voice: tenant.receptionist.session.audio.output.voice,
     tools: enabledTools(tenant).map((n) => TOOLS[n]),
   });
 }
 
-/** Session config the session Lambda sends on attach (the accept workflow sends only model + voice + a hold instruction). */
+/**
+ * Session config the session Lambda sends on attach (the accept workflow sends
+ * only model + voice + a hold instruction). `tenant.receptionist.session` is the
+ * tenant's part, under OpenAI's own keys; the rest are platform defaults (see
+ * the levers table in this package's README).
+ */
 export function sessionOptions(tenant: TenantConfig): Partial<RealtimeSessionOptions<CallContext>> {
+  const s = tenant.receptionist.session;
   return {
-    model: tenant.model,
+    model: s.model,
     config: {
       outputModalities: ['audio'],
       audio: {
@@ -144,7 +150,7 @@ export function sessionOptions(tenant: TenantConfig): Partial<RealtimeSessionOpt
           transcription: { model: 'gpt-4o-mini-transcribe' },
           turnDetection: { type: 'semantic_vad', interruptResponse: true },
         },
-        output: { voice: tenant.voice },
+        output: { voice: s.audio.output.voice },
       },
     },
   };

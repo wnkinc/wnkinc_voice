@@ -52,24 +52,24 @@ if (cfg?.crm) {
   if (cfg.crm.via !== 'composio') bad('CRM', `crm.via is "${cfg.crm.via}"; the token path is gone — consent via scripts/connect-composio.mts ${tenantId} hubspot and set via: composio`);
   else ok('CRM', 'hubspot via composio (prove with scripts/test-crm-workflows.mts)');
 } else ok('CRM', 'not configured (crm: none)');
-if (cfg?.products.assistant.enabled && !cfg.composioMcpUrl) bad('Assistant tools', 'assistant is on but no composioMcpUrl — connect accounts, then re-run the seed with COMPOSIO_SECRET_ARN set');
-else if (cfg?.composioMcpUrl) ok('Assistant tools', 'Composio MCP session on the row');
+if (cfg?.assistant.enabled && !cfg.assistant.composioMcpUrl) bad('Assistant tools', 'assistant is on but no assistant.composioMcpUrl — connect accounts, then re-run the seed with COMPOSIO_SECRET_ARN set');
+else if (cfg?.assistant.composioMcpUrl) ok('Assistant tools', 'Composio MCP session on the row');
 
 // 4. Services this tenant has turned on
 if (cfg) {
-  const on = Object.entries(cfg.products).filter(([, v]) => v.enabled).map(([k]) => k);
+  const on = (['emailResponder', 'assistant', 'browser'] as const).filter((k) => cfg[k].enabled);
   ok('services', on.length ? on.join(', ') : 'none enabled — voice receptionist only');
 }
 
 // 5. Owner alerts: notify_owner delivers to the owner on Telegram (the owner alert workflow)
 if (cfg) {
   const owners = cfg.people.filter((p) => p.role === 'owner' && p.telegramId !== undefined).map((p) => p.name);
-  if (cfg.tools.includes('notify_owner') && !owners.length) bad('owner alerts', 'tools has notify_owner but no person with role owner and a telegramId — every alert will fail');
+  if (cfg.receptionist.session.tools.includes('notify_owner') && !owners.length) bad('owner alerts', 'tools has notify_owner but no person with role owner and a telegramId — every alert will fail');
   else ok('owner alerts', owners.length ? `Telegram → ${owners.join(', ')}` : 'notify_owner not enabled');
 }
 
 // 6. Owner's Gmail connected account for the email responder (Composio's vault, under the tenant id)
-if (!cfg?.products.emailResponder.enabled) ok('Gmail connection', 'not needed (email responder off)');
+if (!cfg?.emailResponder.enabled) ok('Gmail connection', 'not needed (email responder off)');
 else console.log(`  ○ Composio: Gmail connected account for user "${tenantId}" (if missing: npx tsx scripts/connect-composio.mts ${tenantId})`);
 
 // 7. Manual reminders (uncheckable from here)

@@ -58,7 +58,7 @@ export function crmCallDefinition(refs: CrmCallRefs) {
         ...crm.execute('HUBSPOT_CREATE_NOTE', {
           hs_timestamp: q('$now()'),
           hs_note_body: q([
-            "$substring('Call to ' & $tenant.businessName.S & ' line - ' & $string($round($states.input.detail.durationSeconds / 60)) & ' min, ' & $states.input.detail.status & '<br><br>'",
+            "$substring('Call to ' & $tenant.business.M.name.S & ' line - ' & $string($round($states.input.detail.durationSeconds / 60)) & ' min, ' & $states.input.detail.status & '<br><br>'",
             `& $join($transcript[M.role.S != 'tool'].((M.role.S = 'user' ? 'Caller: ' : 'Agent: ') & ${esc('M.text.S')}), '<br>')`,
             "& '<br><br>Call ID: ' & $states.input.detail.callId, 0, 60000)",
           ].join(' ')),

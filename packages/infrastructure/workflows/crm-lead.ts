@@ -101,7 +101,7 @@ export function crmLeadDefinition(refs: CrmLeadRefs) {
         ...crm.execute('HUBSPOT_CREATE_NOTE', {
           hs_timestamp: q('$now()'),
           hs_note_body: q([
-            "'Phone lead via receptionist (' & $tenant.businessName.S & ' line)<br><br>'",
+            "'Phone lead via receptionist (' & $tenant.business.M.name.S & ' line)<br><br>'",
             `'Reason: ' & ${esc(`${lead}.reason`)} & '<br>'`,
             `($exists(${lead}.preferredCallbackTime) ? 'Preferred callback: ' & ${esc(`${lead}.preferredCallbackTime`)} & '<br>' : '')`,
             `($exists(${lead}.notes) ? 'Notes: ' & ${esc(`${lead}.notes`)} & '<br>' : '')`,

@@ -38,7 +38,7 @@ export function ownerAlertDefinition(refs: OwnerAlertRefs) {
           EventBusName: refs.busName, Source: 'wnkinc.assistant', DetailType: 'telegram.reply',
           Detail: q([
             "$string({'tenantId': $tenant.tenantId.S, 'chatId': $number($chatId), 'text': ",
-            "($states.input.detail.urgency = 'urgent' ? 'URGENT' : 'Heads up') & ' (' & $tenant.businessName.S & '): ' & $states.input.detail.summary",
+            "($states.input.detail.urgency = 'urgent' ? 'URGENT' : 'Heads up') & ' (' & $tenant.business.M.name.S & '): ' & $states.input.detail.summary",
             " & ($exists($states.input.detail.callerPhone) ? ' Caller: ' & $states.input.detail.callerPhone : '')})",
           ].join('')),
         }] },

@@ -155,7 +155,7 @@ export async function runCall(job: SessionJob, deps: CallDeps, opts: { deadlineM
   await deps.store.setCallStatus(callId, 'in_progress');
 
   // Time limit: ask the model to wrap up, hang up after its reply (or the grace period).
-  const wrapUpAt = Math.min(startedAt + tenant.maxCallSeconds * 1000, opts.deadlineMs - DEADLINE_HEADROOM_MS);
+  const wrapUpAt = Math.min(startedAt + tenant.receptionist.maxCallSeconds * 1000, opts.deadlineMs - DEADLINE_HEADROOM_MS);
 
   // Remaining-time notices ahead of the limit (e.g. a 5-minute cap warns at 3:00 and 4:00).
   for (const remainingMs of [120_000, 60_000]) {

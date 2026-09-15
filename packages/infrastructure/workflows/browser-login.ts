@@ -5,7 +5,7 @@
  *
  * Standard, no model. The tenant's saved browser is a Browserbase context
  * (cookies, logins; encrypted at rest in their vault) whose id lives on the
- * tenant row as `browserContextId`. Created here on first use and written to
+ * tenant row as `browser.contextId`. Created here on first use and written to
  * the row; the reply asks the owner to add it to the tenant file so a re-seed
  * keeps it. Captcha solving is Browserbase's, on by default. Nothing here
  * touches the page: the owner drives the live view. Step two hands the same
@@ -59,10 +59,10 @@ export function browserLoginDefinition(refs: BrowserLoginRefs) {
       },
       BrowserEnabled: {
         Type: 'Choice',
-        Choices: [{ Condition: q('$exists($tenant) and $tenant.products.M.browser.M.enabled.BOOL = true'), Next: 'ClaimWindow' }],
+        Choices: [{ Condition: q('$exists($tenant) and $tenant.browser.M.enabled.BOOL = true'), Next: 'ClaimWindow' }],
         Default: 'NotEnabled',
       },
-      NotEnabled: { Type: 'Fail', Error: 'BrowserNotEnabled', Cause: 'products.browser.enabled is not true on the tenant row' },
+      NotEnabled: { Type: 'Fail', Error: 'BrowserNotEnabled', Cause: 'browser.enabled is not true on the tenant row' },
       // ---- One window at a time: two sessions on one context race on release,
       // and the later one overwrites the earlier one's logins. The row carries
       // the window's end; a conditional update claims it. Cleared at release.
@@ -70,8 +70,9 @@ export function browserLoginDefinition(refs: BrowserLoginRefs) {
         Type: 'Task', Resource: 'arn:aws:states:::dynamodb:updateItem',
         Arguments: {
           TableName: refs.tenantsTable, Key: { phoneNumber: { S: q('$tenant.phoneNumber.S') } },
-          UpdateExpression: 'SET browserLoginUntil = :until',
-          ConditionExpression: 'attribute_not_exists(browserLoginUntil) OR browserLoginUntil < :now',
+          UpdateExpression: 'SET #b.loginUntil = :until',
+          ConditionExpression: 'attribute_not_exists(#b.loginUntil) OR #b.loginUntil < :now',
+          ExpressionAttributeNames: { '#b': 'browser' },
           ExpressionAttributeValues: { ':until': { S: q(`$fromMillis($millis() + ${(windowSeconds + 300) * 1000})`) }, ':now': { S: q('$now()') } },
         },
         Catch: [{ ErrorEquals: ['DynamoDB.ConditionalCheckFailedException'], Output: q('$states.input'), Next: 'TellBusy' }],
@@ -79,8 +80,8 @@ export function browserLoginDefinition(refs: BrowserLoginRefs) {
       },
       TellBusy: { ...tell("'A browser is already open for this business. Use the link you have, or try again once it closes.'"), End: true },
       // ---- The tenant's saved browser: reuse it, or create it once ------------
-      HasContext: { Type: 'Choice', Choices: [{ Condition: q('$exists($tenant.browserContextId.S)'), Next: 'UseContext' }], Default: 'CreateContext' },
-      UseContext: { Type: 'Pass', Assign: { contextId: q('$tenant.browserContextId.S'), created: false }, Output: q('$states.input'), Next: 'StartSession' },
+      HasContext: { Type: 'Choice', Choices: [{ Condition: q('$exists($tenant.browser.M.contextId.S)'), Next: 'UseContext' }], Default: 'CreateContext' },
+      UseContext: { Type: 'Pass', Assign: { contextId: q('$tenant.browser.M.contextId.S'), created: false }, Output: q('$states.input'), Next: 'StartSession' },
       CreateContext: {
         ...http('POST', 'contexts', { projectId: refs.browserbaseProjectId, name: q('$tenant.tenantId.S') }),
         Assign: { contextId: q('$states.result.ResponseBody.id'), created: true },
@@ -90,7 +91,8 @@ export function browserLoginDefinition(refs: BrowserLoginRefs) {
         Type: 'Task', Resource: 'arn:aws:states:::dynamodb:updateItem',
         Arguments: {
           TableName: refs.tenantsTable, Key: { phoneNumber: { S: q('$tenant.phoneNumber.S') } },
-          UpdateExpression: 'SET browserContextId = :c',
+          UpdateExpression: 'SET #b.contextId = :c',
+          ExpressionAttributeNames: { '#b': 'browser' },
           ExpressionAttributeValues: { ':c': { S: q('$contextId') } },
         },
         Output: q('$states.input'), Next: 'StartSession',
@@ -115,7 +117,7 @@ export function browserLoginDefinition(refs: BrowserLoginRefs) {
       TellOwner: {
         ...tell([
           `'Browser ready' & ($site != '' ? ' for ' & $site : '') & '. Open the link, go to the site, and sign in. It closes in ${minutes} minutes; the login is kept for next time. ' & $url`,
-          "& ($created ? '\\n\\nFirst browser for this business. Add browserContextId = ' & $contextId & ' to the tenant file so a re-seed keeps it.' : '')",
+          "& ($created ? '\\n\\nFirst browser for this business. Add browser.contextId = ' & $contextId & ' to the tenant file so a re-seed keeps it.' : '')",
         ].join(' ')),
         Next: 'Window',
       },
@@ -128,7 +130,7 @@ export function browserLoginDefinition(refs: BrowserLoginRefs) {
       },
       ClearWindow: {
         Type: 'Task', Resource: 'arn:aws:states:::dynamodb:updateItem',
-        Arguments: { TableName: refs.tenantsTable, Key: { phoneNumber: { S: q('$tenant.phoneNumber.S') } }, UpdateExpression: 'REMOVE browserLoginUntil' },
+        Arguments: { TableName: refs.tenantsTable, Key: { phoneNumber: { S: q('$tenant.phoneNumber.S') } }, UpdateExpression: 'REMOVE #b.loginUntil', ExpressionAttributeNames: { '#b': 'browser' } },
         Output: q('$states.input'), Next: 'TellClosed',
       },
       TellClosed: { ...tell("'Browser closed. Whatever you signed into is saved for this business.'"), End: true },

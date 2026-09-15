@@ -45,58 +45,22 @@ export const TenantConfigSchema = z.object({
   phoneNumber: E164,
   active: z.boolean().default(true),
   /**
-   * The assistant's SaaS tools: this tenant's Composio meta-tools MCP session,
-   * minted by the seed (`composioAssistant.ensureSession`) and bound to the
-   * tenant's connected accounts. The workflow hands it to the harness per
-   * invocation; a tenant without one gets no SaaS tools.
-   */
-  composioMcpUrl: z.url().optional(),
-  /**
-   * The tenant's saved browser: a Browserbase context (cookies and logins,
-   * encrypted in their vault) created by the browser-login workflow on the
-   * owner's first `/login` and written to the row. Copy it into the file when
-   * the workflow says so; a re-seed without it starts a fresh browser.
-   */
-  browserContextId: z.string().optional(),
-  /** Owned by whoever holds the browser (the browser-login workflow today): ISO time until which a window is open on it, one at a time. Cleared at release; a re-seed clears it too. */
-  browserLoginUntil: z.string().optional(),
-  /**
    * Minutes to subtract from UTC so that calendar days roll at 3 AM in the
    * tenant's timezone — the assistant starts a fresh conversation session each
-   * day at that cutoff. COMPUTED by the seed from `timezone` (Step Functions
-   * cannot evaluate IANA zones); reflects DST as of the last seed, so the cutoff
-   * drifts an hour across DST changes until the next re-seed. Not in the file.
+   * day at that cutoff. COMPUTED by the seed from `business.timezone` (Step
+   * Functions cannot evaluate IANA zones); reflects DST as of the last seed, so
+   * the cutoff drifts an hour across DST changes until the next re-seed. Not in the file.
    */
   sessionDayOffsetMinutes: z.number().int().optional(),
 
-  businessName: z.string().min(1),
-  description: z.string().optional(),
-  services: z.array(z.string()).default([]),
-  hours: z.string().optional(),
-  timezone: z.string().default('America/Los_Angeles'),
-
-  agentName: z.string().default('Alex'),
-  /** Spoken verbatim when the call connects. Defaults to a template if omitted. */
-  greeting: z.string().optional(),
-  /** Free-form additions appended to the generated system prompt. */
-  extraInstructions: z.string().optional(),
-
-  model: z.string().default('gpt-realtime-2.1'),
-  voice: z.string().default('marin'),
-  /** Tool names (see src/agent.ts) enabled for this tenant. */
-  tools: z.array(z.string()).default(['record_lead', 'notify_owner', 'end_call']),
-
-
-  /** Hard cap; the agent is asked to wrap up and the call is hung up after this. The session Lambda's 15-minute timeout is the ceiling. */
-  maxCallSeconds: z.number().int().positive().max(840).default(600),
-
-  /**
-   * CRM. `via: composio` (the target state) means the owner consented in
-   * HubSpot through Composio and the credential lives in Composio's vault under
-   * this tenant id. `via: token` is the legacy private-app token in Secrets
-   * Manager at `<CRM_SECRET_PREFIX><tenantId>`, removed at the cutover.
-   */
-  crm: z.object({ type: z.literal('hubspot'), via: z.enum(['token', 'composio']).default('token') }).optional(),
+  /** The business facts every service draws on: the receptionist's prompt, the assistant's prompt, the lead email, the CRM notes. */
+  business: z.object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    services: z.array(z.string()).default([]),
+    hours: z.string().optional(),
+    timezone: z.string().default('America/Los_Angeles'),
+  }),
 
   /**
    * Humans allowed to talk to this tenant's assistant, with the channel
@@ -108,17 +72,74 @@ export const TenantConfigSchema = z.object({
   people: z.array(PersonSchema).default([]),
 
   /**
-   * Platform services this tenant has turned on. Every agent checks its own
-   * flag before acting and refuses otherwise (fail closed). Adding a service
-   * adds a key here; onboarding a tenant sets the keys — nothing else.
+   * The phone receptionist (OpenAI Realtime over SIP). `session` is passed to
+   * OpenAI as the session config under these same keys; `instructions` names
+   * what the platform composes into the session's instructions string alongside
+   * `business`; the greeting is spoken through a separate response request on
+   * connect; the call cap is ours (the session Lambda's deadline), not OpenAI's.
+   * Every lever the platform has built appears here with its default; the
+   * levers table in packages/voice-session/README.md lists the rest.
    */
-  products: z.object({
-    /** Owner follow-up email per lead, sent from the owner's Gmail through Composio. */
-    emailResponder: z.object({ enabled: z.boolean().default(false) }).prefault({}),
-    /** Chat assistant for the tenant's own people (Telegram now, SMS later). */
-    assistant: z.object({ enabled: z.boolean().default(false) }).prefault({}),
-    /** A saved browser for the business: the owner signs into sites over a live view (`/login` on Telegram); logins persist in Browserbase. */
-    browser: z.object({ enabled: z.boolean().default(false) }).prefault({}),
+  receptionist: z.object({
+    session: z.object({
+      model: z.string().default('gpt-realtime-2.1'),
+      audio: z.object({
+        output: z.object({ voice: z.string().default('marin') }).prefault({}),
+      }).prefault({}),
+      /** Tool names (see voice-session/src/agent.ts) enabled for this tenant. */
+      tools: z.array(z.string()).default(['record_lead', 'notify_owner', 'end_call']),
+    }).prefault({}),
+    instructions: z.object({
+      agentName: z.string().default('Alex'),
+      /** Free-form additions appended to the generated system prompt. */
+      extra: z.string().optional(),
+    }).prefault({}),
+    /** Spoken verbatim when the call connects. Defaults to a template if omitted. */
+    greeting: z.string().optional(),
+    /** Hard cap; the agent is asked to wrap up and the call is hung up after this. The session Lambda's 15-minute timeout is the ceiling. */
+    maxCallSeconds: z.number().int().positive().max(840).default(600),
+  }).prefault({}),
+
+  /**
+   * CRM. `via: composio` (the target state) means the owner consented in
+   * HubSpot through Composio and the credential lives in Composio's vault under
+   * this tenant id. `via: token` is the legacy private-app token in Secrets
+   * Manager at `<CRM_SECRET_PREFIX><tenantId>`, removed at the cutover.
+   */
+  crm: z.object({ type: z.literal('hubspot'), via: z.enum(['token', 'composio']).default('token') }).optional(),
+
+  // ---- Platform services, one block each. Every agent checks its own block's
+  // `enabled` before acting and refuses otherwise (fail closed). A service's
+  // own data (minted URLs, ids) lives in its block. Adding a service adds a
+  // block here; onboarding a tenant sets the blocks — nothing else.
+
+  /** Owner follow-up email per lead, sent from the owner's Gmail through Composio. */
+  emailResponder: z.object({ enabled: z.boolean().default(false) }).prefault({}),
+
+  /** Chat assistant for the tenant's own people (Telegram now, SMS later). */
+  assistant: z.object({
+    enabled: z.boolean().default(false),
+    /**
+     * The assistant's SaaS tools: this tenant's Composio meta-tools MCP session,
+     * minted by the seed (`composioAssistant.ensureSession`) and bound to the
+     * tenant's connected accounts. The workflow hands it to the harness per
+     * invocation; a tenant without one gets no SaaS tools.
+     */
+    composioMcpUrl: z.url().optional(),
+  }).prefault({}),
+
+  /** A saved browser for the business: the owner signs into sites over a live view (`/login` on Telegram); logins persist in Browserbase. */
+  browser: z.object({
+    enabled: z.boolean().default(false),
+    /**
+     * The tenant's saved browser: a Browserbase context (cookies and logins,
+     * encrypted in their vault) created by the browser-login workflow on the
+     * owner's first `/login` and written to the row. Copy it into the file when
+     * the workflow says so; a re-seed without it starts a fresh browser.
+     */
+    contextId: z.string().optional(),
+    /** Owned by whoever holds the browser (the browser-login workflow today): ISO time until which a window is open on it, one at a time. Cleared at release; a re-seed clears it too. */
+    loginUntil: z.string().optional(),
   }).prefault({}),
 });
 export type TenantConfig = z.infer<typeof TenantConfigSchema>;

@@ -122,8 +122,9 @@ export function dynamoStore(): Store {
       try {
         await db.send(new UpdateCommand({
           TableName: tenants(), Key: { phoneNumber },
-          UpdateExpression: 'SET browserLoginUntil = :until',
-          ConditionExpression: 'attribute_exists(phoneNumber) AND (attribute_not_exists(browserLoginUntil) OR browserLoginUntil < :now)',
+          UpdateExpression: 'SET #b.loginUntil = :until',
+          ConditionExpression: 'attribute_exists(phoneNumber) AND (attribute_not_exists(#b.loginUntil) OR #b.loginUntil < :now)',
+          ExpressionAttributeNames: { '#b': 'browser' },
           ExpressionAttributeValues: { ':until': untilIso, ':now': new Date().toISOString() },
         }));
         return true;
@@ -133,7 +134,7 @@ export function dynamoStore(): Store {
       }
     },
     async releaseBrowser(phoneNumber) {
-      await db.send(new UpdateCommand({ TableName: tenants(), Key: { phoneNumber }, UpdateExpression: 'REMOVE browserLoginUntil' }));
+      await db.send(new UpdateCommand({ TableName: tenants(), Key: { phoneNumber }, UpdateExpression: 'REMOVE #b.loginUntil', ExpressionAttributeNames: { '#b': 'browser' } }));
     },
     async putUsage({ tenantId, meter, units, ref }) {
       await db.send(new PutCommand({ TableName: usage(), Item: { tenantId, sk: `${new Date().toISOString()}#${meter}#${randomUUID()}`, meter, units, ref } }));
@@ -185,13 +186,13 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
     },
     async claimBrowser(phoneNumber, untilIso) {
       const t = tenantMap.get(phoneNumber);
-      if (!t || (t.browserLoginUntil && t.browserLoginUntil >= new Date().toISOString())) return false;
-      t.browserLoginUntil = untilIso;
+      if (!t || (t.browser.loginUntil && t.browser.loginUntil >= new Date().toISOString())) return false;
+      t.browser.loginUntil = untilIso;
       return true;
     },
     async releaseBrowser(phoneNumber) {
       const t = tenantMap.get(phoneNumber);
-      if (t) delete t.browserLoginUntil;
+      if (t) delete t.browser.loginUntil;
     },
     async putUsage(row) { usageRows.push(row); },
     async syncPeople(tenant) {

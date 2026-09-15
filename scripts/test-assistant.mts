@@ -21,18 +21,19 @@ const name = process.argv[4] ?? 'Test Owner';
 const role = process.argv[5] ?? 'owner';
 const out = (stack: string, key: string) => execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', REGION], { encoding: 'utf8' }).trim();
 
-const tenant = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { businessName: string; description?: string; services?: string[]; hours?: string; timezone?: string; composioMcpUrl?: string; products?: { assistant?: { enabled?: boolean } } };
-if (!tenant.products?.assistant?.enabled) throw new Error(`tenant ${tenantId}: products.assistant.enabled is off`);
-if (!tenant.composioMcpUrl) throw new Error(`tenant ${tenantId}: no composioMcpUrl; connect accounts and re-run the seed`);
+const tenant = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { business: { name: string; description?: string; services?: string[]; hours?: string }; assistant?: { enabled?: boolean; composioMcpUrl?: string } };
+if (!tenant.assistant?.enabled) throw new Error(`tenant ${tenantId}: assistant.enabled is off`);
+const mcpUrl = tenant.assistant.composioMcpUrl;
+if (!mcpUrl) throw new Error(`tenant ${tenantId}: no assistant.composioMcpUrl; connect accounts and re-run the seed`);
 const composioProviderArn = out('wnk-identity-dev', 'composioProviderArn');
 const harnessArn = out('wnk-runtime-dev', 'assistantHarnessArn');
 
 const prompt = [
-  `You are My Assistant for ${tenant.businessName}, chatting with ${name} (${role}) who works there.`,
-  tenant.description ? `About the business: ${tenant.description}` : '',
-  tenant.services?.length ? `Services: ${tenant.services.join(', ')}.` : '',
-  tenant.hours ? `Hours: ${tenant.hours}.` : '',
-  tenant.composioMcpUrl ? 'Your tools reach the business systems the owner connected (CRM, email): search for the right tool, then run it; do not stop at search results. CRM phone numbers are stored in E.164 form such as +15095551234, so search the phone property with that exact format.' : '',
+  `You are My Assistant for ${tenant.business.name}, chatting with ${name} (${role}) who works there.`,
+  tenant.business.description ? `About the business: ${tenant.business.description}` : '',
+  tenant.business.services?.length ? `Services: ${tenant.business.services.join(', ')}.` : '',
+  tenant.business.hours ? `Hours: ${tenant.business.hours}.` : '',
+  mcpUrl ? 'Your tools reach the business systems the owner connected (CRM, email): search for the right tool, then run it; do not stop at search results. CRM phone numbers are stored in E.164 form such as +15095551234, so search the phone property with that exact format.' : '',
   'This is a chat: be brief and plain, no markdown. Use your tools to look things up or record things; say what you did. If a request needs a tool you do not have, say so in one sentence. Keep replies under 3000 characters.',
 ].filter(Boolean).join(' ');
 
@@ -45,7 +46,7 @@ const res = await client.send(new InvokeHarnessCommand({
   messages: [{ role: 'user', content: [{ text }] }],
   systemPrompt: [{ text: prompt }],
   // Same as the workflow: the tenant's Composio session, the key by provider ARN.
-  tools: [{ type: 'remote_mcp', name: 'crm', config: { remoteMcp: { url: tenant.composioMcpUrl, headers: { 'x-api-key': `\${${composioProviderArn}}` } } } }],
+  tools: [{ type: 'remote_mcp', name: 'crm', config: { remoteMcp: { url: mcpUrl, headers: { 'x-api-key': `\${${composioProviderArn}}` } } } }],
   allowedTools: ['@crm/*'],
 }));
 let answer = ''; const tools: string[] = []; let usage: unknown;
