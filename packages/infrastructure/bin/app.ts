@@ -25,35 +25,28 @@ const identity = new IdentityStack(app, 'wnk-identity-dev', {
   openaiSecret: voice.openaiSecret,
   composioSecret: voice.composioSecret,
 });
+// The platform handles every bus-driven stack takes: the runtime stack and
+// each tenant stack. Built once so the two cannot drift.
+const platform = {
+  bus: voice.bus,
+  tenantsTable: voice.tenantsTable,
+  callsTable: voice.callsTable,
+  usageTable: voice.usageTable,
+  composioConnection: voice.composioConnection,
+  alarmTopic: voice.alarmTopic,
+  callerMemory,
+};
+
 new RuntimeStack(app, 'wnk-runtime-dev', {
   prefix,
   env,
-  composioConnection: voice.composioConnection,
+  ...platform,
   openaiProviderArn: identity.openaiProvider.credentialProviderArn,
   composioProviderArn: identity.composioProvider.credentialProviderArn,
-  bus: voice.bus,
-  usageTable: voice.usageTable,
-  tenantsTable: voice.tenantsTable,
-  callsTable: voice.callsTable,
   peopleTable: voice.peopleTable,
   api: voice.api,
-  alarmTopic: voice.alarmTopic,
-  callerMemory,
 });
 
 // One stack per tenant (tenants/<id>.ts): its automations, its rules filtered
 // on its id. Deploying one touches no other tenant and nothing above.
-for (const t of tenants) {
-  new TenantStack(app, `wnk-tenant-${t.tenantId}-dev`, {
-    ...t,
-    prefix,
-    env,
-    bus: voice.bus,
-    tenantsTable: voice.tenantsTable,
-    callsTable: voice.callsTable,
-    usageTable: voice.usageTable,
-    composioConnection: voice.composioConnection,
-    alarmTopic: voice.alarmTopic,
-    callerMemory,
-  });
-}
+for (const t of tenants) new TenantStack(app, `wnk-tenant-${t.tenantId}-dev`, { ...t, prefix, env, ...platform });
