@@ -23,6 +23,32 @@ A tenant is a config row keyed by their phone number, their credentials under te
 7b. **Automations**: create `tenants/<id>.ts` (copy `tenants/wnk.ts`): the tenant id and the list of descriptors it runs (`leadEmail`, `crmLead`, `crmCall`, `ownerAlert` from `packages/infrastructure/workflows/`, or a variant: a descriptor with options, or a copied definition). Add it to `tenants/index.ts`, then `npx cdk deploy wnk-tenant-<id>-dev`. That stack's rules match only events carrying this tenant's id; the definitions test asserts it. Nothing else deploys.
 8. **Verify**: call the new number; check the webhook log resolved the tenant (`"msg":"incoming call"` → correct `to`); confirm a lead lands with the right `tenantId` and, if enabled, the owner gets the email.
 
+## Varying an automation for one tenant
+
+A tenant's stack runs only that tenant's machines, so a change for one tenant
+never edits a definition another tenant runs on. Pick the smallest size that is
+honest about the difference, in this order:
+
+1. **A value differs** (subject line, task delay, which fields the email shows).
+   Add an options argument to the definition function with today's behavior as
+   the default, and pass it from the tenant's file:
+   ```ts
+   { ...leadEmail, definition: (refs) => leadEmailDefinition(refs, { subjectPrefix: 'Lead: ' }) }
+   ```
+   Other tenants keep listing `leadEmail` and get the default.
+2. **A step differs** (skip CRM enrichment, add a step). Same shape: the option
+   adds or removes states while the definition is built, in TypeScript. Model it
+   on `refs.memoryId` in `workflows/lead-email.ts`, which decides whether the
+   RecallMemory state exists at all. A build-time branch, never a runtime
+   Choice on the tenant row.
+3. **The shape differs** (it is really a different automation). Copy the
+   workflow file, edit freely, export its own descriptor, list that in the
+   tenant's file. The copy owns its future; fixes to the original do not reach it.
+
+Whichever size, deploy only that tenant's stack. The definitions test
+synthesizes every machine, so an edit to a shared default path shows up in
+every tenant's machine before a deploy, not after.
+
 ## Pre-flight
 
 `npx tsx scripts/check-tenant.ts <id>` prints the provisioning checklist
