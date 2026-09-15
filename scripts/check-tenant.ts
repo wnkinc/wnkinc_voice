@@ -42,7 +42,8 @@ try {
 const store = dynamoStore();
 const seeded = await store.findTenantById(tenantId);
 if (!seeded) bad('seeded config', `no row in tenants table — run: npm run seed -- tenants/${tenantId}.json`);
-else if (fileConfig && JSON.stringify(seeded) !== JSON.stringify(fileConfig)) warn('seeded config', 'table differs from file — re-seed or update the file (git is the source of truth)');
+// sessionDayOffsetMinutes is computed by the seed from the timezone, never in the file.
+else if (fileConfig && JSON.stringify({ ...seeded, sessionDayOffsetMinutes: undefined }) !== JSON.stringify(fileConfig)) warn('seeded config', 'table differs from file — re-seed or update the file (git is the source of truth)');
 else ok('seeded config', 'matches the file');
 
 // 3. CRM (HubSpot through Composio)
