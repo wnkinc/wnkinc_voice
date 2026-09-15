@@ -17,6 +17,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 const out = path.join(root, 'cdk.out');
 
 interface Definition { stack: string; id: string; type: 'STANDARD' | 'EXPRESS'; text: string }
+interface Rule { stack: string; id: string; pattern: Record<string, unknown> | undefined }
 
 /**
  * Stand-ins for deploy-time tokens (Ref, GetAtt, ImportValue), by the field
@@ -44,19 +45,24 @@ function flatten(value: unknown): string {
   return text;
 }
 
-function synthesizedDefinitions(): Definition[] {
+/** Every state machine and every EventBridge rule the app synthesizes, by stack. */
+function synthesized(): { defs: Definition[]; rules: Rule[] } {
   execSync('npx cdk synth --quiet', { cwd: root, stdio: 'pipe' });
   const manifest = JSON.parse(readFileSync(path.join(out, 'manifest.json'), 'utf8')) as { artifacts: Record<string, { type: string; properties?: { templateFile?: string } }> };
   const defs: Definition[] = [];
+  const rules: Rule[] = [];
   for (const [stack, artifact] of Object.entries(manifest.artifacts)) {
     if (artifact.type !== 'aws:cloudformation:stack' || !artifact.properties?.templateFile) continue;
     const template = JSON.parse(readFileSync(path.join(out, artifact.properties.templateFile), 'utf8')) as { Resources: Record<string, { Type: string; Properties: Record<string, unknown> }> };
     for (const [id, resource] of Object.entries(template.Resources)) {
-      if (resource.Type !== 'AWS::StepFunctions::StateMachine') continue;
-      defs.push({ stack, id, type: (resource.Properties.StateMachineType as 'EXPRESS' | undefined) ?? 'STANDARD', text: flatten(resource.Properties.DefinitionString) });
+      if (resource.Type === 'AWS::StepFunctions::StateMachine') {
+        defs.push({ stack, id, type: (resource.Properties.StateMachineType as 'EXPRESS' | undefined) ?? 'STANDARD', text: flatten(resource.Properties.DefinitionString) });
+      } else if (resource.Type === 'AWS::Events::Rule') {
+        rules.push({ stack, id, pattern: resource.Properties.EventPattern as Record<string, unknown> | undefined });
+      }
     }
   }
-  return defs;
+  return { defs, rules };
 }
 
 // ---- Walking a definition ----------------------------------------------------
@@ -93,19 +99,33 @@ const format = (d: ValidateStateMachineDefinitionDiagnostic) => `${d.severity} $
 describe('synthesized state machine definitions', () => {
   const client = new SFNClient({ region: process.env.AWS_REGION ?? 'us-west-2' });
   let defs: Definition[] = [];
+  let rules: Rule[] = [];
   let credentials = false;
 
   beforeAll(async () => {
-    defs = synthesizedDefinitions();
+    ({ defs, rules } = synthesized());
     credentials = await hasCredentials(client);
     if (!credentials) console.warn('No AWS credentials: definitions synthesized but not validated');
   }, 120_000);
 
-  it('synthesizes every workflow', () => {
-    expect(defs.map((d) => d.id).sort()).toEqual([
-      'AcceptWorkflow842BBA18', 'BrowserLoginWorkflow5FF6377F', 'CallEndedWorkflow7253F29B', 'ComposioHealthWorkflowC5FF9B2D', 'CrmCallWorkflowD095AD4A', 'CrmLeadWorkflow3E31F026',
-      'LeadEmailWorkflowE6E42485', 'OwnerAlertWorkflowD38F6F45', 'TelegramWorkflow48A0C9CE',
+  it('synthesizes every workflow, platform ones in the platform stacks and tenant ones in the tenant stack', () => {
+    expect(defs.map((d) => `${d.stack}/${d.id.replace(/[0-9A-F]{8}$/, '')}`).sort()).toEqual([
+      'wnk-runtime-dev/BrowserLoginWorkflow', 'wnk-runtime-dev/CallEndedWorkflow', 'wnk-runtime-dev/ComposioHealthWorkflow', 'wnk-runtime-dev/TelegramWorkflow',
+      'wnk-tenant-wnk-dev/CrmCallWorkflow', 'wnk-tenant-wnk-dev/CrmLeadWorkflow', 'wnk-tenant-wnk-dev/LeadEmailWorkflow', 'wnk-tenant-wnk-dev/OwnerAlertWorkflow',
+      'wnk-voice-dev/AcceptWorkflow',
     ]);
+  });
+
+  // The tenancy guarantee of a tenant stack: nothing in it can start on
+  // another tenant's event. Every rule's pattern names the stack's tenant.
+  it('every rule in a tenant stack matches only that tenant\'s events', () => {
+    const tenantOf = (stack: string) => /^wnk-tenant-(.+)-dev$/.exec(stack)?.[1];
+    const tenantRules = rules.filter((r) => tenantOf(r.stack));
+    expect(tenantRules.length).toBeGreaterThan(0);
+    const failures = tenantRules
+      .filter((r) => JSON.stringify((r.pattern?.detail as Record<string, unknown> | undefined)?.tenantId) !== JSON.stringify([tenantOf(r.stack)]))
+      .map((r) => `${r.stack}/${r.id}: ${JSON.stringify(r.pattern)}`);
+    expect(failures, failures.join('\n')).toEqual([]);
   });
 
   // ---- Invariants: the rules every workflow must meet, checked locally so

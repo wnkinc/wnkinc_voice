@@ -3,8 +3,9 @@ cdk.out/
 dist/
 *.log
 .DS_Store
-# Tenant rows are data, not code: only the template is tracked
-tenants/*
+# Tenant rows are data, not code: only the template is tracked. A tenant's
+# automations file (tenants/<id>.ts) is code and is tracked.
+tenants/*.json
 !tenants/example.json
 
 # Third-party repos cloned for study, not part of the build

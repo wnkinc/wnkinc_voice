@@ -7,6 +7,7 @@
  * after; a failed execution alarms.
  */
 import { checkDone, composio, hasCrm, markDone, q } from './asl.js';
+import type { Automation } from './automation.js';
 
 export interface CrmLeadRefs {
   tenantsTable: string;
@@ -133,3 +134,10 @@ export function crmLeadDefinition(refs: CrmLeadRefs) {
     },
   };
 }
+
+/** The stock CRM lead sync, as a tenant automation. */
+export const crmLead: Automation = {
+  name: 'crm-lead', on: 'lead.recorded', timeoutMinutes: 5,
+  needs: { tenants: true, calls: true, composio: true },
+  definition: crmLeadDefinition,
+};

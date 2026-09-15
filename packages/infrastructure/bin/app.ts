@@ -2,7 +2,9 @@ import * as cdk from 'aws-cdk-lib';
 import { IdentityStack } from '../stacks/identity-stack.js';
 import { MemoryStack } from '../stacks/memory-stack.js';
 import { RuntimeStack } from '../stacks/runtime-stack.js';
+import { TenantStack } from '../stacks/tenant-stack.js';
 import { VoiceStack } from '../stacks/voice-stack.js';
+import { tenants } from '../../../tenants/index.js';
 
 const app = new cdk.App();
 const env = { region: 'us-west-2' };
@@ -39,3 +41,19 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   callerMemory,
 });
 
+// One stack per tenant (tenants/<id>.ts): its automations, its rules filtered
+// on its id. Deploying one touches no other tenant and nothing above.
+for (const t of tenants) {
+  new TenantStack(app, `wnk-tenant-${t.tenantId}-dev`, {
+    ...t,
+    prefix,
+    env,
+    bus: voice.bus,
+    tenantsTable: voice.tenantsTable,
+    callsTable: voice.callsTable,
+    usageTable: voice.usageTable,
+    composioConnection: voice.composioConnection,
+    alarmTopic: voice.alarmTopic,
+    callerMemory,
+  });
+}

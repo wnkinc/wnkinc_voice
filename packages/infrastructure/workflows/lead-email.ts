@@ -12,6 +12,7 @@
  * here (dev); pin in prod with a `version` field on the execute bodies.
  */
 import { checkDone, composio, hasCrm, markDone, q } from './asl.js';
+import type { Automation } from './automation.js';
 
 export interface LeadEmailRefs {
   tenantsTable: string;
@@ -150,3 +151,10 @@ export function leadEmailDefinition(refs: LeadEmailRefs) {
     },
   };
 }
+
+/** The stock lead email, as a tenant automation. */
+export const leadEmail: Automation = {
+  name: 'lead-email', on: 'lead.recorded', express: true, timeoutMinutes: 5,
+  needs: { tenants: true, calls: true, usage: true, composio: true, memory: true },
+  definition: leadEmailDefinition,
+};

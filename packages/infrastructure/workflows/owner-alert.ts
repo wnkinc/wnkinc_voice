@@ -9,6 +9,7 @@
  * the tool on but no owner channel fails loudly (alarm).
  */
 import { q } from './asl.js';
+import type { Automation } from './automation.js';
 
 export interface OwnerAlertRefs {
   tenantsTable: string;
@@ -46,3 +47,10 @@ export function ownerAlertDefinition(refs: OwnerAlertRefs) {
     },
   };
 }
+
+/** The stock owner alert, as a tenant automation. */
+export const ownerAlert: Automation = {
+  name: 'owner-alert', on: 'owner.notify', timeoutMinutes: 2,
+  needs: { tenants: true, bus: true },
+  definition: ownerAlertDefinition,
+};

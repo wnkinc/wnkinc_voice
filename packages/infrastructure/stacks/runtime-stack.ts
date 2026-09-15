@@ -16,11 +16,7 @@ import { BROWSERBASE_API, COMPOSIO_API } from '../workflows/asl.js';
 import { expressNoData, grantHttp } from '../infra_utils/state-machine.js';
 import { browserLoginDefinition } from '../workflows/browser-login.js';
 import { callEndedDefinition } from '../workflows/call-ended.js';
-import { crmCallDefinition } from '../workflows/crm-call.js';
 import { composioHealthDefinition } from '../workflows/composio-health.js';
-import { crmLeadDefinition } from '../workflows/crm-lead.js';
-import { leadEmailDefinition } from '../workflows/lead-email.js';
-import { ownerAlertDefinition } from '../workflows/owner-alert.js';
 import { telegramDefinition } from '../workflows/telegram.js';
 import { Construct } from 'constructs';
 
@@ -49,10 +45,11 @@ export interface RuntimeStackProps extends cdk.StackProps {
 
 /**
  * The platform's agent, My Assistant (an AgentCore harness driven by the
- * Telegram workflow), and the deterministic workflows on bus events: CRM
- * sync, the call-ended tail (memory, usage), the lead email, and the owner
- * alert. Each definition lives in workflows/; this stack wraps it in a state
- * machine, routes its event to it, and grants what it touches. No code.
+ * Telegram workflow), and the platform workflows every tenant shares: the
+ * call-ended tail (memory, usage), the browser login handoff, and the
+ * Composio health canary. Per-tenant automations are in TenantStack. Each
+ * definition lives in workflows/; this stack wraps it in a state machine,
+ * routes its event to it, and grants what it touches. No code.
  */
 export class RuntimeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: RuntimeStackProps) {
@@ -263,10 +260,13 @@ export class RuntimeStack extends cdk.Stack {
       }),
     });
 
-    // ---- Bus-driven workflows ---------------------------------------------------
+    // ---- Platform workflows on the bus -------------------------------------------
     //
-    // Each rule starts its workflow with the event; a start the rule could
-    // not deliver (after retries) parks in startDlq and alarms, and an
+    // Only what every tenant gets identically and no tenant varies: the
+    // call-ended tail (memory, usage) and the health canary. Tenant
+    // automations (lead email, CRM sync, owner alert) live in each tenant's
+    // own stack (stacks/tenant-stack.ts, tenants/<id>.ts). A start the rule
+    // could not deliver (after retries) parks in startDlq and alarms, and an
     // execution that started and failed alarms through the workflow metric.
     const startDlq = new sqs.Queue(this, 'LeadEmailDlq', { retentionPeriod: cdk.Duration.days(14) });
     const route = (id: string, detailType: string, wf: sfn.StateMachine, description: string) => new events.Rule(this, id, {
@@ -283,63 +283,6 @@ export class RuntimeStack extends cdk.Stack {
       }));
     };
     const composioConnectionArn = props.composioConnection.connectionArn;
-
-    // Lead email (workflows/lead-email.ts). Express, no execution data: the
-    // email body carries the CRM note. (Named -express because Standard ->
-    // Express is a replacement, and CloudFormation creates the new machine
-    // before deleting the old one of the same name.)
-    const leadWorkflow = new sfn.StateMachine(this, 'LeadEmailWorkflow', {
-      stateMachineName: `${prefix}-lead-email-express`,
-      tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
-      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(leadEmailDefinition({
-        tenantsTable: props.tenantsTable.tableName,
-        callsTable: props.callsTable.tableName,
-        usageTable: props.usageTable.tableName,
-        composioConnectionArn,
-        memoryId: props.callerMemory?.memoryId,
-      }))),
-      timeout: cdk.Duration.minutes(5),
-      ...expressNoData(this, 'LeadEmailWorkflowLogs'),
-    });
-    props.tenantsTable.grantReadData(leadWorkflow);
-    props.callsTable.grantReadWriteData(leadWorkflow);
-    props.usageTable.grantWriteData(leadWorkflow);
-    grantHttp(leadWorkflow, [props.composioConnection], [`${COMPOSIO_API}*`]);
-    memoryGrant(leadWorkflow);
-    route('LeadRule', 'lead.recorded', leadWorkflow, 'Route lead.recorded to the lead email workflow');
-    failedExecutionsAlarm(this, 'LeadEmailWorkflowFailed', leadWorkflow, props.alarmTopic, 'Lead email');
-
-    // CRM sync (workflows/crm-lead.ts, workflows/crm-call.ts).
-    const crmLeadWorkflow = new sfn.StateMachine(this, 'CrmLeadWorkflow', {
-      stateMachineName: `${prefix}-crm-lead`,
-      tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
-      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(crmLeadDefinition({
-        tenantsTable: props.tenantsTable.tableName,
-        callsTable: props.callsTable.tableName,
-        composioConnectionArn,
-      }))),
-      timeout: cdk.Duration.minutes(5),
-    });
-    const crmCallWorkflow = new sfn.StateMachine(this, 'CrmCallWorkflow', {
-      stateMachineName: `${prefix}-crm-call`,
-      tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
-      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(crmCallDefinition({
-        tenantsTable: props.tenantsTable.tableName,
-        callsTable: props.callsTable.tableName,
-        composioConnectionArn,
-      }))),
-      timeout: cdk.Duration.minutes(5),
-      ...expressNoData(this, 'CrmCallWorkflowLogs'),
-    });
-    for (const wf of [crmLeadWorkflow, crmCallWorkflow]) {
-      props.tenantsTable.grantReadData(wf);
-      props.callsTable.grantReadWriteData(wf);
-      grantHttp(wf, [props.composioConnection], [`${COMPOSIO_API}*`]);
-    }
-    route('CrmLeadRule', 'lead.recorded', crmLeadWorkflow, 'Route lead.recorded to the CRM lead workflow');
-    route('CrmCallRule', 'call.ended', crmCallWorkflow, 'Route call.ended to the CRM call workflow');
-    failedExecutionsAlarm(this, 'CrmLeadWorkflowFailed', crmLeadWorkflow, props.alarmTopic, 'CRM sync (lead)');
-    failedExecutionsAlarm(this, 'CrmCallWorkflowFailed', crmCallWorkflow, props.alarmTopic, 'CRM sync (call)');
 
     // Call ended (workflows/call-ended.ts): transcript -> memory, minutes -> usage.
     const endedWorkflow = new sfn.StateMachine(this, 'CallEndedWorkflow', {
@@ -359,21 +302,7 @@ export class RuntimeStack extends cdk.Stack {
     route('CallEndedRule', 'call.ended', endedWorkflow, 'Route call.ended to the call-ended workflow (memory, usage)');
     failedExecutionsAlarm(this, 'CallEndedWorkflowFailed', endedWorkflow, props.alarmTopic, 'Call ended (memory, usage)');
 
-    // Owner alert (workflows/owner-alert.ts): owner.notify -> the Telegram reply path.
-    const alertWorkflow = new sfn.StateMachine(this, 'OwnerAlertWorkflow', {
-      stateMachineName: `${prefix}-owner-alert`,
-      tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
-      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(ownerAlertDefinition({
-        tenantsTable: props.tenantsTable.tableName,
-        busName: props.bus.eventBusName,
-      }))),
-      timeout: cdk.Duration.minutes(2),
-    });
-    props.tenantsTable.grantReadData(alertWorkflow);
-    props.bus.grantPutEventsTo(alertWorkflow);
-    route('OwnerAlertRule', 'owner.notify', alertWorkflow, 'Route owner.notify to the owner alert workflow');
-    failedExecutionsAlarm(this, 'OwnerAlertWorkflowFailed', alertWorkflow, props.alarmTopic, 'Owner alert');
-    dlqAlarm(this, 'LeadEmailDlqAlarm', startDlq, props.alarmTopic, 'Workflows: a lead.recorded or owner.notify event could not start its workflow');
+    dlqAlarm(this, 'LeadEmailDlqAlarm', startDlq, props.alarmTopic, 'Platform workflows: an event could not start the call-ended workflow or the health canary');
 
     // Composio health canary (workflows/composio-health.ts): every morning,
     // prove each tenant's connections are still ACTIVE. A revoked connection
@@ -398,10 +327,6 @@ export class RuntimeStack extends cdk.Stack {
     failedExecutionsAlarm(this, 'ComposioHealthFailed', healthWorkflow, props.alarmTopic, 'Composio health: a tenant has lost a connection');
 
     new cdk.CfnOutput(this, 'assistantHarnessArn', { value: harness.attrArn });
-    new cdk.CfnOutput(this, 'leadEmailWorkflowArn', { value: leadWorkflow.stateMachineArn });
-    new cdk.CfnOutput(this, 'ownerAlertWorkflowArn', { value: alertWorkflow.stateMachineArn });
-    new cdk.CfnOutput(this, 'crmLeadWorkflowArn', { value: crmLeadWorkflow.stateMachineArn });
-    new cdk.CfnOutput(this, 'crmCallWorkflowArn', { value: crmCallWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'callEndedWorkflowArn', { value: endedWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'telegramWorkflowArn', { value: workflow.stateMachineArn });

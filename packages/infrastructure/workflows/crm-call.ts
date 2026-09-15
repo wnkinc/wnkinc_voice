@@ -7,6 +7,7 @@
  * by id. Once-marker before, mark after; a failed execution alarms.
  */
 import { checkDone, composio, hasCrm, markDone, q } from './asl.js';
+import type { Automation } from './automation.js';
 
 export interface CrmCallRefs {
   tenantsTable: string;
@@ -69,3 +70,10 @@ export function crmCallDefinition(refs: CrmCallRefs) {
     },
   };
 }
+
+/** The stock CRM call sync, as a tenant automation. */
+export const crmCall: Automation = {
+  name: 'crm-call', on: 'call.ended', express: true, timeoutMinutes: 5,
+  needs: { tenants: true, calls: true, composio: true },
+  definition: crmCallDefinition,
+};
