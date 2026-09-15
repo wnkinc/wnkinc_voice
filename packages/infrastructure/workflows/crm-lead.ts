@@ -74,10 +74,11 @@ export function crmLeadDefinition(refs: CrmLeadRefs) {
           ],
           properties: ['firstname', 'lastname', 'phone'], limit: 1,
         }),
-        Assign: { contact: q('$states.result.ResponseBody.data.results[0]') },
+        // Array-wrapped: a new caller matches nothing, and assigning an absent value would fail the execution.
+        Assign: { contacts: q('[$states.result.ResponseBody.data.results]') },
         Output: q('$states.input'), Next: 'HasContact',
       },
-      HasContact: { Type: 'Choice', Choices: [{ Condition: q('$exists($contact.id)'), Next: 'MissingNames' }], Default: 'CreateContact' },
+      HasContact: { Type: 'Choice', Choices: [{ Condition: q('$count($contacts) > 0'), Next: 'MissingNames' }], Default: 'CreateContact' },
       CreateContact: {
         ...crm.execute('HUBSPOT_CREATE_CONTACT', q(`$merge([{'phone': ${lead}.phone}, ($first != '' ? {'firstname': $first} : {}), ($last != '' ? {'lastname': $last} : {})])`)),
         Assign: { contactId: q('$states.result.ResponseBody.data.id') },
@@ -87,8 +88,8 @@ export function crmLeadDefinition(refs: CrmLeadRefs) {
       MissingNames: {
         Type: 'Pass',
         Assign: {
-          contactId: q('$contact.id'),
-          props: q(`$merge([($first != '' and ${strOrEmpty('$contact.properties.firstname')} = '' ? {'firstname': $first} : {}), ($last != '' and ${strOrEmpty('$contact.properties.lastname')} = '' ? {'lastname': $last} : {})])`),
+          contactId: q('$contacts[0].id'),
+          props: q(`$merge([($first != '' and ${strOrEmpty('$contacts[0].properties.firstname')} = '' ? {'firstname': $first} : {}), ($last != '' and ${strOrEmpty('$contacts[0].properties.lastname')} = '' ? {'lastname': $last} : {})])`),
         },
         Output: q('$states.input'), Next: 'NeedsUpdate',
       },
