@@ -1,15 +1,20 @@
 /**
- * Accept workflow: verified webhook -> tenant -> claim -> accept -> recognize -> enqueue.
+ * Accept workflow: verified webhook -> tenant -> claim -> recognize -> accept -> enqueue.
  *
  * Express, execution data not logged (SIP headers, phone numbers, the
  * caller's last CRM note). The verifier Lambda starts it with the webhook
  * body. Called number -> tenant row is the ONLY place the tenant is chosen:
  * unknown number rejects 404 and fails (alarm: a routing problem); inactive
  * tenant rejects 603 and succeeds. The claim is a conditional put, so a
- * re-posted webhook ends as a duplicate. Accept carries the minimum (the
- * session Lambda re-sends the full agent config when it attaches); caller
- * recognition then runs with a real time budget and rides to the session
- * on the queue message. The API keys ride in EventBridge Connections
+ * re-posted webhook ends as a duplicate. Caller recognition runs BEFORE the
+ * accept, while the caller still hears ringing (silence after answer is what
+ * a caller notices; ringing is normal): every lookup has a TimeoutSeconds and
+ * no retry, so recognition can lose the race but never the call. Its result
+ * rides to the session on the queue message. Accept carries the minimum (the
+ * session Lambda re-sends the full agent config when it attaches). The CRM
+ * reads go through Composio's proxy (the tenant's HubSpot API directly, one
+ * account lookup first): the tool route measured ~4 s per search, the proxy
+ * under half a second. The API keys ride in EventBridge Connections
  * (resolved from the secrets when the Connection is created or changed; a
  * rotated key also needs `aws events update-connection`).
  */
@@ -51,6 +56,13 @@ export function sipNumberExpr(headersExpr: string, names: string[]): string {
     "$count($c) > 0 ? $c[0] : '' )",
   ].join(' ');
 }
+
+/**
+ * A recognition lookup on the ringing path: capped, never retried. A timeout
+ * surfaces as States.Timeout, which the state's Catch treats like any other
+ * miss. The caps sum to the ringing budget (well inside the accept deadline).
+ */
+const budgeted = (task: Record<string, unknown>, seconds: number): Record<string, unknown> => ({ ...task, Retry: undefined, TimeoutSeconds: seconds });
 
 /** HubSpot note HTML -> one-line text, as the prompt wants it. */
 export const htmlToTextExpr = (expr: string) => `$trim($replace($replace($replace(${expr}, /<br[^>]*>/, ' '), /<[^>]+>/, ' '), /\\s+/, ' '))`;
@@ -141,9 +153,58 @@ export function acceptDefinition(refs: AcceptRefs) {
           ExpressionAttributeValues: { ':failed': { S: 'failed' } },
         },
         Catch: [{ ErrorEquals: ['DynamoDB.ConditionalCheckFailedException'], Next: 'Duplicate' }],
-        Output: q('$states.input'), Next: 'Accept',
+        Output: q('$states.input'), Next: 'HasCrm',
       },
       Duplicate: { Type: 'Succeed' },
+      // ---- Caller recognition, best effort, while it rings: the tenant's CRM, then memory ----
+      HasCrm: {
+        Type: 'Choice',
+        Choices: [{ Condition: q(`$from != '' and ${hasCrm()}`), Next: 'HubspotAccount' }],
+        Default: 'HasCaller',
+      },
+      // The proxy needs the connected account id; one lookup, reused by both searches.
+      HubspotAccount: {
+        ...budgeted(crm.accounts('hubspot'), 1),
+        Assign: { accountId: q('$states.result.ResponseBody.items[0].id') },
+        Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasCaller' }],
+        Output: q('$states.input'), Next: 'FindContact',
+      },
+      FindContact: {
+        ...budgeted(crm.proxy(q('$accountId'), 'POST', '/crm/v3/objects/contacts/search', {
+          filterGroups: [
+            { filters: [{ propertyName: 'phone', operator: 'EQ', value: q('$from') }] },
+            { filters: [{ propertyName: 'mobilephone', operator: 'EQ', value: q('$from') }] },
+          ],
+          properties: ['firstname', 'lastname', 'phone'], limit: 1,
+        }), 2),
+        Assign: { contact: q('$states.result.ResponseBody.data.results[0]') },
+        Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasCaller' }],
+        Output: q('$states.input'), Next: 'HasContact',
+      },
+      HasContact: { Type: 'Choice', Choices: [{ Condition: q('$exists($contact.id)'), Next: 'LastNote' }], Default: 'HasCaller' },
+      LastNote: {
+        ...budgeted(crm.proxy(q('$accountId'), 'POST', '/crm/v3/objects/notes/search', {
+          filterGroups: [{ filters: [{ propertyName: 'associations.contact', operator: 'EQ', value: q('$contact.id') }] }],
+          sorts: [{ propertyName: 'hs_timestamp', direction: 'DESCENDING' }],
+          properties: ['hs_note_body', 'hs_timestamp'], limit: 1,
+        }), 1),
+        Assign: { note: q('$states.result.ResponseBody.data.results[0].properties') },
+        Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasCaller' }],
+        Output: q('$states.input'), Next: 'HasCaller',
+      },
+      HasCaller: { Type: 'Choice', Choices: [{ Condition: q("$from != ''"), Next: refs.memoryId ? 'RecallMemory' : 'Accept' }], Default: 'Accept' },
+      ...(refs.memoryId ? { RecallMemory: {
+        Type: 'Task', Resource: 'arn:aws:states:::aws-sdk:bedrockagentcore:retrieveMemoryRecords',
+        TimeoutSeconds: 1,
+        Arguments: {
+          MemoryId: refs.memoryId,
+          NamespacePath: q("'/callers/' & $tenant.tenantId.S & '_' & $replace($from, /[^0-9]/, '')"),
+          SearchCriteria: { SearchQuery: 'who this caller is, their jobs, and their preferences', TopK: 6 },
+        },
+        Assign: { memories: q('[$states.result.MemoryRecordSummaries.Content.Text]') },
+        Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'Accept' }],
+        Output: q('$states.input'), Next: 'Accept',
+      } } : {}),
       Accept: {
         ...httpTask(refs.openaiConnectionArn, 'POST', callUrl('accept'), {
           type: 'realtime',
@@ -162,54 +223,7 @@ export function acceptDefinition(refs: AcceptRefs) {
       Gone: { Type: 'Succeed' },
       MarkFailed: { ...setStatus('failed', 'accept failed'), Next: 'AcceptFailed' },
       AcceptFailed: { Type: 'Fail', Error: 'AcceptFailed', Cause: 'OpenAI did not accept the call (gone, or an API error); the call row is marked failed' },
-      MarkAccepted: { ...setStatus('accepted'), Next: 'HasCrm' },
-      // ---- Caller recognition, best effort: the tenant's CRM, then memory ----
-      HasCrm: {
-        Type: 'Choice',
-        Choices: [{ Condition: q(`$from != '' and ${hasCrm()}`), Next: 'FindContact' }],
-        Default: 'HasCaller',
-      },
-      FindContact: {
-        ...crm.execute('HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', {
-          filterGroups: [
-            { filters: [{ propertyName: 'phone', operator: 'EQ', value: q('$from') }] },
-            { filters: [{ propertyName: 'mobilephone', operator: 'EQ', value: q('$from') }] },
-          ],
-          properties: ['firstname', 'lastname', 'phone'], limit: 1,
-        }),
-        Assign: { contact: q('$states.result.ResponseBody.data.results[0]') },
-        Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasCaller' }],
-        Output: q('$states.input'), Next: 'HasContact',
-      },
-      HasContact: { Type: 'Choice', Choices: [{ Condition: q('$exists($contact.id)'), Next: 'HubspotAccount' }], Default: 'HasCaller' },
-      HubspotAccount: {
-        ...crm.accounts('hubspot'),
-        Assign: { accountId: q('$states.result.ResponseBody.items[0].id') },
-        Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasCaller' }],
-        Output: q('$states.input'), Next: 'LastNote',
-      },
-      LastNote: {
-        ...crm.proxy(q('$accountId'), 'POST', '/crm/v3/objects/notes/search', {
-          filterGroups: [{ filters: [{ propertyName: 'associations.contact', operator: 'EQ', value: q('$contact.id') }] }],
-          sorts: [{ propertyName: 'hs_timestamp', direction: 'DESCENDING' }],
-          properties: ['hs_note_body', 'hs_timestamp'], limit: 1,
-        }),
-        Assign: { note: q('$states.result.ResponseBody.data.results[0].properties') },
-        Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'HasCaller' }],
-        Output: q('$states.input'), Next: 'HasCaller',
-      },
-      HasCaller: { Type: 'Choice', Choices: [{ Condition: q("$from != ''"), Next: refs.memoryId ? 'RecallMemory' : 'Enqueue' }], Default: 'Enqueue' },
-      ...(refs.memoryId ? { RecallMemory: {
-        Type: 'Task', Resource: 'arn:aws:states:::aws-sdk:bedrockagentcore:retrieveMemoryRecords',
-        Arguments: {
-          MemoryId: refs.memoryId,
-          NamespacePath: q("'/callers/' & $tenant.tenantId.S & '_' & $replace($from, /[^0-9]/, '')"),
-          SearchCriteria: { SearchQuery: 'who this caller is, their jobs, and their preferences', TopK: 6 },
-        },
-        Assign: { memories: q('[$states.result.MemoryRecordSummaries.Content.Text]') },
-        Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'Enqueue' }],
-        Output: q('$states.input'), Next: 'Enqueue',
-      } } : {}),
+      MarkAccepted: { ...setStatus('accepted'), Next: 'Enqueue' },
       Enqueue: {
         Type: 'Task', Resource: 'arn:aws:states:::sqs:sendMessage',
         Arguments: { QueueUrl: refs.sessionQueueUrl, MessageBody: q(sessionJob) },

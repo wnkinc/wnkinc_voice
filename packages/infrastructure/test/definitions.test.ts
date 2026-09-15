@@ -147,8 +147,8 @@ describe('synthesized state machine definitions', () => {
       return failures;
     }));
 
-    it('every HTTP task retries', () => each((_, states) =>
-      states.filter(([, s]) => isHttp(s) && !(s.Retry?.length > 0)).map(([p]) => `${p} has no Retry`)));
+    it('every HTTP task retries, unless it is budgeted (TimeoutSeconds: a lookup on the ringing path)', () => each((_, states) =>
+      states.filter(([, s]) => isHttp(s) && !(s.Retry?.length > 0) && !s.TimeoutSeconds).map(([p]) => `${p} has no Retry and no TimeoutSeconds`)));
 
     it('every Composio call names the tenant (user_id, user_ids, or an account resolved from it)', () => each((_, states) =>
       states.filter(([, s]) => isComposio(s)).filter(([, s]) => {
