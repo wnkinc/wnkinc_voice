@@ -45,9 +45,9 @@ export function telegramDefinition(refs: TelegramRefs) {
       LookupPerson: {
         Type: 'Task', Resource: 'arn:aws:states:::dynamodb:getItem',
         Arguments: { TableName: refs.peopleTable, Key: { channelId: { S: q("'telegram:' & $string($states.input.message.from.id)") } } },
-        Assign: { person: q('$states.result.Item') }, Output: q('$states.input'), Next: 'KnownSender',
+        Assign: { person: q('$states.result.Item ? $states.result.Item : {}') }, Output: q('$states.input'), Next: 'KnownSender',
       },
-      KnownSender: { Type: 'Choice', Choices: [{ Condition: q('$exists($person)'), Next: 'LookupTenant' }], Default: 'UnknownSender' },
+      KnownSender: { Type: 'Choice', Choices: [{ Condition: q('$exists($person.tenantPhone)'), Next: 'LookupTenant' }], Default: 'UnknownSender' },
       UnknownSender: { Type: 'Succeed' },
       LookupTenant: {
         Type: 'Task', Resource: 'arn:aws:states:::dynamodb:getItem',

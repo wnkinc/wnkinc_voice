@@ -56,7 +56,7 @@ export class VoiceStack extends cdk.Stack {
   readonly composioConnection: events.Connection;
   /** Every alarm in every stack pages this topic. */
   readonly alarmTopic: sns.Topic;
-  /** Channel identity -> tenant + person: `telegram:<id>` (and `sms:<e164>` later). Seeded from each tenant's `people`. */
+  /** Channel identity -> tenant + person: `telegram:<id>` or `sms:<e164>`. Seeded from each tenant's `people`. */
   readonly peopleTable: dynamodb.Table;
   /** The platform's HTTP API; other stacks add their own routes to it. */
   readonly api: apigwv2.HttpApi;

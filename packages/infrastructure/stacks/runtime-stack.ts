@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
-import { HttpStepFunctionsIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import { HttpSqsIntegration, HttpStepFunctionsIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import * as pipes from 'aws-cdk-lib/aws-pipes';
 import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
@@ -18,6 +19,7 @@ import { browserLoginDefinition } from '../workflows/browser-login.js';
 import { callEndedDefinition } from '../workflows/call-ended.js';
 import { assistantHealthDefinition } from '../workflows/assistant-health.js';
 import { composioHealthDefinition } from '../workflows/composio-health.js';
+import { smsDefinition, TWILIO_API } from '../workflows/sms.js';
 import { telegramDefinition } from '../workflows/telegram.js';
 import { Construct } from 'constructs';
 
@@ -35,9 +37,9 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly tenantsTable: dynamodb.ITable;
   /** Once-markers for "already emailed this lead" live on the call row. */
   readonly callsTable: dynamodb.ITable;
-  /** Channel identity -> tenant + person; the Telegram workflow's one lookup. */
+  /** Channel identity -> tenant + person; the Telegram and SMS workflows' one lookup. */
   readonly peopleTable: dynamodb.ITable;
-  /** The platform HTTP API; the Telegram webhook route is added here. */
+  /** The platform HTTP API; the Telegram and SMS webhook routes are added here. */
   readonly api: apigwv2.IHttpApi;
   readonly alarmTopic: sns.ITopic;
   /** Platform memory: the harness threads sessions and retrieves facts from it; the call-ended workflow writes transcripts. */
@@ -46,7 +48,7 @@ export interface RuntimeStackProps extends cdk.StackProps {
 
 /**
  * The platform's agent, My Assistant (an AgentCore harness driven by the
- * Telegram workflow), and the platform workflows every tenant shares: the
+ * Telegram and SMS workflows), and the platform workflows every tenant shares: the
  * call-ended tail (memory, usage), the browser login handoff, and the
  * Composio health canary. Per-tenant automations are in TenantStack. Each
  * definition lives in workflows/; this stack wraps it in a state machine,
@@ -140,9 +142,14 @@ export class RuntimeStack extends cdk.Stack {
           '/callers/{actorId}/summaries/': { topK: 3, relevanceScore: 0.2 },
         },
       } } : { disabled: {} },
-      // Nothing is lost when the microVM goes (history is in Memory), so keep
-      // idle time — and its memory billing — short.
-      environment: { agentCoreRuntimeEnvironment: { lifecycleConfiguration: { idleRuntimeSessionTimeout: 300 } } },
+      // Nothing is lost when the microVM goes (history is in Memory), but a
+      // fresh one takes ~70 s to come up, which a person mid-conversation
+      // feels. Idle time is not a cost lever: the AWS/Bedrock-AgentCore
+      // MemoryUsed-GBHours metric bills this harness a flat 8 GB every minute
+      // the VM lives (~0.13 cents/min), so the timeout only buys warmth.
+      // Fifteen minutes (the AWS default) covers a texting session; a longer
+      // gap pays the cold start again.
+      environment: { agentCoreRuntimeEnvironment: { lifecycleConfiguration: { idleRuntimeSessionTimeout: 900 } } },
       maxIterations: 8,
       timeoutSeconds: 120,
     });
@@ -261,6 +268,91 @@ export class RuntimeStack extends cdk.Stack {
       }),
     });
 
+    // ---- My Assistant over SMS: Twilio -> API Gateway -> SQS -> Pipe -> Step Functions -> harness --
+    //
+    // The same harness through a second front door (workflows/sms.ts). Twilio
+    // posts each text form-encoded, which is not JSON, and API Gateway's
+    // StartExecution mapping accepts only a JSON body or a single variable
+    // (a static string embedding ${request.body} is rejected at deploy). So
+    // the route drops the raw body on a queue (SendMessage takes any string)
+    // and an EventBridge Pipe starts the workflow with it. No code; the queue
+    // also gives the start a retry and a dead letter. The reply is an HTTP
+    // task straight to Twilio's Messages API (form body, basic auth through
+    // the Connection): an API destination cannot send a form body, so no
+    // reply rule here. The credentials: fill the secret after the first
+    // deploy, then write them to the Connection too, because CloudFormation
+    // resolves a secret reference only when the resource itself changes:
+    //   aws secretsmanager put-secret-value --secret-id <arn> --secret-string '{"TWILIO_ACCOUNT_SID":"AC...","TWILIO_AUTH_TOKEN":"...","WEBHOOK_PATH":"<keep>"}'
+    //   aws events update-connection --name <connection> --authorization-type BASIC --auth-parameters '{"BasicAuthParameters":{"Username":"AC...","Password":"..."}}'
+    const twilioSecret = new secretsmanager.Secret(this, 'TwilioSecret', {
+      description: 'Twilio: {"TWILIO_ACCOUNT_SID": <AC...>, "TWILIO_AUTH_TOKEN": <token>, "WEBHOOK_PATH": <generated>}',
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ TWILIO_ACCOUNT_SID: 'set-me', TWILIO_AUTH_TOKEN: 'set-me' }),
+        generateStringKey: 'WEBHOOK_PATH',
+        excludePunctuation: true,
+        passwordLength: 40,
+      },
+    });
+    const twilioConnection = new events.Connection(this, 'TwilioConnection', {
+      description: 'Twilio REST API (basic auth: account SID + auth token) for SMS replies',
+      authorization: events.Authorization.basic(twilioSecret.secretValueFromJson('TWILIO_ACCOUNT_SID').unsafeUnwrap(), twilioSecret.secretValueFromJson('TWILIO_AUTH_TOKEN')),
+    });
+    const smsWorkflow = new sfn.StateMachine(this, 'SmsWorkflow', {
+      stateMachineName: `${prefix}-sms`,
+      tracingEnabled: true,
+      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(smsDefinition({
+        peopleTable: props.peopleTable.tableName,
+        tenantsTable: props.tenantsTable.tableName,
+        usageTable: props.usageTable.tableName,
+        harnessArn: harness.attrArn,
+        composioProviderArn: props.composioProviderArn,
+        twilioConnectionArn: twilioConnection.connectionArn,
+      }))),
+      timeout: cdk.Duration.minutes(5),
+    });
+    props.peopleTable.grantReadData(smsWorkflow);
+    props.tenantsTable.grantReadData(smsWorkflow);
+    props.usageTable.grantWriteData(smsWorkflow);
+    smsWorkflow.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:InvokeHarness', 'bedrock-agentcore:InvokeAgentRuntime'],
+      resources: [harness.attrArn, `${harness.attrArn}/*`],
+    }));
+    grantHttp(smsWorkflow, [twilioConnection], [`${TWILIO_API}*`]);
+    failedExecutionsAlarm(this, 'SmsWorkflowFailed', smsWorkflow, props.alarmTopic, 'Assistant (SMS)');
+
+    // Twilio posts here (scripts/twilio-webhook.mts points a tenant's number
+    // at it); API Gateway puts the raw body on the queue and answers 200 at
+    // once. The path segment is the secret. A message the pipe cannot start
+    // the workflow with (after retries) dead-letters and alarms.
+    const smsDlq = new sqs.Queue(this, 'SmsDlq', { retentionPeriod: cdk.Duration.days(14) });
+    const smsQueue = new sqs.Queue(this, 'SmsQueue', {
+      retentionPeriod: cdk.Duration.hours(1),
+      visibilityTimeout: cdk.Duration.seconds(30),
+      deadLetterQueue: { queue: smsDlq, maxReceiveCount: 3 },
+    });
+    new apigwv2.HttpRoute(this, 'SmsRoute', {
+      httpApi: props.api,
+      routeKey: apigwv2.HttpRouteKey.with(`/sms/${twilioSecret.secretValueFromJson('WEBHOOK_PATH').unsafeUnwrap()}`, apigwv2.HttpMethod.POST),
+      integration: new HttpSqsIntegration('SmsWebhook', {
+        queue: smsQueue,
+        subtype: apigwv2.HttpIntegrationSubtype.SQS_SEND_MESSAGE,
+        parameterMapping: new apigwv2.ParameterMapping().custom('QueueUrl', smsQueue.queueUrl).custom('MessageBody', '$request.body'),
+      }),
+    });
+    const smsPipeRole = new iam.Role(this, 'SmsPipeRole', { assumedBy: new iam.ServicePrincipal('pipes.amazonaws.com') });
+    smsQueue.grantConsumeMessages(smsPipeRole);
+    smsWorkflow.grantStartExecution(smsPipeRole);
+    new pipes.CfnPipe(this, 'SmsPipe', {
+      name: `${prefix}-sms`,
+      description: 'Each inbound text (one queue message) starts the SMS workflow',
+      roleArn: smsPipeRole.roleArn,
+      source: smsQueue.queueArn,
+      sourceParameters: { sqsQueueParameters: { batchSize: 1 } },
+      target: smsWorkflow.stateMachineArn,
+      targetParameters: { stepFunctionStateMachineParameters: { invocationType: 'FIRE_AND_FORGET' } },
+    });
+    dlqAlarm(this, 'SmsDlqAlarm', smsDlq, props.alarmTopic, 'Assistant (SMS): a text could not start the workflow');
+
     // ---- Platform workflows on the bus -------------------------------------------
     //
     // Only what every tenant gets identically and no tenant varies: the
@@ -359,6 +451,8 @@ export class RuntimeStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'callEndedWorkflowArn', { value: endedWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'telegramWorkflowArn', { value: workflow.stateMachineArn });
+    new cdk.CfnOutput(this, 'twilioSecretArn', { value: twilioSecret.secretArn });
+    new cdk.CfnOutput(this, 'smsWorkflowArn', { value: smsWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'composioHealthWorkflowArn', { value: healthWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'browserbaseSecretArn', { value: browserbaseSecret.secretArn });
     new cdk.CfnOutput(this, 'browserLoginWorkflowArn', { value: loginWorkflow.stateMachineArn });

@@ -17,7 +17,7 @@
   },
 
   "people": [
-    { "name": "Owner Name", "role": "owner", "telegramId": 123456789 },
+    { "name": "Owner Name", "role": "owner", "telegramId": 123456789, "phone": "+15555550101" },
     { "name": "Field Tech", "role": "employee", "telegramId": 987654321 }
   ],
 

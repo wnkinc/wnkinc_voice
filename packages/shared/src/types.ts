@@ -8,7 +8,7 @@ export const PersonSchema = z.object({
   role: z.enum(['owner', 'employee']),
   /** Telegram user id (numeric; the bot sees it on every message). */
   telegramId: z.number().int().positive().optional(),
-  /** Mobile number, the identity for SMS once that channel exists. */
+  /** Mobile number, the identity for SMS (the person texts the tenant's number). */
   phone: E164.optional(),
 });
 export type Person = z.infer<typeof PersonSchema>;
@@ -116,7 +116,7 @@ export const TenantConfigSchema = z.object({
   /** Owner follow-up email per lead, sent from the owner's Gmail through Composio. */
   emailResponder: z.object({ enabled: z.boolean().default(false) }).prefault({}),
 
-  /** Chat assistant for the tenant's own people (Telegram now, SMS later). */
+  /** Chat assistant for the tenant's own people, over Telegram and SMS. */
   assistant: z.object({
     enabled: z.boolean().default(false),
     /**

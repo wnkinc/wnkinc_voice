@@ -4,8 +4,22 @@ import { htmlToTextExpr, sipNumberExpr, SIP_CALLED_HEADERS, SIP_CALLER_HEADERS }
 import { loginSiteExpr } from '../workflows/browser-login.js';
 import { expectedToolkitsExpr, missingToolkitsExpr } from '../workflows/composio-health.js';
 import { nextBusinessMorningExpr } from '../workflows/crm-lead.js';
+import { parseFormExpr } from '../workflows/sms.js';
 
 const evalExpr = (expr: string, input: unknown) => jsonata(expr).evaluate(input);
+
+describe('parseFormExpr', () => {
+  const parse = (body: string) => evalExpr(parseFormExpr('body'), { body });
+  it('decodes a Twilio inbound message: %2B stays a plus, + becomes a space, %xx decodes', async () => {
+    expect(await parse('From=%2B15095551234&To=%2B15098005349&Body=who+is+Sarah%3F+%22hi%22&AccountSid=AC123&NumMedia=0')).toEqual({
+      From: '+15095551234', To: '+15098005349', Body: 'who is Sarah? "hi"', AccountSid: 'AC123', NumMedia: '0',
+    });
+  });
+  it('empty values and an empty body', async () => {
+    expect(await parse('Body=&NumMedia=1')).toEqual({ Body: '', NumMedia: '1' });
+    expect(await parse('')).toEqual({ '': '' });
+  });
+});
 
 describe('sipNumberExpr', () => {
   const to = sipNumberExpr('sip_headers', SIP_CALLED_HEADERS);

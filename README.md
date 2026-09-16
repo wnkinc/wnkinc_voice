@@ -9,9 +9,10 @@ Three things can happen, and each is its own system:
 - **A phone call comes in** → the receptionist. OpenAI Realtime answers as that business,
   takes a lead, alerts the owner if it is urgent, and after hang-up the call is remembered,
   metered, and handed to whatever automations the tenant runs.
-- **A Telegram message comes in** → the business assistant. A person the tenant listed
-  chats with the business: look up a customer, add a note, ask what the receptionist
-  recorded. `/login` from the owner opens the tenant's saved browser instead.
+- **A message comes in, on Telegram or by text** → the business assistant. A person the
+  tenant listed chats with the business: look up a customer, add a note, ask what the
+  receptionist recorded. `/login` from the owner on Telegram opens the tenant's saved
+  browser instead.
 - **The clock hits 15:00 UTC** → the health checks. Every tenant's connections and
   assistant are proven live before a customer finds out they are not.
 
@@ -91,9 +92,11 @@ the after-call work (memory and usage always; the rest per tenant, see section 2
    that ended long ago); the DLQ alarms. There is no mid-call re-attach: if an invocation
    dies, the call drops and the caller calls back.
 
-### A Telegram message comes in
+### A message comes in: Telegram or SMS
 
-One Telegram bot serves every tenant; who is talking decides the tenant, not which bot.
+Two front doors to one assistant. One Telegram bot serves every tenant; who is talking decides
+the tenant, not which bot. For SMS, a person texts their own business's number (the same Twilio
+number the receptionist answers), and the sender's number is the identity.
 
 ```
  person ──Telegram──▶ Bot API webhook ──▶ API Gateway (secret path) ──StartExecution──▶ Step Functions
@@ -129,6 +132,19 @@ for anyone else. The same reply path carries the receptionist's owner alerts.
 
 Prove it without Telegram: `npx tsx scripts/test-assistant.mts "who is Sarah?"` (invokes the harness
 with the same arguments the workflow uses).
+
+**SMS.** Twilio posts each inbound text to a secret path on the same API. Twilio sends a
+form-encoded body, which is not JSON and so cannot start a state machine directly, so the route
+puts the raw string on a queue and an EventBridge Pipe starts the SMS workflow (`workflows/sms.ts`)
+with it; the workflow's first state parses it. The People lookup is `sms:<sender>`, plus one check
+Telegram cannot make: the number texted must be that person's tenant's number. From there it is the
+Telegram path: the same harness, the tenant's Composio session, a session per phone per day, an actor
+per person (`<tenant>_sms_<digits>`, separate from the caller memory of whoever phones from that
+number). The reply is an HTTP task inside the workflow straight to Twilio's Messages API, form-encoded
+through a basic-auth Connection, addressed with the account SID the inbound post carried. A reply
+over Twilio's 1600 characters fails the execution and alarms; the prompt asks for far less. Only the
+number-level messaging webhook is configured; a number sending through a Messaging Service takes its
+inbound webhook from the service.
 
 **Saved browser: `/login`.** A business signs into the sites it uses once, and the platform keeps
 that browser. The owner sends `/login <site>` to the bot; the Telegram workflow starts the
@@ -171,9 +187,10 @@ input, and that selection picks the credential:
   carrying the tenant's id (published by our own session Lambda). It reads the tenant row by the
   event's phone number; every Composio HTTP call names that tenant as Composio's user, and the
   owner alert delivers to the owner listed on the row.
-- **Assistant**: the People table maps the Telegram sender to a tenant; the workflow hands the
-  harness that tenant's Composio session URL from the row. The session is bound to the owner's
-  connected accounts, so the model's tools cannot reach another tenant's SaaS.
+- **Assistant**: the People table maps the Telegram sender id, or the texting phone number, to a
+  tenant; the workflow hands the harness that tenant's Composio session URL from the row. The
+  session is bound to the owner's connected accounts, so the model's tools cannot reach another
+  tenant's SaaS. Both channels' posts arrive on a secret path only the channel knows.
 
 Neither a model nor a caller ever names a tenant. AgentCore Gateway with Cedar is the option for the
 day an open-ended model needs a *platform* tool, or a SaaS Composio does not broker needs OAuth in
@@ -196,7 +213,7 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `phoneNumber` | E.164, the **called** number; partition key |
 | `active` | `false` → calls rejected with SIP 603 |
 | `business` | `name`, `description`, `services`, `hours`, `timezone`: the facts every service draws on (receptionist prompt, assistant prompt, lead email, CRM notes) |
-| `people` | The tenant's own people with their channel ids. `notify_owner` alerts go to the person with role `owner` and a `telegramId`; the assistant answers anyone listed. |
+| `people` | The tenant's own people with their channel ids: `telegramId`, `phone` (E.164, for SMS), or both. `notify_owner` alerts go to the person with role `owner` and a `telegramId`; the assistant answers anyone listed, on whichever channel they have. |
 | `receptionist.session` | Passed to OpenAI Realtime under these same keys: `model` (default `gpt-realtime-2.1`), `audio.output.voice` (default `marin`), `tools` (subset of `record_lead`, `notify_owner`, `end_call`). Levers not yet built are listed in `packages/voice-session/README.md` |
 | `receptionist.instructions` | What the platform composes into the prompt alongside `business`: `agentName` (default `Alex`), `extra` (tenant-specific rules) |
 | `receptionist.greeting` | Spoken verbatim on connect, through a separate response request |
@@ -376,7 +393,24 @@ Per person: add them to the tenant file's `people` with their Telegram user id (
 the id is `message.from.id` in the workflow's execution input), then re-seed. Removing them from the
 file and re-seeding removes their access.
 
-### 6. Browserbase
+### 6. Twilio SMS
+
+The tenant's number must be SMS-capable and, for US traffic, registered for A2P 10DLC (Twilio
+console; unregistered business SMS is filtered by the carriers). Put the account SID and auth token
+in the Twilio secret (keep the generated `WEBHOOK_PATH`), and write them to the Connection too,
+because CloudFormation resolves a secret reference only when the resource itself changes:
+
+```bash
+aws secretsmanager put-secret-value --secret-id <twilioSecretArn> --secret-string "$(aws secretsmanager get-secret-value --secret-id <arn> --query SecretString --output text | jq -c '.TWILIO_ACCOUNT_SID = "AC..." | .TWILIO_AUTH_TOKEN = "..."')"
+aws events update-connection --name <TwilioConnection name> --authorization-type BASIC \
+  --auth-parameters '{"BasicAuthParameters":{"Username":"AC...","Password":"..."}}'
+```
+
+Then, per tenant, point the number's messaging webhook at the platform:
+`npx tsx scripts/twilio-webhook.mts set <tenantId>` (`info` shows what the number has). Per person:
+add their mobile as `phone` in the tenant file's `people` and re-seed.
+
+### 7. Browserbase
 
 Create a Browserbase project. Its id goes in `cdk.json` context as `browserbaseProjectId` (not a
 secret; a literal in the definition). The key goes in the secret and, because CloudFormation resolves
@@ -404,14 +438,14 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 | `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
 | `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload. To add a tool: a zod args schema, a handler, a `tool({...})` entry, then its name in a tenant's `tools`. Tools that need durability publish an event and return; a workflow consumes it |
-| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, browser-login, call-ended, composio-health, assistant-health, and the four automations): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair). `automation.ts` is the descriptor the four automations export |
+| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, sms, browser-login, call-ended, composio-health, assistant-health, and the four automations): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair). `automation.ts` is the descriptor the four automations export |
 | `tenants/<id>.ts`, `tenants/index.ts` | What that tenant runs on the bus, and the registry (one line per tenant). Tracked, unlike the rows |
 | `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant from its file |
-| `packages/infrastructure/stacks/runtime-stack.ts` | The assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram reply path, and the platform workflows every tenant shares: Telegram, browser login, call-ended, the two canaries |
+| `packages/infrastructure/stacks/runtime-stack.ts` | The assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram reply path, and the platform workflows every tenant shares: Telegram, SMS, browser login, call-ended, the two canaries |
 | `packages/infrastructure/stacks/voice-stack.ts`, `memory-stack.ts`, `identity-stack.ts` | The call path (API, two Lambdas, accept workflow, tables, bus, queues, alarm topic); caller memory; credential providers |
 | `packages/infrastructure/bin/app.ts`, `infra_utils/` | Stack wiring; alarm and state-machine presets |
 | `packages/shared/src/` | `types.ts` (`TenantConfig` zod schema, records, events), `store.ts` (DynamoDB behind one `Store` interface plus an in-memory version; no leads table, the CRM holds the lead and the call row is the audit), `events.ts` (EventBridge publisher), `config.ts` (env, secrets, OpenAI client, logger), `composio.ts` (Composio SDK, scripts only) |
-| `scripts/` | `seed-tenant.ts` (row upsert), `check-tenant.ts` (pre-flight), `connect-composio.mts` (consent links), `telegram-webhook.mts`, and the `test-*.mts` provers |
+| `scripts/` | `seed-tenant.ts` (row upsert), `check-tenant.ts` (pre-flight), `connect-composio.mts` (consent links), `telegram-webhook.mts` and `twilio-webhook.mts` (point each channel at the platform), and the `test-*.mts` provers |
 | `tenants/example.json` | Example tenant config |
 | `packages/*/test/` | vitest suites; the infrastructure one synthesizes every definition |
 
