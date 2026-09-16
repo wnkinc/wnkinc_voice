@@ -1,14 +1,31 @@
 # wnkinc_voice
 
-Serverless control layer for an **OpenAI Realtime phone receptionist**.
+A multi-tenant platform that answers a small business's phone, remembers its callers, and
+lets its people talk to the business over chat. One deployment serves many businesses; a
+business is a config row plus a short file naming the automations it runs.
 
-Twilio owns the number and the SIP transport. Inbound calls are forwarded over a
-Twilio Elastic SIP trunk straight into OpenAI Realtime. OpenAI fires a
-`realtime.call.incoming` webhook at this backend, which verifies it, maps the
-**called number → tenant**, accepts the call with that tenant's model / voice /
-instructions / tools, and hands the call to a session Lambda that holds the
-WebSocket and executes tool calls (record a lead, notify the owner, end the
-call). One deployment serves many businesses.
+Three things can happen, and each is its own system:
+
+- **A phone call comes in** → the receptionist. OpenAI Realtime answers as that business,
+  takes a lead, alerts the owner if it is urgent, and after hang-up the call is remembered,
+  metered, and handed to whatever automations the tenant runs.
+- **A Telegram message comes in** → the business assistant. A person the tenant listed
+  chats with the business: look up a customer, add a note, ask what the receptionist
+  recorded. `/login` from the owner opens the tenant's saved browser instead.
+- **The clock hits 15:00 UTC** → the health checks. Every tenant's connections and
+  assistant are proven live before a customer finds out they are not.
+
+A tenant starts with the receptionist. Optional capabilities are enabled on top of it:
+CRM sync, a lead email from the owner's Gmail, the assistant, the saved browser.
+
+The platform is thin custom code on thick rented infrastructure. Two Lambdas are code
+(the webhook verifier and the session that holds a call). Everything else is a Step
+Functions definition, an AgentCore harness, or a CDK declaration. See `CLAUDE.md` for the
+goals that decide how to change it.
+
+## 1. Platform: what every tenant gets
+
+### A phone call comes in
 
 ```
  caller ──PSTN──▶ Twilio number ──SIP trunk──▶ OpenAI Realtime (audio stays here)
@@ -29,48 +46,258 @@ call). One deployment serves many businesses.
                                        EventBridge bus (wnkinc.voice)
                               lead.recorded · owner.notify · call.ended
                                                     │
-                      Step Functions workflows (no code, no model):
+                       platform (runtime stack), the same for every tenant:
+                        call.ended    → transcript to caller memory, minutes to usage
                        per tenant, in that tenant's stack, rules filtered on its id:
                         lead.recorded → HubSpot contact + note + task (via Composio HTTP)
                         lead.recorded → CRM + memory → owner's Gmail
                         call.ended    → transcript note on the HubSpot contact
                         owner.notify  → owner on Telegram
-                       platform (runtime stack), the same for every tenant:
-                        call.ended    → transcript to caller memory, minutes to usage
 ```
 
-## Layout
+Three phases: get the call in safely (verify, accept), run the receptionist (session), do
+the after-call work (memory and usage always; the rest per tenant, see section 2).
 
-Each package has its own README: what rented service it sits on, what its code is allowed to
-do, and how to verify it. Start there when changing one.
+1. **Verify** — the verifier Lambda checks the Standard-Webhooks HMAC over the raw body
+   (bad → 400) and starts the accept workflow with the body; it answers 200 at once.
+2. **Route** — the accept workflow parses `To`/`Diversion`/`From` from the SIP headers; the
+   Tenants table is keyed by called number. Unknown number: reject 404 and fail (alarm);
+   inactive tenant: reject 603. There is no default tenant.
+3. **Claim** — a conditional `PutItem` on the Calls table makes webhook retries idempotent
+   (OpenAI re-posts on non-2xx). A claim in status `failed` can be re-claimed.
+4. **Accept** — `POST /v1/realtime/calls/{id}/accept` with the minimum: model, voice, and a
+   hold instruction. The session Lambda sends the full config (instructions, semantic VAD,
+   noise reduction, transcription, function tools) when it attaches.
+5. **Recognize and hand off** — the workflow looks the caller up in the tenant's CRM (last
+   note) and in memory, with a real time budget, and puts a `SessionJob` on the SQS queue.
+   On a hit, the prompt gets a "Caller ID" section with the name and last note.
+6. **Session** — the session Lambda receives the message (one call per invocation) and attaches with the Agents SDK
+   (`RealtimeSession` over `OpenAIRealtimeSIP`, the same pattern as OpenAI's
+   [realtime-twilio-sip example](https://github.com/openai/openai-agents-js/tree/main/examples/realtime-twilio-sip)).
+   It sends a `response.create` that speaks the greeting; the SDK validates and executes
+   tool calls and returns results to the model. We log transcripts from the raw events.
+   The three tools are `record_lead` (one publish: `lead.recorded`), `notify_owner` (one
+   publish: `owner.notify`), and `end_call`. After `end_call` the next response is allowed
+   to finish, audio drains, then we hang up via REST.
+7. **Limits** — at `min(tenant.maxCallSeconds, Lambda deadline − 25 s)` the model is told to
+   wrap up; hangup follows the next `response.done` (hard stop 20 s later). The Lambda's
+   15-minute timeout is the ceiling, hence `maxCallSeconds` maxes at 840.
+8. **End** — on socket close the call record gets `status`/`endedAt`, a `call.ended` event
+   (ids and outcome; the transcript stays on the row) is published, and the SQS message is
+   deleted by the event source mapping. The call-ended workflow writes the transcript to the
+   caller's memory and meters the minutes.
+9. **Failures** — an attach failure is reported as a batch item failure and the message
+   dead-letters at once (a retry after the 16-minute visibility timeout would reach a call
+   that ended long ago); the DLQ alarms. There is no mid-call re-attach: if an invocation
+   dies, the call drops and the caller calls back.
 
-| Path | What |
+### A Telegram message comes in
+
+One Telegram bot serves every tenant; who is talking decides the tenant, not which bot.
+
+```
+ person ──Telegram──▶ Bot API webhook ──▶ API Gateway (secret path) ──StartExecution──▶ Step Functions
+                                                                                          │ not a private text? → done
+                                                                                          │ People GetItem(telegram:<id>) → Tenants GetItem
+                                                                                          │ unknown sender / assistant off? → done, silently
+                                                                                          │ /login from the owner? → browser-login workflow
+                                                                                          ▼
+                                                                    AgentCore harness (InvokeHarness state)
+                                                       Composio MCP session AS the tenant · Memory · reply text back
+                                                                                          │ PutEvents telegram.reply
+                                                                                          ▼
+                                                                    EventBridge API destination → Bot API sendMessage
+```
+
+**No code on the path.** The assistant is a harness: model, default prompt, memory, and limits are
+configuration in the runtime stack. Per invocation the workflow passes the message, a system prompt
+built from the tenant row, and the tenant's Composio MCP session (`assistant.composioMcpUrl`, minted by the
+seed and bound to the owner's connected accounts), so the only SaaS the model can reach is that
+tenant's; Composio's meta tools keep the context small, and the harness `allowedTools` fences the
+server. The harness threads the conversation and extracts facts through the platform Memory instance
+(actor = tenant + person), surviving microVM expiry. Each person gets a fresh session per day, rolling
+at 3 AM in the tenant's timezone (`sessionDayOffsetMinutes`, computed by the seed; drifts an hour
+across DST until the next seed); facts, preferences, and per-session summaries are retrieved across
+all prior days. The reply goes out through an EventBridge API destination whose endpoint holds the bot
+token (resolved from the Telegram secret at deploy); failures land in a dead-letter queue with an
+alarm. Replies over Telegram's 4096-character limit fail there — the prompt asks for brevity;
+splitting is deferred until it is actually needed.
+
+Identity is Telegram's: the Bot API vouches for the sender's user id, the People table (seeded from
+each tenant's `people`) maps it to a tenant and a role, and the workflow never invokes the harness
+for anyone else. The same reply path carries the receptionist's owner alerts.
+
+Prove it without Telegram: `npx tsx scripts/test-assistant.mts "who is Sarah?"` (invokes the harness
+with the same arguments the workflow uses).
+
+**Saved browser: `/login`.** A business signs into the sites it uses once, and the platform keeps
+that browser. The owner sends `/login <site>` to the bot; the Telegram workflow starts the
+browser-login workflow (`workflows/browser-login.ts`) instead of the assistant. It opens a Browserbase
+session on the tenant's context (the saved browser: cookies and logins, encrypted in Browserbase's
+vault, keyed on the row as `browser.contextId`), sends the owner the interactive live view link, waits
+ten minutes, and releases the session so the context syncs. One window at a time per tenant: two
+sessions on one context race on release and the later one overwrites the earlier one's logins, so the
+row carries the window's end (`browser.loginUntil`) and a second `/login` meanwhile is answered, not
+started. Captcha solving is Browserbase's, on by default. The windowed live view has an address bar;
+the owner types the site's URL there. Only the owner's Telegram id may send `/login`, and only for a
+tenant with `browser.enabled`. What the assistant does with that browser is step two (a per-tenant
+Stagehand session); today nothing but the owner drives it.
+
+### The clock hits 15:00 UTC
+
+Silent degradation gets a canary. Two run daily, ten minutes apart so a failure in the second is
+about the harness and not about Composio:
+
+- **15:00, `composio-health`** scans the Tenants table and asks Composio for each tenant's ACTIVE
+  connected accounts, expecting HubSpot when `crm.via` is composio, Gmail when the email responder
+  is on, and at least one when the assistant is on. A missing connection would otherwise fail
+  nothing (every CRM and Gmail state catches and carries on); here it fails the execution, which
+  alarms with the tenant and the reconnect command.
+- **15:10, `assistant-health`** invokes each enabled tenant's assistant with one read-only question
+  (a phone number no contact has) and asserts only that it answered with text. It proves the harness
+  answers, the model key resolves, Memory threads a session, and the tenant's MCP session serves
+  tools. Nobody messages the bot on a quiet week, so this is the traffic that proves it still works.
+
+### How the tenant is chosen
+
+There is no Gateway hop. The tenant is selected **before any model runs**, from an unforgeable
+input, and that selection picks the credential:
+
+- **Receptionist**: the webhook resolves the tenant from the signed called number; the two
+  tools (`record_lead`, `notify_owner`) run in-process with that call context and are one write or
+  one publish each. Everything multi-step is a consumer of the events they publish.
+- **Tenant automations** (CRM sync, lead email, owner alert): no code, no model. Each is that
+  tenant's own state machine in that tenant's stack, started by a rule that matches only events
+  carrying the tenant's id (published by our own session Lambda). It reads the tenant row by the
+  event's phone number; every Composio HTTP call names that tenant as Composio's user, and the
+  owner alert delivers to the owner listed on the row.
+- **Assistant**: the People table maps the Telegram sender to a tenant; the workflow hands the
+  harness that tenant's Composio session URL from the row. The session is bound to the owner's
+  connected accounts, so the model's tools cannot reach another tenant's SaaS.
+
+Neither a model nor a caller ever names a tenant. AgentCore Gateway with Cedar is the option for the
+day an open-ended model needs a *platform* tool, or a SaaS Composio does not broker needs OAuth in
+front of it — a capability-by-capability choice, not a mandatory layer (last shape: commit 832360b).
+
+## 2. Tenant: the row and the automations file
+
+A tenant is two things. The **row** (`tenants/<id>.json`, seeded into the Tenants table) holds
+everything that differs between two businesses: number, persona, people, flags, connections. The
+**automations file** (`tenants/<id>.ts`) names which after-call automations the tenant runs and
+deploys as that tenant's own stack. The row never touches a deploy; the file is the one deploy,
+and it deploys that tenant alone. The `new-tenant` skill is the onboarding procedure.
+
+### The row
+
+See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
+
+| Field | Notes |
 |---|---|
-| `packages/voice-session/src/webhook.ts` | Lambda (~40 lines, stdlib): verifies the OpenAI webhook signature and starts the accept workflow. The one piece of the call path that must be code |
-| `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
-| `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
-| `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload |
-| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, lead-email, crm-lead, crm-call, call-ended, owner-alert, composio-health, browser-login): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `workflows/asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair); everything else lives in the workflow file, duplicated if need be. The tenant-varied ones (lead-email, crm-lead, crm-call, owner-alert) also export an `Automation` descriptor (`workflows/automation.ts`: event, Express or not, timeout, grants, definition), which is what a tenant file lists |
-| `tenants/<id>.ts` | What that tenant runs on the bus: its id and the automation descriptors it gets, stock or variant. `tenants/index.ts` is the registry (one line per tenant). Tracked, unlike the rows |
-| `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant (`wnk-tenant-<id>-dev`): for each descriptor a state machine named for the tenant, a rule matching only events carrying that tenant's id, the grants it declares, and an alarm. Deploying one touches no other tenant |
-| `packages/shared/src/composio.ts` | Composio SDK, scripts only (consent links, the owner's Gmail address, the assistant's session). No Lambda bundles it |
-| `packages/shared/src/store.ts` | DynamoDB (tenants, calls, people) behind one `Store` interface, plus an in-memory version for tests. No leads table: the tenant's CRM holds the lead; the call row (tool calls + once-markers) is the audit |
-| `packages/shared/src/events.ts` | EventBridge publisher |
-| `packages/shared/src/types.ts` | `TenantConfig` schema (zod) and record/event types |
-| `packages/shared/src/config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger |
-| `packages/infrastructure/stacks/runtime-stack.ts` | My Assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram reply path, and the platform workflows every tenant shares: the Telegram workflow, the browser login handoff, the call-ended tail (transcript to caller memory, minutes to usage), and the Composio health canary. Workflows that handle transcripts or CRM notes run as Express with execution data not logged |
-| `packages/infrastructure/` | CDK app: `bin/app.ts` + `stacks/*-stack.ts` + `workflows/` (one definition per file) + `infra_utils/` (alarms, state-machine presets) (the two Lambdas and the accept workflow) |
-| `scripts/seed-tenant.ts` | Upsert tenant JSON into the Tenants table |
-| `tenants/example.json` | Example tenant config |
-| `packages/voice-session/test/` | vitest suites (each package carries its own tests) |
+| `phoneNumber` | E.164, the **called** number; partition key |
+| `active` | `false` → calls rejected with SIP 603 |
+| `business` | `name`, `description`, `services`, `hours`, `timezone`: the facts every service draws on (receptionist prompt, assistant prompt, lead email, CRM notes) |
+| `people` | The tenant's own people with their channel ids. `notify_owner` alerts go to the person with role `owner` and a `telegramId`; the assistant answers anyone listed. |
+| `receptionist.session` | Passed to OpenAI Realtime under these same keys: `model` (default `gpt-realtime-2.1`), `audio.output.voice` (default `marin`), `tools` (subset of `record_lead`, `notify_owner`, `end_call`). Levers not yet built are listed in `packages/voice-session/README.md` |
+| `receptionist.instructions` | What the platform composes into the prompt alongside `business`: `agentName` (default `Alex`), `extra` (tenant-specific rules) |
+| `receptionist.greeting` | Spoken verbatim on connect, through a separate response request |
+| `receptionist.maxCallSeconds` (default 600, max 840) | Ours, not OpenAI's: the agent is asked to wrap up, then the call is hung up |
+| `crm` | `{ "type": "hubspot", "via": "composio" }` enables caller recognition, CRM sync, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
+| `emailResponder` | `{ enabled }`: owner follow-up email per lead, from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default off; the workflow refuses a tenant whose flag is off. |
+| `assistant` | `{ enabled, composioMcpUrl }`: the chat assistant for the tenant's people. `composioMcpUrl` is the tenant's Composio meta-tools MCP session, minted by the seed once the owner has connected accounts; the workflow hands it to the harness per invocation; no URL, no SaaS tools. |
+| `browser` | `{ enabled, contextId }`: the tenant's saved browser in Browserbase (cookies, logins). The browser-login workflow creates the context on the owner's first `/login` and writes it to the row; copy it into the file when the reply says so, or a re-seed starts a fresh browser. |
 
-## Prerequisites
+### The automations menu
+
+Each after-call automation is a file in `packages/infrastructure/workflows/` exporting an
+`Automation` descriptor (`workflows/automation.ts`: the bus event that starts it, Express or not,
+timeout, grants, definition). A tenant file lists the ones it runs:
+
+| Descriptor | On | What it does |
+|---|---|---|
+| `crmLead` | `lead.recorded` | HubSpot contact upserted by phone, note with the lead, follow-up task due the next business morning in the tenant's timezone, assigned to the account's first owner |
+| `crmCall` | `call.ended` | Transcript note on the HubSpot contact, if the caller is already a contact. The transcript is read from the call row, not the event |
+| `leadEmail` | `lead.recorded` | Email to the owner from the owner's own Gmail through Composio, carrying the CRM contact, its last note, and caller memory when they exist |
+| `ownerAlert` | `owner.notify` | The receptionist's urgent alert, delivered to the row's owner over the Telegram reply path |
+
+`packages/infrastructure/stacks/tenant-stack.ts` turns the list into one stack per tenant
+(`wnk-tenant-<id>-dev`): for each descriptor a state machine named for the tenant, a rule matching
+only events carrying that tenant's id, the grants it declares, and an alarm. Deploying one touches
+no other tenant. The definitions test synthesizes every machine and asserts the rule filter.
+
+A variation for one tenant is, in order of preference, a parameter on the definition, a
+recomposition, or a copied definition in that tenant's file. Never a Choice state inside a
+definition another tenant runs on. The `new-tenant` skill has the sizes with examples.
+
+**CRM (HubSpot through Composio).** Opt-in via `crm: { type: "hubspot", via: "composio" }`. The owner
+approves Composio's HubSpot app once; no HubSpot token exists anywhere in the platform. Every CRM
+call names the tenant (Composio `userId` = our tenant id), so the credential is chosen per call. CRM
+upgrades the other capabilities rather than standing alone: caller recognition in accept, the history
+section of the lead email, and the assistant's tools. A second CRM is another set of HTTP-task states
+in the definitions, selected by the row's `crm.type`. Prove a tenant's connection with
+`npx tsx scripts/test-crm-workflows.mts <id> <phone>`.
+
+## 3. Operating: traces, alarms, dead letters
+
+Every Lambda runs with X-Ray active, and the trace is carried by hand across the seams X-Ray
+doesn't cross on its own: the SQS message to the session Lambda (`AWSTraceHeader`) and the
+EventBridge event (`TraceHeader`). Every state machine runs with tracing on, so a trace started at
+the webhook continues through accept, the session Lambda, the bus event, and the workflow it starts.
+Every log line carries `traceId`, `tenantId`, and `callId` where known, so one Logs Insights query
+across the log groups reconstructs a call:
+
+```
+fields @timestamp, @log, msg, tenantId, callId
+| filter callId = "rtc_..." or traceId = "..."
+| sort @timestamp
+```
+
+Every stack's alarms page one SNS topic (`<prefix>-alarms`): dead-letter queues holding anything,
+workflow executions that failed, and Lambda errors. Who it pages is operator data, subscribed once
+out of band (see Setup). Failures after retries land in a dead-letter queue (session jobs, workflow
+starts), and each queue has an alarm. A workflow execution that fails alarms on the state machine's
+failed-executions metric.
+
+Delivery is at-least-once everywhere (EventBridge, Lambda async retries, SDK retries), so every
+event consumer with an external side effect checks a once-marker on the call row before acting
+and sets it after success (`checkDone` / `markDone` states from `workflows/asl.ts`, keys like
+`done:crm:lead:<leadId>`, `done:crm:call`, `done:email:lead:<leadId>`). That narrows a duplicate to
+a crash between the send and the mark; it is not exactly-once. Anything that costs money or reaches
+a customer irreversibly should get a pending → completed ledger with reconciliation instead.
+
+Standard workflows (Telegram, owner alert, CRM lead, the canaries) keep their history for replay;
+workflows that handle transcripts or CRM notes (accept, call-ended, lead email, CRM call) are Express
+with execution data not logged, so only the state path and the error are kept. Events carry ids and
+outcomes; the transcript stays on the call row and is fetched by id where needed.
+
+**The session Lambda.** `aws logs tail /aws/lambda/wnkinc-voice-dev-session --follow`. Deploying
+new session code is `npm run deploy`. Because in-flight calls live inside a Lambda invocation, a
+deploy never interrupts them: running invocations finish on the old code, new calls get the new code.
+
+**A tenant misbehaves.** `npx tsx scripts/check-tenant.ts <id>` prints the provisioning checklist:
+config drift between file and row, secrets, services, owner alert channel, Gmail connection.
+
+**Cost and scale.**
+
+- Everything (HTTP API, two Lambdas, Step Functions, DynamoDB, SQS, EventBridge) is on-demand and ~$0 idle;
+  per call you pay OpenAI Realtime usage plus Lambda duration for the call's length
+  (a 10-minute call at 512 MB is well under a cent).
+- Each call is its own invocation with its own 512 MB — the session Lambda holds a socket and
+  does JSON, no audio. `sessionMaxConcurrency` (default 20) caps simultaneous calls; the account
+  concurrency limit is the hard ceiling.
+- There is no mid-call failover: if an invocation dies the call drops and the caller calls back.
+  Undelivered jobs wait in SQS up to an hour.
+- Calls table rows expire after 90 days (TTL). All tables use `RemovalPolicy.DESTROY` while this
+  is a learning stack; flip to `RETAIN` before real data.
+
+## 4. Setup
+
+### Prerequisites
 
 - Node 22+, AWS CLI configured (CDK bootstrap runs once per account/region: `npx cdk bootstrap`)
 - An OpenAI project with Realtime access (note the `proj_…` id under *Settings → Project → General*)
 - A Twilio account with a phone number
 
-## Deploy
+### Deploy
 
 ```bash
 npm install
@@ -79,9 +306,12 @@ npx cdk bootstrap                           # once per account/region
 npm run deploy
 ```
 
-Every stack's alarms page one SNS topic (`<prefix>-alarms`): dead-letter queues holding
-anything, workflow executions that failed, and Lambda errors. The topic is created by the
-stack; **who it pages is not** — subscribe once, out of band, and no later deploy can remove it:
+IaC is AWS CDK (TypeScript, `packages/infrastructure/`); Lambdas are bundled by `NodejsFunction`
+(esbuild) at deploy time. Stacks: memory, voice, identity, runtime, then one per tenant
+(`bin/app.ts` builds one platform object and feeds it to the runtime stack and every tenant stack).
+
+The alarm topic is created by the stack; **who it pages is not** — subscribe once, out of band,
+and no later deploy can remove it:
 
 ```bash
 aws sns subscribe --topic-arn <alarmTopicArn output> --protocol email \
@@ -126,201 +356,16 @@ Copy `tenants/example.json` to `tenants/<tenantId>.json` (one file per tenant, k
 TENANTS_TABLE=<tenantsTableName output> PEOPLE_TABLE=<peopleTableName output> COMPOSIO_SECRET_ARN=<composioSecretArn output> AWS_REGION=us-west-2 npm run seed -- tenants/<tenantId>.json
 ```
 
+Then create `tenants/<tenantId>.ts` (copy `tenants/wnk.ts`), add it to `tenants/index.ts`, and
+`npx cdk deploy wnk-tenant-<tenantId>-dev`. The full procedure, including consents and people, is
+the `new-tenant` skill.
+
 Call the number. With Twilio Elastic SIP Trunking the `To` header carries the OpenAI
 project id and the dialed number arrives in `Diversion`; the accept workflow's SIP parsing
 (`SIP_CALLED_HEADERS` in `packages/infrastructure/workflows/accept.ts`) handles that. If another
-carrier puts it elsewhere, add the header name there. An unknown called number is rejected
-(SIP 404) and fails the accept execution, which alarms; there is no default tenant.
+carrier puts it elsewhere, add the header name there.
 
-## Tenant config
-
-See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
-
-| Field | Notes |
-|---|---|
-| `phoneNumber` | E.164, the **called** number; partition key |
-| `business` | `name`, `description`, `services`, `hours`, `timezone`: the facts every service draws on (receptionist prompt, assistant prompt, lead email, CRM notes) |
-| `people` | The tenant's own people with their channel ids. `notify_owner` alerts go to the person with role `owner` and a `telegramId`; the assistant answers anyone listed. |
-| `receptionist.session` | Passed to OpenAI Realtime under these same keys: `model` (default `gpt-realtime-2.1`), `audio.output.voice` (default `marin`), `tools` (subset of `record_lead`, `notify_owner`, `end_call`). Levers not yet built are listed in `packages/voice-session/README.md` |
-| `receptionist.instructions` | What the platform composes into the prompt alongside `business`: `agentName` (default `Alex`), `extra` (tenant-specific rules) |
-| `receptionist.greeting` | Spoken verbatim on connect, through a separate response request |
-| `receptionist.maxCallSeconds` (default 600, max 840) | Ours, not OpenAI's: the agent is asked to wrap up, then the call is hung up |
-| `active` | `false` → calls rejected with SIP 603 |
-| `crm` | `{ "type": "hubspot", "via": "composio" }` enables CRM sync, caller recognition, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
-| `emailResponder` | `{ enabled }`: owner follow-up email per lead, from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default off; the workflow refuses a tenant whose flag is off. |
-| `assistant` | `{ enabled, composioMcpUrl }`: the chat assistant for the tenant's people. `composioMcpUrl` is the tenant's Composio meta-tools MCP session, minted by the seed once the owner has connected accounts; the workflow hands it to the harness per invocation; no URL, no SaaS tools. |
-| `browser` | `{ enabled, contextId }`: the tenant's saved browser in Browserbase (cookies, logins). The browser-login workflow creates the context on the owner's first `/login` and writes it to the row; copy it into the file when the reply says so, or a re-seed starts a fresh browser. |
-
-Unknown numbers are rejected with SIP 404.
-
-## How a call flows
-
-1. **Verify** — the verifier Lambda checks the Standard-Webhooks HMAC over the raw body
-   (bad → 400) and starts the accept workflow with the body; it answers 200 at once.
-2. **Route** — the accept workflow parses `To`/`Diversion`/`From` from the SIP headers; the
-   Tenants table is keyed by called number. Unknown number: reject 404 and fail (alarm);
-   inactive tenant: reject 603.
-3. **Claim** — a conditional `PutItem` on the Calls table makes webhook retries idempotent
-   (OpenAI re-posts on non-2xx). A claim in status `failed` can be re-claimed.
-4. **Accept** — `POST /v1/realtime/calls/{id}/accept` with the minimum: model, voice, and a
-   hold instruction. The session Lambda sends the full config (instructions, semantic VAD,
-   noise reduction, transcription, function tools) when it attaches.
-5. **Recognize and hand off** — the workflow looks the caller up in the tenant's CRM (last
-   note) and in memory, with a real time budget, and puts a `SessionJob` on the SQS queue.
-6. **Session** — the session Lambda receives the message (one call per invocation) and attaches with the Agents SDK
-   (`RealtimeSession` over `OpenAIRealtimeSIP`, the same pattern as OpenAI's
-   [realtime-twilio-sip example](https://github.com/openai/openai-agents-js/tree/main/examples/realtime-twilio-sip)).
-   It sends a `response.create` that speaks the greeting; the SDK validates and executes
-   tool calls and returns results to the model. We log transcripts from the raw events.
-   After `end_call` the next response is allowed to finish, audio drains, then we hang up via REST.
-7. **Limits** — at `min(tenant.maxCallSeconds, Lambda deadline − 25 s)` the model is told to
-   wrap up; hangup follows the next `response.done` (hard stop 20 s later). The Lambda's
-   15-minute timeout is the ceiling, hence `maxCallSeconds` maxes at 840.
-8. **End** — on socket close the call record gets `status`/`endedAt`, a `call.ended` event
-   (ids and outcome; the transcript stays on the row) is published, and the SQS message is
-   deleted by the event source mapping. The call-ended workflow writes the transcript to the
-   caller's memory and meters the minutes.
-9. **Failures** — an attach failure is reported as a batch item failure and the message
-   dead-letters at once (a retry after the 16-minute visibility timeout would reach a call
-   that ended long ago); the DLQ alarms. There is no mid-call re-attach: if an invocation
-   dies, the call drops and the caller calls back.
-
-## Operating: traces, alarms, dead letters
-
-Every Lambda runs with X-Ray active, and the trace is carried by hand across the seams X-Ray
-doesn't cross on its own: the SQS message to the session Lambda (`AWSTraceHeader`) and the
-EventBridge event (`TraceHeader`). Every log line carries `traceId`, `tenantId`, and
-`callId` where known, so one Logs Insights query across the log groups reconstructs a call:
-
-```
-fields @timestamp, @log, msg, tenantId, callId
-| filter callId = "rtc_..." or traceId = "..."
-| sort @timestamp
-```
-
-Delivery is at-least-once everywhere (EventBridge, Lambda async retries, SDK retries), so every
-event consumer with an external side effect checks a once-marker on the call row before acting
-and sets it after success (`checkDone` / `markDone` states from `workflows/asl.ts`, keys like
-`done:crm:lead:<leadId>`, `done:crm:call`, `done:email:lead:<leadId>`). That narrows a duplicate to a crash between the send and the
-mark; it is not exactly-once. Anything that costs money or reaches a customer irreversibly
-should get a pending → completed ledger with reconciliation instead.
-
-Failures after retries land in a dead-letter queue (session jobs, workflow starts), and each queue
-has an alarm. A workflow execution that fails alarms on the state machine's failed-executions
-metric. Standard workflows (Telegram, owner alert, CRM lead) keep their history for replay;
-workflows that handle transcripts or CRM notes (lead email, CRM call) are Express with execution
-data not logged, so only the state path and the error are kept. Events carry ids and outcomes;
-the transcript stays on the call row and is fetched by id where needed.
-
-Silent degradation gets a canary: every day at 15:00 UTC the `composio-health` workflow scans the
-Tenants table and asks Composio for each tenant's ACTIVE connected accounts, expecting HubSpot when
-`crm.via` is composio, Gmail when the email responder is on, and at least one when the assistant is
-on. A missing connection would otherwise fail nothing (every CRM and Gmail state catches and carries
-on); here it fails the execution, which alarms with the tenant and the reconnect command.
-
-Every state machine runs with X-Ray tracing on, so a trace started at the webhook continues through
-the accept workflow, the session Lambda, the bus event, and the workflow it starts.
-
-## Operating the session Lambda
-
-```bash
-aws logs tail /aws/lambda/wnkinc-voice-dev-session --follow
-```
-
-Deploying new session code is `npm run deploy`. Because in-flight calls live inside a Lambda
-invocation, a deploy never interrupts them: running invocations finish on the old code,
-new calls get the new code.
-
-## CRM (HubSpot through Composio)
-
-Per tenant, opt-in via `crm: { type: "hubspot", via: "composio" }`. The owner approves Composio's
-HubSpot app once; no HubSpot token exists anywhere in the platform. Every CRM call names the tenant
-(Composio `userId` = our tenant id), so the credential is chosen per call.
-
-- **My Assistant** reaches the CRM (and Gmail) through the tenant's Composio meta-tools MCP
-  session (`assistant.composioMcpUrl`), bound at seed time to the owner's connected accounts, so the model
-  can reach nothing else.
-- **`lead.recorded`** → (CRM lead workflow) contact upserted by phone, note with the lead, follow-up
-  task due the next business morning in the tenant's timezone, assigned to the account's first owner.
-- **`call.ended`** → (CRM call workflow) transcript note on the contact, if the caller is already a
-  contact. The transcript is read from the call row, not the event.
-- **Caller recognition** — after accepting, the accept workflow looks the caller ID up. On a hit,
-  the prompt gets a "Caller ID" section with the name and last note.
-
-A second CRM is another set of HTTP-task states in the workflows, selected by the row's `crm.type`.
-Prove a tenant's connection with `npx tsx scripts/test-crm-workflows.mts <id> <phone>`.
-
-## Adding a tool
-
-In `packages/voice-session/src/agent.ts`: add a zod args schema, a handler in `handlers`, and a `tool({...})` entry in
-`TOOLS`; then list its name in a tenant's `tools`. The zod schema becomes the function's JSON
-schema; `CallContext` gives the handler the tenant, call id, caller number, store, event
-publisher and `requestHangup()`.
-
-Tools that need durability (scheduling, follow-ups, approvals) publish an event and return
-immediately; a Step Functions workflow on a rule consumes it (lead email, owner alert in the
-runtime stack), or a Lambda when a step needs code (CRM sync).
-
-## Tenancy on the tool path
-
-There is no Gateway hop. The tenant is selected **before any model runs**, from an unforgeable
-input, and that selection picks the credential:
-
-- **Voice receptionist**: the webhook resolves the tenant from the signed called number; the two
-  tools (`record_lead`, `notify_owner`) run in-process with that call context and are one write or
-  one publish each. Everything multi-step is a consumer of the events they publish.
-- **Tenant automations** (CRM sync, lead email, owner alert): no code, no model. Each is that
-  tenant's own state machine in that tenant's stack, started by a rule that matches only events
-  carrying the tenant's id (published by our own session Lambda). It reads the tenant row by the
-  event's phone number; every Composio HTTP call names that tenant as Composio's user, and the
-  owner alert delivers to the owner listed on the row. A variation for one tenant is a descriptor
-  in that tenant's file, never a Choice in a definition another tenant runs on.
-- **My Assistant**: the People table maps the Telegram sender to a tenant; the workflow hands the
-  harness that tenant's Composio session URL from the row. The session is bound to the owner's
-  connected accounts, so the model's tools cannot reach another tenant's SaaS.
-
-Neither a model nor a caller ever names a tenant. AgentCore Gateway with Cedar is the option for the
-day an open-ended model needs a *platform* tool, or a SaaS Composio does not broker needs OAuth in
-front of it — a capability-by-capability choice, not a mandatory layer (last shape: commit 832360b).
-
-## My Assistant (Telegram)
-
-A tenant's own people chat with the platform about their business: look up a customer in the
-CRM, add a note, ask what the receptionist recorded. One Telegram bot serves every tenant; who is
-talking decides the tenant, not which bot.
-
-```
- person ──Telegram──▶ Bot API webhook ──▶ API Gateway (secret path) ──StartExecution──▶ Step Functions
-                                                                                          │ not a private text? → done
-                                                                                          │ People GetItem(telegram:<id>) → Tenants GetItem
-                                                                                          │ unknown sender / assistant off? → done, silently
-                                                                                          ▼
-                                                                    AgentCore harness (InvokeHarness state)
-                                                       Composio MCP session AS the tenant · Memory · reply text back
-                                                                                          │ PutEvents telegram.reply
-                                                                                          ▼
-                                                                    EventBridge API destination → Bot API sendMessage
-```
-
-**No code on the path.** The assistant is a harness: model, default prompt, memory, and limits are
-configuration in the runtime stack. Per invocation the workflow passes the message, a system prompt
-built from the tenant row, and the tenant's Composio MCP session (`assistant.composioMcpUrl`, minted by the
-seed and bound to the owner's connected accounts), so the only SaaS the model can reach is that
-tenant's; Composio's meta tools keep the context small, and the harness `allowedTools` fences the
-server. The harness
-threads the conversation and extracts facts through the platform Memory instance (actor = tenant +
-person), surviving microVM expiry. Each person gets a fresh session per day, rolling at 3 AM in the
-tenant's timezone (`sessionDayOffsetMinutes`, computed by the seed; drifts an hour across DST until
-the next seed); facts, preferences, and per-session summaries are retrieved across all prior days. The reply goes out through an EventBridge API destination whose
-endpoint holds the bot token (resolved from the Telegram secret at deploy); failures land in a
-dead-letter queue with an alarm. Replies over Telegram's 4096-character limit fail there — the prompt
-asks for brevity; splitting is deferred until it is actually needed.
-
-Identity is Telegram's: the Bot API vouches for the sender's user id, the People table (seeded from
-each tenant's `people`) maps it to a tenant and a role, and the workflow never invokes the harness
-for anyone else.
-
-Setup, once:
+### 5. Telegram bot
 
 1. BotFather → `/newbot`; copy the token.
 2. Put it in the Telegram secret (keep the generated `WEBHOOK_PATH`):
@@ -331,27 +376,12 @@ Per person: add them to the tenant file's `people` with their Telegram user id (
 the id is `message.from.id` in the workflow's execution input), then re-seed. Removing them from the
 file and re-seeding removes their access.
 
-Prove it without Telegram: `npx tsx scripts/test-assistant.mts "who is Sarah?"` (invokes the harness
-with the same arguments the workflow uses).
+### 6. Browserbase
 
-### Saved browser: `/login`
-
-A business signs into the sites it uses once, and the platform keeps that browser. The owner sends
-`/login <site>` to the bot; the Telegram workflow starts the browser-login workflow
-(`workflows/browser-login.ts`) instead of the assistant. It opens a Browserbase session on the
-tenant's context (the saved browser: cookies and logins, encrypted in Browserbase's vault, keyed on
-the row as `browser.contextId`), sends the owner the interactive live view link, waits ten minutes,
-and releases the session so the context syncs. One window at a time per tenant: two sessions on one
-context race on release and the later one overwrites the earlier one's logins, so the row carries the
-window's end (`browser.loginUntil`) and a second `/login` meanwhile is answered, not started. Captcha
-solving is Browserbase's, on by default. The windowed live view has an address bar; the owner types the
-site's URL there.
-Only the owner's Telegram id may send `/login`, and only for a tenant with `browser.enabled`.
-
-Setup, once: create a Browserbase project. Its id goes in `cdk.json` context as
-`browserbaseProjectId` (not a secret; a literal in the definition). The key goes in the secret and,
-because CloudFormation resolves a secret reference only when the resource itself changes, into the
-EventBridge Connection directly (the same applies to every Connection here after a rotation):
+Create a Browserbase project. Its id goes in `cdk.json` context as `browserbaseProjectId` (not a
+secret; a literal in the definition). The key goes in the secret and, because CloudFormation resolves
+a secret reference only when the resource itself changes, into the EventBridge Connection directly
+(the same applies to every Connection here after a rotation):
 
 ```bash
 aws secretsmanager put-secret-value --secret-id <browserbaseSecretArn> --secret-string '{"BROWSERBASE_API_KEY":"bb_live_..."}'
@@ -360,23 +390,30 @@ aws events update-connection --name <BrowserbaseConnection name> \
 ```
 
 The first `/login` for a tenant creates its context and the reply names the id; paste it into the
-tenant file as `browser.contextId` so a re-seed keeps it. What the assistant does with that browser
-is step two (a per-tenant Stagehand session); today nothing but the owner drives it.
+tenant file as `browser.contextId` so a re-seed keeps it.
 
-## Cost & scale notes
+## Where things live
 
-- Everything (HTTP API, two Lambdas, Step Functions, DynamoDB, SQS, EventBridge) is on-demand and ~$0 idle;
-  per call you pay OpenAI Realtime usage plus Lambda duration for the call's length
-  (a 10-minute call at 512 MB is well under a cent).
-- Each call is its own invocation with its own 512 MB — the session Lambda holds a socket and
-  does JSON, no audio. `sessionMaxConcurrency` (default 20) caps simultaneous calls; the account
-  concurrency limit is the hard ceiling.
-- There is no mid-call failover: if an invocation dies the call drops and the caller calls back.
-  Undelivered jobs wait in SQS up to an hour.
-- IaC is AWS CDK (TypeScript, `packages/infrastructure/`); Lambdas are bundled by
-  `NodejsFunction` (esbuild) at deploy time.
-- Calls table rows expire after 90 days (TTL). All tables use `RemovalPolicy.DESTROY` while this
-  is a learning stack; flip to `RETAIN` before real data.
+Each package has its own README: what rented service it sits on, what its code is allowed to
+do, and how to verify it. Start there when changing one. The `new-tenant`, `new-tool`, and
+`new-agent` skills under `.claude/skills/` are the procedures for the recurring changes.
+
+| Path | What |
+|---|---|
+| `packages/voice-session/src/webhook.ts` | Lambda (~40 lines, stdlib): verifies the OpenAI webhook signature and starts the accept workflow. The one piece of the call path that must be code |
+| `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
+| `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
+| `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload. To add a tool: a zod args schema, a handler, a `tool({...})` entry, then its name in a tenant's `tools`. Tools that need durability publish an event and return; a workflow consumes it |
+| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, browser-login, call-ended, composio-health, assistant-health, and the four automations): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair). `automation.ts` is the descriptor the four automations export |
+| `tenants/<id>.ts`, `tenants/index.ts` | What that tenant runs on the bus, and the registry (one line per tenant). Tracked, unlike the rows |
+| `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant from its file |
+| `packages/infrastructure/stacks/runtime-stack.ts` | The assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram reply path, and the platform workflows every tenant shares: Telegram, browser login, call-ended, the two canaries |
+| `packages/infrastructure/stacks/voice-stack.ts`, `memory-stack.ts`, `identity-stack.ts` | The call path (API, two Lambdas, accept workflow, tables, bus, queues, alarm topic); caller memory; credential providers |
+| `packages/infrastructure/bin/app.ts`, `infra_utils/` | Stack wiring; alarm and state-machine presets |
+| `packages/shared/src/` | `types.ts` (`TenantConfig` zod schema, records, events), `store.ts` (DynamoDB behind one `Store` interface plus an in-memory version; no leads table, the CRM holds the lead and the call row is the audit), `events.ts` (EventBridge publisher), `config.ts` (env, secrets, OpenAI client, logger), `composio.ts` (Composio SDK, scripts only) |
+| `scripts/` | `seed-tenant.ts` (row upsert), `check-tenant.ts` (pre-flight), `connect-composio.mts` (consent links), `telegram-webhook.mts`, and the `test-*.mts` provers |
+| `tenants/example.json` | Example tenant config |
+| `packages/*/test/` | vitest suites; the infrastructure one synthesizes every definition |
 
 ## Roadmap
 
