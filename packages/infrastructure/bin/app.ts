@@ -16,7 +16,6 @@ const callerMemory = { memoryId: memory.memory.memoryId, memoryArn: memory.memor
 const voice = new VoiceStack(app, 'wnk-voice-dev', {
   prefix,
   env,
-  alarmEmail: process.env.ALARM_EMAIL,
   callerMemory,
 });
 const identity = new IdentityStack(app, 'wnk-identity-dev', {

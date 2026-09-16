@@ -76,11 +76,17 @@ do, and how to verify it. Start there when changing one.
 npm install
 npm test
 npx cdk bootstrap                           # once per account/region
-ALARM_EMAIL=you@yourdomain.com npm run deploy
+npm run deploy
 ```
 
-`ALARM_EMAIL` subscribes an address to the alarm topic (confirm the SNS email once). Every
-stack's alarms page that topic: dead-letter queues holding anything, and Lambda errors.
+Every stack's alarms page one SNS topic (`<prefix>-alarms`): dead-letter queues holding
+anything, workflow executions that failed, and Lambda errors. The topic is created by the
+stack; **who it pages is not** — subscribe once, out of band, and no later deploy can remove it:
+
+```bash
+aws sns subscribe --topic-arn <alarmTopicArn output> --protocol email \
+  --notification-endpoint you@yourdomain.com     # then confirm the email
+```
 
 Outputs (printed by `npm run deploy`, or `aws cloudformation describe-stacks --stack-name wnk-voice-dev`): `webhookUrl`, `openaiSecretArn`, `tenantsTableName`, `callsTableName`, `eventBusName`, `sessionQueueUrl`, `sessionFunctionName`.
 

@@ -12,7 +12,6 @@ import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sns from 'aws-cdk-lib/aws-sns';
-import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { dlqAlarm, errorAlarm, failedExecutionsAlarm } from '../infra_utils/alarms.js';
@@ -33,8 +32,6 @@ export interface VoiceStackProps extends cdk.StackProps {
   readonly prefix: string;
   /** Ceiling on simultaneous calls (SQS scaling config minimum is 2). */
   readonly sessionMaxConcurrency?: number;
-  /** Where alarms page. Optional: the topic exists either way; the email is the first subscriber. */
-  readonly alarmEmail?: string;
   /** Caller memory (AgentCore Memory): the accept workflow recalls, the session writes. */
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
 }
@@ -112,10 +109,12 @@ export class VoiceStack extends cdk.Stack {
 
     this.bus = new events.EventBus(this, 'Events', { eventBusName: `${prefix}-events` });
 
-    // One topic for every alarm on the platform. Subscribe an email at deploy
-    // (ALARM_EMAIL) or add subscribers in the console — operator data, not code.
+    // One topic for every alarm on the platform. Who it pages is operator data,
+    // not code: subscribe on the topic itself (`aws sns subscribe`, or the
+    // console). Kept out of the template deliberately — a subscription CDK owns
+    // is one a deploy without the variable set would silently delete, and the
+    // failure mode of alerting is silence, which looks exactly like health.
     this.alarmTopic = new sns.Topic(this, 'Alarms', { topicName: `${prefix}-alarms`, displayName: 'WNK platform alarms' });
-    if (props.alarmEmail) this.alarmTopic.addSubscription(new subs.EmailSubscription(props.alarmEmail));
 
     // Call jobs wait here until the session Lambda finishes the call. Visibility
     // must cover the Lambda timeout (16 min), so a retry would reach a call that
@@ -297,6 +296,8 @@ export class VoiceStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'peopleTableName', { value: this.peopleTable.tableName });
     new cdk.CfnOutput(this, 'callsTableName', { value: this.callsTable.tableName });
     new cdk.CfnOutput(this, 'eventBusName', { value: this.bus.eventBusName });
+    /** Subscribe an address here once; no deploy touches the subscribers. */
+    new cdk.CfnOutput(this, 'alarmTopicArn', { value: this.alarmTopic.topicArn });
     new cdk.CfnOutput(this, 'sessionQueueUrl', { value: sessionQueue.queueUrl });
     new cdk.CfnOutput(this, 'sessionFunctionName', { value: sessionFn.functionName });
   }
