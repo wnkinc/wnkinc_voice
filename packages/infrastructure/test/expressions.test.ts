@@ -54,7 +54,11 @@ describe('htmlToTextExpr', () => {
 });
 
 describe('composio health expressions', () => {
-  const row = (crm: boolean, email: boolean) => ({ crm: crm ? { M: { type: { S: 'hubspot' }, via: { S: 'composio' } } } : undefined, emailResponder: { M: { enabled: { BOOL: email } } } });
+  // `Bool`, as the aws-sdk scan integration this workflow reads with returns
+  // it — not the optimized integration's `BOOL`. The fixture spelled it the
+  // API way while the expression did too, so both were wrong and this test
+  // stayed green while gmail went unchecked in production.
+  const row = (crm: boolean, email: boolean) => ({ crm: crm ? { M: { type: { S: 'hubspot' }, via: { S: 'composio' } } } : undefined, emailResponder: { M: { enabled: { Bool: email } } } });
   it('expects hubspot for crm via composio and gmail for the email responder', async () => {
     expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(true, true) })).toEqual(['hubspot', 'gmail']);
     expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(true, false) })).toEqual(['hubspot']);

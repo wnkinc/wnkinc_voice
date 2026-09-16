@@ -23,11 +23,16 @@ export interface ComposioHealthRefs {
 
 // ---- Expressions (exported unwrapped so the tests can evaluate them) ---------
 
-/** Toolkit slugs a tenant row (DynamoDB AttributeValue shape) must have ACTIVE in Composio. */
+/**
+ * Toolkit slugs a tenant row must have ACTIVE in Composio. `Bool`, not `BOOL`:
+ * this row comes from the aws-sdk scan integration, which spells the all-caps
+ * AttributeValue tags in SDK case. The optimized `dynamodb:getItem` used by the
+ * other workflows returns `BOOL`, so the two spellings are not interchangeable.
+ */
 export const expectedToolkitsExpr = (rowExpr: string) => [
   '$append(',
   `(${hasCrm(rowExpr)} ? ['hubspot'] : []),`,
-  `(${rowExpr}.emailResponder.M.enabled.BOOL = true ? ['gmail'] : [])`,
+  `(${rowExpr}.emailResponder.M.enabled.Bool = true ? ['gmail'] : [])`,
   ')',
 ].join(' ');
 
@@ -61,7 +66,7 @@ export function composioHealthDefinition(refs: ComposioHealthRefs) {
               Assign: {
                 tenantId: q('$states.input.tenantId.S'),
                 expected: q(expectedToolkitsExpr('$states.input')),
-                needsAny: q('$states.input.assistant.M.enabled.BOOL = true'),
+                needsAny: q('$states.input.assistant.M.enabled.Bool = true'),
               },
               Output: q('$states.input'), Next: 'UsesComposio',
             },

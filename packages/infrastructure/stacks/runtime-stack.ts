@@ -16,6 +16,7 @@ import { BROWSERBASE_API, COMPOSIO_API } from '../workflows/asl.js';
 import { expressNoData, grantHttp } from '../infra_utils/state-machine.js';
 import { browserLoginDefinition } from '../workflows/browser-login.js';
 import { callEndedDefinition } from '../workflows/call-ended.js';
+import { assistantHealthDefinition } from '../workflows/assistant-health.js';
 import { composioHealthDefinition } from '../workflows/composio-health.js';
 import { telegramDefinition } from '../workflows/telegram.js';
 import { Construct } from 'constructs';
@@ -325,6 +326,34 @@ export class RuntimeStack extends cdk.Stack {
       targets: [new targets.SfnStateMachine(healthWorkflow, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: startDlq })],
     });
     failedExecutionsAlarm(this, 'ComposioHealthFailed', healthWorkflow, props.alarmTopic, 'Composio health: a tenant has lost a connection');
+
+    // Assistant health canary (workflows/assistant-health.ts): every morning,
+    // make each tenant's assistant answer one read-only question. The alarms
+    // around it only fire when a person's message fails; nobody messages the
+    // bot on a quiet week, so this is the traffic that proves it still works.
+    // Ten minutes after the connection check, so a failure here is about the
+    // harness rather than about Composio.
+    const assistantHealth = new sfn.StateMachine(this, 'AssistantHealthWorkflow', {
+      stateMachineName: `${prefix}-assistant-health`,
+      tracingEnabled: true,
+      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(assistantHealthDefinition({
+        tenantsTable: props.tenantsTable.tableName,
+        harnessArn: harness.attrArn,
+        composioProviderArn: props.composioProviderArn,
+      }))),
+      timeout: cdk.Duration.minutes(10),
+    });
+    props.tenantsTable.grantReadData(assistantHealth);
+    assistantHealth.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:InvokeHarness', 'bedrock-agentcore:InvokeAgentRuntime'],
+      resources: [harness.attrArn, `${harness.attrArn}/*`],
+    }));
+    new events.Rule(this, 'AssistantHealthSchedule', {
+      description: 'Daily assistant liveness probe for every tenant with the assistant on (15:10 UTC)',
+      schedule: events.Schedule.cron({ minute: '10', hour: '15' }),
+      targets: [new targets.SfnStateMachine(assistantHealth, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: startDlq })],
+    });
+    failedExecutionsAlarm(this, 'AssistantHealthFailed', assistantHealth, props.alarmTopic, 'Assistant health: a tenant assistant did not answer');
 
     new cdk.CfnOutput(this, 'assistantHarnessArn', { value: harness.attrArn });
     new cdk.CfnOutput(this, 'callEndedWorkflowArn', { value: endedWorkflow.stateMachineArn });

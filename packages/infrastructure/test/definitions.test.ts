@@ -110,7 +110,7 @@ describe('synthesized state machine definitions', () => {
 
   it('synthesizes every workflow, platform ones in the platform stacks and tenant ones in the tenant stack', () => {
     expect(defs.map((d) => `${d.stack}/${d.id.replace(/[0-9A-F]{8}$/, '')}`).sort()).toEqual([
-      'wnk-runtime-dev/BrowserLoginWorkflow', 'wnk-runtime-dev/CallEndedWorkflow', 'wnk-runtime-dev/ComposioHealthWorkflow', 'wnk-runtime-dev/TelegramWorkflow',
+      'wnk-runtime-dev/AssistantHealthWorkflow', 'wnk-runtime-dev/BrowserLoginWorkflow', 'wnk-runtime-dev/CallEndedWorkflow', 'wnk-runtime-dev/ComposioHealthWorkflow', 'wnk-runtime-dev/TelegramWorkflow',
       'wnk-tenant-wnk-dev/CrmCallWorkflow', 'wnk-tenant-wnk-dev/CrmLeadWorkflow', 'wnk-tenant-wnk-dev/LeadEmailWorkflow', 'wnk-tenant-wnk-dev/OwnerAlertWorkflow',
       'wnk-voice-dev/AcceptWorkflow',
     ]);
@@ -155,6 +155,27 @@ describe('synthesized state machine definitions', () => {
         const body = typeof s.Arguments.RequestBody === 'object' ? s.Arguments.RequestBody : {};
         return !(body.user_id || body.connected_account_id || s.Arguments.QueryParameters?.user_ids);
       }).map(([p]) => `${p} does not name the tenant`)));
+
+    // The two DynamoDB integrations disagree on the spelling of the all-caps
+    // AttributeValue tags: the optimized `dynamodb:getItem` answers with the
+    // API's `BOOL`/`NULL`, the generic `aws-sdk:dynamodb:*` with the SDK's
+    // `Bool`/`Null`. Reading the wrong one is not an error — it is `undefined`,
+    // so the condition is quietly false and the branch silently never taken.
+    // That shipped once: composio-health stopped checking Gmail at all.
+    it('reads booleans in the casing its DynamoDB integration returns', () => {
+      const failures: string[] = [];
+      for (const d of defs) {
+        const sdk = /aws-sdk:dynamodb/.test(d.text);
+        const optimized = /arn:aws:states:::dynamodb:/.test(d.text);
+        if (sdk === optimized) continue; // none, or both: nothing to infer
+        const wrong = sdk ? /\.(BOOL|NULL)\b/g : /\.(Bool|Null)\b/g;
+        const right = sdk ? 'Bool/Null' : 'BOOL/NULL';
+        for (const m of d.text.match(wrong) ?? []) {
+          failures.push(`${d.stack}/${d.id}: reads ${m} but its ${sdk ? 'aws-sdk' : 'optimized'} integration returns ${right}`);
+        }
+      }
+      expect(failures, failures.join('\n')).toEqual([]);
+    });
 
     it('every workflow with a costly side effect checks and writes a once-marker', () => each((_, states) => {
       if (!states.some(([, s]) => isCostly(s))) return [];
