@@ -34,6 +34,10 @@ should live.
   which skips the gate). A change to a stock definition must show as a diff only on the tenant
   machines it was meant for; then `npm run test:update` records it in the same
   commit. Never update a snapshot to make a diff go away without reading it.
+- The coding agent runs as the `wnk-ops` operator profile: rows, secrets,
+  Connections, executions, reads. It cannot deploy or change IAM, and it must
+  not switch profiles to get around that. An AccessDenied names the action;
+  the fix is a line in the `WnkOperate` policy, applied by a person.
 - Build deferred items only when their trigger fires. The `new-tenant` skill keeps
   the trigger list. Don't pre-build membership models, per-tenant KMS keys, or
   config lineage.

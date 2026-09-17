@@ -318,6 +318,12 @@ config drift between file and row, secrets, services, owner alert channel, Gmail
 ### Prerequisites
 
 - Node 22+, AWS CLI configured (CDK bootstrap runs once per account/region: `npx cdk bootstrap`)
+- Two AWS profiles. `wnk-ops` is the operator: an IAM user with the `WnkOperate` policy, which can
+  write tenant rows, platform secrets, and Connections, start and read executions, read logs and
+  metrics, and run `cdk diff`, but cannot touch CloudFormation or IAM. It is the laptop's default
+  profile and the one this repo pins for its coding agent (`.claude/settings.json`). Admin is a
+  named profile (`wnk-admin`) used by hand for deploys and account changes. A script that hits an
+  AccessDenied names the exact action; add it to the policy, never reach for admin.
 - An OpenAI project with Realtime access (note the `proj_…` id under *Settings → Project → General*)
 - A Twilio account with a phone number
 
