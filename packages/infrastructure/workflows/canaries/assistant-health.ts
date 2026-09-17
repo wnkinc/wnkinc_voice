@@ -6,7 +6,7 @@
  * the rest of the path, none of which an ACTIVE connection vouches for: that
  * the model answers through the OpenAI Connection, that Memory reads and
  * writes, and that a tool call reaches Composio and comes back. It runs the
- * same loop the Telegram and SMS workflows run (workflows/assistant-loop.ts),
+ * same loop the Telegram and SMS workflows run (workflows/assistant/assistant-loop.ts),
  * with search_contacts as its one allowed tool.
  *
  * The probe reads and never writes: it asks after a phone number no contact
@@ -18,8 +18,8 @@
  * tool result and the model apologizes in prose, and prose passes here. The
  * connection is composio-health's job; this is liveness.
  */
-import { q } from './asl.js';
-import { assistantLoopStart, assistantLoopStates, assistantPrepare, assistantSaveTurnState, type AssistantLoopRefs } from './assistant-loop.js';
+import { q } from '../asl.js';
+import { assistantLoopStart, assistantLoopStates, assistantPrepare, assistantSaveTurnState, type AssistantLoopRefs } from '../assistant/assistant-loop.js';
 
 export interface AssistantHealthRefs extends AssistantLoopRefs {
   tenantsTable: string;

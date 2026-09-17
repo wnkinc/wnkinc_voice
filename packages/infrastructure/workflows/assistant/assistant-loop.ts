@@ -22,7 +22,7 @@
  *   plus `assistantPrepare()` (tool definitions, counters).
  * What it leaves: $reply (the text to send) and $tokens (for usage).
  */
-import { COMPOSIO_API, OPENAI_API, composio, q } from './asl.js';
+import { COMPOSIO_API, OPENAI_API, composio, q } from '../asl.js';
 
 export interface AssistantLoopRefs {
   openaiConnectionArn: string;

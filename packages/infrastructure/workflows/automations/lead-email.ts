@@ -11,7 +11,7 @@
  * against redelivery, not exactly-once. Toolkit versions are not pinned
  * here (dev); pin in prod with a `version` field on the execute bodies.
  */
-import { checkDone, composio, hasCrm, markDone, q } from './asl.js';
+import { checkDone, composio, hasCrm, markDone, q } from '../asl.js';
 import type { Automation } from './automation.js';
 
 export interface LeadEmailRefs {

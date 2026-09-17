@@ -5,10 +5,10 @@
  * definition, never a Choice inside a shared one.
  */
 import type { TenantAutomations } from '../packages/infrastructure/stacks/tenant-stack.js';
-import { crmCall } from '../packages/infrastructure/workflows/crm-call.js';
-import { crmLead } from '../packages/infrastructure/workflows/crm-lead.js';
-import { leadEmail } from '../packages/infrastructure/workflows/lead-email.js';
-import { ownerAlert } from '../packages/infrastructure/workflows/owner-alert.js';
+import { crmCall } from '../packages/infrastructure/workflows/automations/crm-call.js';
+import { crmLead } from '../packages/infrastructure/workflows/automations/crm-lead.js';
+import { leadEmail } from '../packages/infrastructure/workflows/automations/lead-email.js';
+import { ownerAlert } from '../packages/infrastructure/workflows/automations/owner-alert.js';
 
 export const wnk: TenantAutomations = {
   tenantId: 'wnk',

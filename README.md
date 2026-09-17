@@ -105,7 +105,7 @@ number the receptionist answers), and the sender's number is the identity.
                                                                                           │ unknown sender / assistant off? → done, silently
                                                                                           │ /login from the owner? → browser-login workflow
                                                                                           ▼
-                                                              the agent loop (workflows/assistant-loop.ts):
+                                                              the agent loop (workflows/assistant/assistant-loop.ts):
                                                     Memory: this session's history + what it recalls about the person
                                                     ──▶ OpenAI Responses (HTTP task) ──▶ tool call? gate it, run it through
                                                         Composio AS the tenant, back to the model ──▶ ... until it answers
@@ -115,7 +115,7 @@ number the receptionist answers), and the sender's number is the identity.
 ```
 
 **No code and no runtime on the path.** The agent loop is states inside the workflow
-(`workflows/assistant-loop.ts`, shared by the Telegram and SMS workflows and the canary). The model
+(`workflows/assistant/assistant-loop.ts`, shared by the Telegram and SMS workflows and the canary). The model
 makes every judgment: which tool, what arguments, when to stop. The states between its decisions are
 mechanical, and they are the seam the platform controls: the tool must be on the tenant row's
 `assistant.tools` list, every Composio call names the tenant, tool results are bounded, rounds are
@@ -142,7 +142,7 @@ Telegram workflow as the tenant's owner; the reply lands on their Telegram and i
 
 **SMS.** Twilio posts each inbound text to a secret path on the same API. Twilio sends a
 form-encoded body, which is not JSON and so cannot start a state machine directly, so the route
-puts the raw string on a queue and an EventBridge Pipe starts the SMS workflow (`workflows/sms.ts`)
+puts the raw string on a queue and an EventBridge Pipe starts the SMS workflow (`workflows/assistant/sms.ts`)
 with it; the workflow's first state parses it. The People lookup is `sms:<sender>`, plus one check
 Telegram cannot make: the number texted must be that person's tenant's number. From there it is the
 Telegram path: the same loop, a session per phone per day, an actor
@@ -155,7 +155,7 @@ inbound webhook from the service.
 
 **Saved browser: `/login`.** A business signs into the sites it uses once, and the platform keeps
 that browser. The owner sends `/login <site>` to the bot; the Telegram workflow starts the
-browser-login workflow (`workflows/browser-login.ts`) instead of the assistant. It opens a Browserbase
+browser-login workflow (`workflows/assistant/browser-login.ts`) instead of the assistant. It opens a Browserbase
 session on the tenant's context (the saved browser: cookies and logins, encrypted in Browserbase's
 vault, keyed on the row as `browser.contextId`), sends the owner the interactive live view link, waits
 ten minutes, and releases the session so the context syncs. One window at a time per tenant: two
@@ -221,19 +221,19 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `active` | `false` → calls rejected with SIP 603 |
 | `business` | `name`, `description`, `services`, `hours`, `timezone`: the facts every service draws on (receptionist prompt, assistant prompt, lead email, CRM notes) |
 | `people` | The tenant's own people with their channel ids: `telegramId`, `phone` (E.164, for SMS), or both. `notify_owner` alerts go to the person with role `owner` and a `telegramId`; the assistant answers anyone listed, on whichever channel they have. |
-| `receptionist.session` | Passed to OpenAI Realtime under these same keys: `model` (default `gpt-realtime-2.1`), `audio.output.voice` (default `marin`), `tools` (subset of `record_lead`, `notify_owner`, `end_call`). Levers not yet built are listed in `packages/voice-session/README.md` |
+| `receptionist.session` | Passed to OpenAI Realtime under these same keys: `model` (default `gpt-realtime-2.1`), `audio.output.voice` (default `marin`), `tools` (subset of `record_lead`, `notify_owner`, `end_call`). Levers not yet built are listed in `packages/receptionist/README.md` |
 | `receptionist.instructions` | What the platform composes into the prompt alongside `business`: `agentName` (default `Alex`), `extra` (tenant-specific rules) |
 | `receptionist.greeting` | Spoken verbatim on connect, through a separate response request |
 | `receptionist.maxCallSeconds` (default 600, max 840) | Ours, not OpenAI's: the agent is asked to wrap up, then the call is hung up |
 | `crm` | `{ "type": "hubspot", "via": "composio" }` enables caller recognition, CRM sync, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
 | `emailResponder` | `{ enabled }`: owner follow-up email per lead, from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default off; the workflow refuses a tenant whose flag is off. |
-| `assistant` | `{ enabled, tools }`: the chat assistant for the tenant's people. `tools` is the allow-list, by name from the catalog in `workflows/assistant-loop.ts` (`search_contacts`, `add_note`; both need the HubSpot consent). Empty means it answers from the prompt and memory alone. |
+| `assistant` | `{ enabled, tools }`: the chat assistant for the tenant's people. `tools` is the allow-list, by name from the catalog in `workflows/assistant/assistant-loop.ts` (`search_contacts`, `add_note`; both need the HubSpot consent). Empty means it answers from the prompt and memory alone. |
 | `browser` | `{ enabled, contextId }`: the tenant's saved browser in Browserbase (cookies, logins). The browser-login workflow creates the context on the owner's first `/login` and writes it to the row; copy it into the file when the reply says so, or a re-seed starts a fresh browser. |
 
 ### The automations menu
 
 Each after-call automation is a file in `packages/infrastructure/workflows/` exporting an
-`Automation` descriptor (`workflows/automation.ts`: the bus event that starts it, Express or not,
+`Automation` descriptor (`workflows/automations/automation.ts`: the bus event that starts it, Express or not,
 timeout, grants, definition). A tenant file lists the ones it runs:
 
 | Descriptor | On | What it does |
@@ -386,7 +386,7 @@ the `new-tenant` skill.
 
 Call the number. With Twilio Elastic SIP Trunking the `To` header carries the OpenAI
 project id and the dialed number arrives in `Diversion`; the accept workflow's SIP parsing
-(`SIP_CALLED_HEADERS` in `packages/infrastructure/workflows/accept.ts`) handles that. If another
+(`SIP_CALLED_HEADERS` in `packages/infrastructure/workflows/receptionist/accept.ts`) handles that. If another
 carrier puts it elsewhere, add the header name there.
 
 ### 5. Telegram bot
@@ -441,11 +441,11 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 
 | Path | What |
 |---|---|
-| `packages/voice-session/src/webhook.ts` | Lambda (~40 lines, stdlib): verifies the OpenAI webhook signature and starts the accept workflow. The one piece of the call path that must be code |
-| `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
-| `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
-| `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload. To add a tool: a zod args schema, a handler, a `tool({...})` entry, then its name in a tenant's `tools`. Tools that need durability publish an event and return; a workflow consumes it |
-| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, sms, browser-login, call-ended, composio-health, assistant-health, and the four automations; `assistant-loop.ts` is the agent loop and tool catalog the two chat workflows and the canary share): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair). `automation.ts` is the descriptor the four automations export |
+| `packages/receptionist/src/webhook.ts` | Lambda (~40 lines, stdlib): verifies the OpenAI webhook signature and starts the accept workflow. The one piece of the call path that must be code |
+| `packages/receptionist/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
+| `packages/receptionist/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
+| `packages/receptionist/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload. To add a tool: a zod args schema, a handler, a `tool({...})` entry, then its name in a tenant's `tools`. Tools that need durability publish an event and return; a workflow consumes it |
+| `packages/infrastructure/workflows/` | One file per Step Functions definition, grouped by system: `receptionist/` (accept, call-ended), `assistant/` (the agent loop and tool catalog, telegram, sms, browser-login), `automations/` (the descriptor and the four stock automations tenants pick from), `canaries/` (composio-health, assistant-health): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair). `automation.ts` is the descriptor the four automations export |
 | `tenants/<id>.ts`, `tenants/index.ts` | What that tenant runs on the bus, and the registry (one line per tenant). Tracked, unlike the rows |
 | `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant from its file |
 | `packages/infrastructure/stacks/runtime-stack.ts` | The platform workflows every tenant shares: Telegram and SMS (each running the assistant loop), browser login, call-ended, the two canaries, and the Telegram reply path |

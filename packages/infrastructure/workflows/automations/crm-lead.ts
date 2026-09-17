@@ -6,7 +6,7 @@
  * a follow-up task due the next business morning. Once-marker before, mark
  * after; a failed execution alarms.
  */
-import { checkDone, composio, hasCrm, markDone, q } from './asl.js';
+import { checkDone, composio, hasCrm, markDone, q } from '../asl.js';
 import type { Automation } from './automation.js';
 
 export interface CrmLeadRefs {

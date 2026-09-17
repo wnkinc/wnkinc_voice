@@ -9,13 +9,13 @@
  * it (a direct start with {"body": ...} is accepted too, for tests). Sender ->
  * person -> tenant as on Telegram, plus one check Telegram cannot make: the
  * number texted must be that person's tenant's number. Then the same loop
- * (workflows/assistant-loop.ts) with the tenant's allowed tools. The reply
+ * (workflows/assistant/assistant-loop.ts) with the tenant's allowed tools. The reply
  * is an HTTP task straight to Twilio's Messages API (form-encoded, basic
  * auth through the Connection), addressed with the account SID the inbound
  * post carried, so the URL needs no configuration. The turn is written to
  * the person's memory; tokens are metered per turn.
  */
-import { q } from './asl.js';
+import { q } from '../asl.js';
 import { assistantLoopStart, assistantLoopStates, assistantPrepare, assistantSaveTurnState, type AssistantLoopRefs } from './assistant-loop.js';
 
 export const TWILIO_API = 'https://api.twilio.com/2010-04-01/';

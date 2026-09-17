@@ -2,13 +2,13 @@
  * My Assistant: Telegram -> API Gateway -> this workflow -> the agent loop.
  *
  * Input is Telegram's Update object. Sender -> person -> tenant, then the
- * loop (workflows/assistant-loop.ts) runs the model with the tenant's
+ * loop (workflows/assistant/assistant-loop.ts) runs the model with the tenant's
  * allowed tools, each executed here through Composio naming the tenant. The
  * reply is published as telegram.reply; the runtime stack's reply rule
  * delivers it. The turn is written to the person's memory; tokens are
  * metered per turn.
  */
-import { q } from './asl.js';
+import { q } from '../asl.js';
 import { assistantLoopStart, assistantLoopStates, assistantPrepare, assistantSaveTurnState, type AssistantLoopRefs } from './assistant-loop.js';
 
 export interface TelegramRefs extends AssistantLoopRefs {
@@ -54,7 +54,7 @@ export function telegramDefinition(refs: TelegramRefs) {
         Assign: { tenant: q('$states.result.Item') }, Output: q('$states.input'), Next: 'IsLogin',
       },
       // `/login ...` from the owner, with the browser product on: the login
-      // handoff (workflows/browser-login.ts), not the assistant. The command
+      // handoff (workflows/assistant/browser-login.ts), not the assistant. The command
       // opens a browser the business signs into, so only the owner may send it.
       IsLogin: {
         Type: 'Choice',

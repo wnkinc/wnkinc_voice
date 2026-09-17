@@ -18,7 +18,7 @@
  * (resolved from the secrets when the Connection is created or changed; a
  * rotated key also needs `aws events update-connection`).
  */
-import { composio, hasCrm, httpTask, OPENAI_API, q } from './asl.js';
+import { composio, hasCrm, httpTask, OPENAI_API, q } from '../asl.js';
 
 export interface AcceptRefs {
   tenantsTable: string;

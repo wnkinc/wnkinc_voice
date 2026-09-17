@@ -14,7 +14,7 @@
  * A new toolkit is one more line in `expectedToolkitsExpr`. A new tenant is
  * covered by the scan; nothing here names one.
  */
-import { composio, hasCrm, q } from './asl.js';
+import { composio, hasCrm, q } from '../asl.js';
 
 export interface ComposioHealthRefs {
   tenantsTable: string;

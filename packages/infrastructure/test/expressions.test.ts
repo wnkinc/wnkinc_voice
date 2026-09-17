@@ -1,11 +1,11 @@
 import jsonata from 'jsonata';
 import { describe, expect, it } from 'vitest';
-import { htmlToTextExpr, sipNumberExpr, SIP_CALLED_HEADERS, SIP_CALLER_HEADERS } from '../workflows/accept.js';
-import { loginSiteExpr } from '../workflows/browser-login.js';
-import { expectedToolkitsExpr, missingToolkitsExpr } from '../workflows/composio-health.js';
-import { nextBusinessMorningExpr } from '../workflows/crm-lead.js';
-import { parseFormExpr } from '../workflows/sms.js';
-import { ASSISTANT_TOOLS, callsExpr, historyExpr, outputsExpr, textExpr, toolResultExpr } from '../workflows/assistant-loop.js';
+import { htmlToTextExpr, sipNumberExpr, SIP_CALLED_HEADERS, SIP_CALLER_HEADERS } from '../workflows/receptionist/accept.js';
+import { loginSiteExpr } from '../workflows/assistant/browser-login.js';
+import { expectedToolkitsExpr, missingToolkitsExpr } from '../workflows/canaries/composio-health.js';
+import { nextBusinessMorningExpr } from '../workflows/automations/crm-lead.js';
+import { parseFormExpr } from '../workflows/assistant/sms.js';
+import { ASSISTANT_TOOLS, callsExpr, historyExpr, outputsExpr, textExpr, toolResultExpr } from '../workflows/assistant/assistant-loop.js';
 import { ASSISTANT_TOOL_NAMES } from '../../shared/src/types.js';
 
 const evalExpr = (expr: string, input: unknown, bindings: Record<string, unknown> = {}) => {

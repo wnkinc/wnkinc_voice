@@ -8,7 +8,7 @@
  * is harmless, and it is neither money nor customer-facing. A tenant with
  * the tool on but no owner channel fails loudly (alarm).
  */
-import { q } from './asl.js';
+import { q } from '../asl.js';
 import type { Automation } from './automation.js';
 
 export interface OwnerAlertRefs {

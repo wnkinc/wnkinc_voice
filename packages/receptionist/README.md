@@ -1,4 +1,4 @@
-# voice-session
+# receptionist
 
 The phone receptionist: two Lambdas and the accept workflow that take a call from
 ring to hangup and publish what happened. Everything that carries audio, holds credentials, or
@@ -13,7 +13,7 @@ fails closed.
 | OpenAI Realtime SIP | Answers the SIP call, fires the signed `realtime.call.incoming` webhook, exposes accept/reject and the call WebSocket. | https://platform.openai.com/docs/guides/realtime-sip · https://platform.openai.com/docs/guides/webhooks |
 | OpenAI Agents SDK (`RealtimeSession` + `OpenAIRealtimeSIP`) | Runs the tool loop: validates arguments against zod, calls our handler, returns the result to the model. | https://github.com/openai/openai-agents-js/tree/main/examples/realtime-twilio-sip (the shape `call.ts` copies) |
 | API Gateway HTTP + Lambda | Receives the webhook; the Lambda only verifies the signature. | `infrastructure/stacks/voice-stack.ts` |
-| Step Functions accept workflow (Express, no execution data) | Called number → tenant, claim, accept, caller recognition, job to SQS. All managed tasks; SIP parsing is a unit-tested JSONata expression. | `infrastructure/workflows/accept.ts` |
+| Step Functions accept workflow (Express, no execution data) | Called number → tenant, claim, accept, caller recognition, job to SQS. All managed tasks; SIP parsing is a unit-tested JSONata expression. | `infrastructure/workflows/receptionist/accept.ts` |
 | SQS (batch size 1, partial batch failure) | Hands one call to one session invocation; a failed attach dead-letters at once (a retry after the 16-minute visibility timeout would find a dead call). | https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html |
 | DynamoDB Tenants / Calls | Tenant row keyed by called number; call row is the audit (transcript, tool calls, once-markers). | |
 | EventBridge bus `wnkinc.voice` | `lead.recorded`, `owner.notify`, `call.ended` fan out to the CRM sync here and the runtime stack's workflows, each with retries and a DLQ. | https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-dlq.html |
@@ -54,7 +54,7 @@ where the defaults and the unbuilt levers are written down. Hand-maintained.
 | Instructions | `session.instructions` | composed by `prompt.ts` from `business` and the platform sections (job, scope, time, tools, style, caller id) | `receptionist.instructions.agentName`, `receptionist.instructions.extra` |
 | Unclear audio, read-back, variety | prompt sections OpenAI's realtime prompting guide recommends | partly built: read-back of phone numbers is in; unclear-audio handling and phrase variety are not (platform, no field) | `prompt.ts` |
 | Greeting | `response.create` with instructions, on connect | tenant field, default templated from the business name | `receptionist.greeting` |
-| Hold instruction | `accept` payload instructions | platform default: "do not speak until instructed" | `workflows/accept.ts` |
+| Hold instruction | `accept` payload instructions | platform default: "do not speak until instructed" | `workflows/receptionist/accept.ts` |
 | Tools | `session.tools` (function tools from zod schemas) | tenant picks names from the platform catalog | `receptionist.session.tools` |
 | Tool choice, parallel tool calls | `tool_choice` | platform default: OpenAI's | `agent.ts` |
 | Output guardrails | Agents SDK `outputGuardrails` (checked on the transcript as it streams; trips cut the response) | not built; the "never invent prices or promises" rule is prompt-only today | `receptionist.guardrails` |

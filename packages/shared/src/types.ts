@@ -3,7 +3,7 @@ import { z } from 'zod';
 /** E.164 phone number, e.g. +15555550100 */
 export const E164 = z.string().regex(/^\+[1-9]\d{6,14}$/, 'must be E.164 (+15555550100)');
 
-/** Assistant tool names; the catalog that runs them is `workflows/assistant-loop.ts` (kept in step by a test). */
+/** Assistant tool names; the catalog that runs them is `workflows/assistant/assistant-loop.ts` (kept in step by a test). */
 export const ASSISTANT_TOOL_NAMES = ['search_contacts', 'add_note'] as const;
 
 export const PersonSchema = z.object({
@@ -81,7 +81,7 @@ export const TenantConfigSchema = z.object({
    * `business`; the greeting is spoken through a separate response request on
    * connect; the call cap is ours (the session Lambda's deadline), not OpenAI's.
    * Every lever the platform has built appears here with its default; the
-   * levers table in packages/voice-session/README.md lists the rest.
+   * levers table in packages/receptionist/README.md lists the rest.
    */
   receptionist: z.object({
     session: z.object({
@@ -89,7 +89,7 @@ export const TenantConfigSchema = z.object({
       audio: z.object({
         output: z.object({ voice: z.string().default('marin') }).prefault({}),
       }).prefault({}),
-      /** Tool names (see voice-session/src/agent.ts) enabled for this tenant. */
+      /** Tool names (see receptionist/src/agent.ts) enabled for this tenant. */
       tools: z.array(z.string()).default(['record_lead', 'notify_owner', 'end_call']),
     }).prefault({}),
     instructions: z.object({

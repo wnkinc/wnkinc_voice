@@ -17,13 +17,13 @@ import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { dlqAlarm, errorAlarm, failedExecutionsAlarm } from '../infra_utils/alarms.js';
 import { COMPOSIO_API, OPENAI_API } from '../workflows/asl.js';
 import { expressNoData, grantHttp } from '../infra_utils/state-machine.js';
-import { acceptDefinition } from '../workflows/accept.js';
+import { acceptDefinition } from '../workflows/receptionist/accept.js';
 import { Construct } from 'constructs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const voiceSrc = (file: string) => path.resolve(here, '../../voice-session/src', file);
+const voiceSrc = (file: string) => path.resolve(here, '../../receptionist/src', file);
 
 const EVENT_SOURCE = 'wnkinc.voice';
 
@@ -202,7 +202,7 @@ export class VoiceStack extends cdk.Stack {
     this.composioSecret = new secretsmanager.Secret(this, 'ComposioSecret', {
       description: 'Composio project API key ({"COMPOSIO_API_KEY": ...})',
     });
-    // ---- Accept workflow (workflows/accept.ts): verified webhook -> tenant ->
+    // ---- Accept workflow (workflows/receptionist/accept.ts): verified webhook -> tenant ->
     // claim -> accept -> recognize -> enqueue. Express, execution data not
     // logged. The API keys ride in EventBridge Connections (resolved from the
     // secrets when the Connection is created or changed; CloudFormation does

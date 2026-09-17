@@ -19,7 +19,7 @@ A tenant is a config row keyed by their phone number, their credentials under te
 6. **Gmail consent** (if `emailResponder.enabled`): `npx tsx scripts/connect-composio.mts <id>` — the owner approves Composio's Gmail app once; the token lives in Composio's vault under the tenant id.
 6c. **Saved browser** (if `browser.enabled`): nothing to set up. The owner sends `/login <site>` to the bot; the reply carries a live view link to sign in and, the first time, a `browser.contextId` to paste into the tenant file. Commit it. Only the owner's Telegram id may send `/login`.
 
-6b. **Assistant tools** (if `assistant.enabled`): list the tools in `assistant.tools`, by name from the catalog in `workflows/assistant-loop.ts` (`search_contacts`, `add_note`; both need the HubSpot consent above). Nothing is minted and nothing deploys: the seed writes the row and the loop reads it.
+6b. **Assistant tools** (if `assistant.enabled`): list the tools in `assistant.tools`, by name from the catalog in `workflows/assistant/assistant-loop.ts` (`search_contacts`, `add_note`; both need the HubSpot consent above). Nothing is minted and nothing deploys: the seed writes the row and the loop reads it.
 7. **Memory**: nothing to do — actor ids are `<tenantId>_<phone>`, so the new tenant's caller memory is isolated by construction.
 7b. **Automations**: create `tenants/<id>.ts` (copy `tenants/wnk.ts`): the tenant id and the list of descriptors it runs (`leadEmail`, `crmLead`, `crmCall`, `ownerAlert` from `packages/infrastructure/workflows/`, or a variant: a descriptor with options, or a copied definition). Add it to `tenants/index.ts`, then `npx cdk deploy wnk-tenant-<id>-dev`. That stack's rules match only events carrying this tenant's id; the definitions test asserts it. Nothing else deploys.
 8. **Verify**: call the new number; check the webhook log resolved the tenant (`"msg":"incoming call"` → correct `to`); confirm a lead lands with the right `tenantId` and, if enabled, the owner gets the email.
@@ -39,7 +39,7 @@ honest about the difference, in this order:
    Other tenants keep listing `leadEmail` and get the default.
 2. **A step differs** (skip CRM enrichment, add a step). Same shape: the option
    adds or removes states while the definition is built, in TypeScript. Model it
-   on `refs.memoryId` in `workflows/lead-email.ts`, which decides whether the
+   on `refs.memoryId` in `workflows/automations/lead-email.ts`, which decides whether the
    RecallMemory state exists at all. A build-time branch, never a runtime
    Choice on the tenant row.
 3. **The shape differs** (it is really a different automation). Copy the

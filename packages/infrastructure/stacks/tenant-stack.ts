@@ -10,7 +10,7 @@ import type { Construct } from 'constructs';
 import { dlqAlarm, failedExecutionsAlarm } from '../infra_utils/alarms.js';
 import { expressNoData, grantHttp } from '../infra_utils/state-machine.js';
 import { COMPOSIO_API } from '../workflows/asl.js';
-import type { Automation, AutomationRefs } from '../workflows/automation.js';
+import type { Automation, AutomationRefs } from '../workflows/automations/automation.js';
 import { MEMORY_USE_ACTIONS } from './memory-stack.js';
 
 /** What a tenant file exports: the id and the automations that tenant gets. */

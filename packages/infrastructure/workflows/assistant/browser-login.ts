@@ -13,7 +13,7 @@
  *
  * Input (from the Telegram workflow): { tenantId, tenantPhoneNumber, chatId, text }.
  */
-import { BROWSERBASE_API, httpTask, q } from './asl.js';
+import { BROWSERBASE_API, httpTask, q } from '../asl.js';
 
 export interface BrowserLoginRefs {
   tenantsTable: string;

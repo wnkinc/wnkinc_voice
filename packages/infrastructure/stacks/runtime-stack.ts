@@ -14,13 +14,13 @@ import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { dlqAlarm, failedExecutionsAlarm } from '../infra_utils/alarms.js';
 import { BROWSERBASE_API, COMPOSIO_API } from '../workflows/asl.js';
 import { expressNoData, grantHttp } from '../infra_utils/state-machine.js';
-import { browserLoginDefinition } from '../workflows/browser-login.js';
-import { callEndedDefinition } from '../workflows/call-ended.js';
-import { assistantHealthDefinition } from '../workflows/assistant-health.js';
-import { ASSISTANT_LOOP_ENDPOINTS } from '../workflows/assistant-loop.js';
-import { composioHealthDefinition } from '../workflows/composio-health.js';
-import { smsDefinition, TWILIO_API } from '../workflows/sms.js';
-import { telegramDefinition } from '../workflows/telegram.js';
+import { browserLoginDefinition } from '../workflows/assistant/browser-login.js';
+import { callEndedDefinition } from '../workflows/receptionist/call-ended.js';
+import { assistantHealthDefinition } from '../workflows/canaries/assistant-health.js';
+import { ASSISTANT_LOOP_ENDPOINTS } from '../workflows/assistant/assistant-loop.js';
+import { composioHealthDefinition } from '../workflows/canaries/composio-health.js';
+import { smsDefinition, TWILIO_API } from '../workflows/assistant/sms.js';
+import { telegramDefinition } from '../workflows/assistant/telegram.js';
 import { Construct } from 'constructs';
 
 export interface RuntimeStackProps extends cdk.StackProps {
@@ -60,7 +60,7 @@ export class RuntimeStack extends cdk.Stack {
     // ---- My Assistant: Telegram -> API Gateway -> Step Functions (the loop) --
     //
     // No code and no runtime on this path. The agent loop is states inside
-    // the workflow (workflows/assistant-loop.ts): the model through the
+    // the workflow (workflows/assistant/assistant-loop.ts): the model through the
     // OpenAI Connection, each tool the model asks for run through the
     // Composio Connection naming the tenant, history and recall from the
     // platform Memory, the tenant row's tool list as the allow-list. The
@@ -127,7 +127,7 @@ export class RuntimeStack extends cdk.Stack {
     });
     dlqAlarm(this, 'TelegramReplyDlqAlarm', replyDlq, props.alarmTopic, 'Assistant (Telegram): a reply was not delivered');
 
-    // ---- Browser login handoff (workflows/browser-login.ts) ---------------------
+    // ---- Browser login handoff (workflows/assistant/browser-login.ts) ---------------------
     // The owner's `/login` opens a Browserbase session on the tenant's saved
     // browser and sends them the live view to sign in; the login persists for
     // later sessions. One platform project (its id is cdk.json context: not a
@@ -209,7 +209,7 @@ export class RuntimeStack extends cdk.Stack {
 
     // ---- My Assistant over SMS: Twilio -> API Gateway -> SQS -> Pipe -> Step Functions (the loop) --
     //
-    // The same loop through a second front door (workflows/sms.ts). Twilio
+    // The same loop through a second front door (workflows/assistant/sms.ts). Twilio
     // posts each text form-encoded, which is not JSON, and API Gateway's
     // StartExecution mapping accepts only a JSON body or a single variable
     // (a static string embedding ${request.body} is rejected at deploy). So
@@ -312,7 +312,7 @@ export class RuntimeStack extends cdk.Stack {
     };
     const composioConnectionArn = props.composioConnection.connectionArn;
 
-    // Call ended (workflows/call-ended.ts): transcript -> memory, minutes -> usage.
+    // Call ended (workflows/receptionist/call-ended.ts): transcript -> memory, minutes -> usage.
     const endedWorkflow = new sfn.StateMachine(this, 'CallEndedWorkflow', {
       stateMachineName: `${prefix}-call-ended`,
       tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
@@ -332,7 +332,7 @@ export class RuntimeStack extends cdk.Stack {
 
     dlqAlarm(this, 'LeadEmailDlqAlarm', startDlq, props.alarmTopic, 'Platform workflows: an event could not start the call-ended workflow or the health canary');
 
-    // Composio health canary (workflows/composio-health.ts): every morning,
+    // Composio health canary (workflows/canaries/composio-health.ts): every morning,
     // prove each tenant's connections are still ACTIVE. A revoked connection
     // fails nothing on its own (every CRM and Gmail state catches and carries
     // on), so this turns the silence into a failed execution, which alarms.
@@ -354,7 +354,7 @@ export class RuntimeStack extends cdk.Stack {
     });
     failedExecutionsAlarm(this, 'ComposioHealthFailed', healthWorkflow, props.alarmTopic, 'Composio health: a tenant has lost a connection');
 
-    // Assistant health canary (workflows/assistant-health.ts): every morning,
+    // Assistant health canary (workflows/canaries/assistant-health.ts): every morning,
     // make each tenant's assistant answer one read-only question. The alarms
     // around it only fire when a person's message fails; nobody messages the
     // bot on a quiet week, so this is the traffic that proves it still works.
