@@ -47,9 +47,11 @@ honest about the difference, in this order:
    workflow file, edit freely, export its own descriptor, list that in the
    tenant's file. The copy owns its future; fixes to the original do not reach it.
 
-Whichever size, deploy only that tenant's stack. The definitions test
-synthesizes every machine, so an edit to a shared default path shows up in
-every tenant's machine before a deploy, not after.
+Whichever size, deploy only that tenant's stack (`npm run deploy -- wnk-tenant-<id>-dev`).
+The definitions test synthesizes every machine and compares each to its snapshot
+file, so an edit to a shared default path fails locally with a diff on every
+tenant machine it changed. The diff must list only the tenant you meant; then
+`npm run test:update` and commit the snapshots with the change.
 
 ## Pre-flight
 

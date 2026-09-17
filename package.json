@@ -17,7 +17,9 @@
     "seed": "tsx scripts/seed-tenant.ts",
     "synth": "cdk synth",
     "deploy": "cdk deploy",
-    "diff": "cdk diff"
+    "diff": "cdk diff",
+    "test:update": "vitest run -u",
+    "predeploy": "vitest run"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-agentcore": "^3.1117.0",

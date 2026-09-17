@@ -28,6 +28,11 @@ should live.
   rules filtered on its id. A variation for one tenant is a parameter on the
   definition, a recomposition, or a copied definition in that file, in that order
   of preference. Never a Choice state inside a definition another tenant runs on.
+- Every synthesized state machine is a snapshot file under
+  `packages/infrastructure/test/snapshots/`, and `npm run deploy` runs the tests
+  first. A change to a stock definition must show as a diff only on the tenant
+  machines it was meant for; then `npm run test:update` records it in the same
+  commit. Never update a snapshot to make a diff go away without reading it.
 - Build deferred items only when their trigger fires. The `new-tenant` skill keeps
   the trigger list. Don't pre-build membership models, per-tenant KMS keys, or
   config lineage.

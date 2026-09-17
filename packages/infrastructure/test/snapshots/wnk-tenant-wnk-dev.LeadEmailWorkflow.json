@@ -1,0 +1,444 @@
+{
+  "QueryLanguage": "JSONata",
+  "StartAt": "LookupTenant",
+  "States": {
+    "LookupTenant": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Arguments": {
+        "TableName": "placeholder",
+        "Key": {
+          "phoneNumber": {
+            "S": "{% $states.input.detail.tenantPhoneNumber %}"
+          }
+        }
+      },
+      "Assign": {
+        "tenant": "{% $states.result.Item %}"
+      },
+      "Output": "{% $states.input %}",
+      "Next": "ResponderEnabled"
+    },
+    "ResponderEnabled": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $exists($tenant) and $tenant.emailResponder.M.enabled.BOOL = true %}",
+          "Next": "CheckDone"
+        }
+      ],
+      "Default": "Skipped"
+    },
+    "Skipped": {
+      "Type": "Succeed"
+    },
+    "CheckDone": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Arguments": {
+        "TableName": "placeholder",
+        "Key": {
+          "callId": {
+            "S": "{% $states.input.detail.callId %}"
+          }
+        },
+        "ProjectionExpression": "#k",
+        "ExpressionAttributeNames": {
+          "#k": "{% 'done:email:lead:' & $states.input.detail.lead.leadId %}"
+        }
+      },
+      "Assign": {
+        "done": "{% $exists($states.result.Item) and $count($keys($states.result.Item)) > 0 %}"
+      },
+      "Output": "{% $states.input %}",
+      "Next": "AlreadyEmailed"
+    },
+    "AlreadyEmailed": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $done %}",
+          "Next": "Skipped"
+        }
+      ],
+      "Default": "HasCrm"
+    },
+    "HasCrm": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.detail.lead.phone) and $tenant.crm.M.type.S = 'hubspot' and $tenant.crm.M.via.S = 'composio' %}",
+          "Next": "FindContact"
+        }
+      ],
+      "Default": "HasPhone"
+    },
+    "FindContact": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "https://backend.composio.dev/api/v3.1/tools/execute/HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA",
+        "Method": "POST",
+        "Authentication": {
+          "ConnectionArn": "arn:aws:events:us-west-2:123456789012:connection/placeholder/00000000-0000-0000-0000-000000000000"
+        },
+        "RequestBody": {
+          "user_id": "{% $tenant.tenantId.S %}",
+          "arguments": {
+            "filterGroups": [
+              {
+                "filters": [
+                  {
+                    "propertyName": "phone",
+                    "operator": "EQ",
+                    "value": "{% $states.input.detail.lead.phone %}"
+                  }
+                ]
+              },
+              {
+                "filters": [
+                  {
+                    "propertyName": "mobilephone",
+                    "operator": "EQ",
+                    "value": "{% $states.input.detail.lead.phone %}"
+                  }
+                ]
+              }
+            ],
+            "properties": [
+              "firstname",
+              "lastname",
+              "phone",
+              "email"
+            ],
+            "limit": 1
+          }
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 1
+        }
+      ],
+      "Assign": {
+        "contact": "{% $states.result.ResponseBody.data.results[0] %}"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Output": "{% $states.input %}",
+          "Next": "HasPhone"
+        }
+      ],
+      "Output": "{% $states.input %}",
+      "Next": "HasContact"
+    },
+    "HasContact": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $exists($contact.id) %}",
+          "Next": "HubspotAccount"
+        }
+      ],
+      "Default": "HasPhone"
+    },
+    "HubspotAccount": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "https://backend.composio.dev/api/v3.1/connected_accounts",
+        "Method": "GET",
+        "Authentication": {
+          "ConnectionArn": "arn:aws:events:us-west-2:123456789012:connection/placeholder/00000000-0000-0000-0000-000000000000"
+        },
+        "QueryParameters": {
+          "user_ids": "{% $tenant.tenantId.S %}",
+          "toolkit_slugs": "hubspot",
+          "statuses": "ACTIVE"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 1
+        }
+      ],
+      "Assign": {
+        "accountId": "{% $states.result.ResponseBody.items[0].id %}"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Output": "{% $states.input %}",
+          "Next": "HasPhone"
+        }
+      ],
+      "Output": "{% $states.input %}",
+      "Next": "LastNote"
+    },
+    "LastNote": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "https://backend.composio.dev/api/v3.1/tools/execute/proxy",
+        "Method": "POST",
+        "Authentication": {
+          "ConnectionArn": "arn:aws:events:us-west-2:123456789012:connection/placeholder/00000000-0000-0000-0000-000000000000"
+        },
+        "RequestBody": {
+          "endpoint": "/crm/v3/objects/notes/search",
+          "method": "POST",
+          "connected_account_id": "{% $accountId %}",
+          "body": {
+            "filterGroups": [
+              {
+                "filters": [
+                  {
+                    "propertyName": "associations.contact",
+                    "operator": "EQ",
+                    "value": "{% $contact.id %}"
+                  }
+                ]
+              }
+            ],
+            "sorts": [
+              {
+                "propertyName": "hs_timestamp",
+                "direction": "DESCENDING"
+              }
+            ],
+            "properties": [
+              "hs_note_body",
+              "hs_timestamp"
+            ],
+            "limit": 1
+          }
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 1
+        }
+      ],
+      "Assign": {
+        "note": "{% $states.result.ResponseBody.data.results[0].properties %}"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Output": "{% $states.input %}",
+          "Next": "HasPhone"
+        }
+      ],
+      "Output": "{% $states.input %}",
+      "Next": "HasPhone"
+    },
+    "HasPhone": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.detail.lead.phone) %}",
+          "Next": "RecallMemory"
+        }
+      ],
+      "Default": "OwnerEmail"
+    },
+    "RecallMemory": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:bedrockagentcore:retrieveMemoryRecords",
+      "Arguments": {
+        "MemoryId": "placeholder",
+        "NamespacePath": "{% '/callers/' & $tenant.tenantId.S & '_' & $replace($states.input.detail.lead.phone, /[^0-9]/, '') & '/preferences' %}",
+        "SearchCriteria": {
+          "SearchQuery": "how and when this caller prefers to be contacted",
+          "TopK": 4
+        }
+      },
+      "Assign": {
+        "memories": "{% [$states.result.MemoryRecordSummaries.Content.Text] %}"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Output": "{% $states.input %}",
+          "Next": "OwnerEmail"
+        }
+      ],
+      "Output": "{% $states.input %}",
+      "Next": "OwnerEmail"
+    },
+    "OwnerEmail": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "https://backend.composio.dev/api/v3.1/tools/execute/GMAIL_GET_PROFILE",
+        "Method": "POST",
+        "Authentication": {
+          "ConnectionArn": "arn:aws:events:us-west-2:123456789012:connection/placeholder/00000000-0000-0000-0000-000000000000"
+        },
+        "RequestBody": {
+          "user_id": "{% $tenant.tenantId.S %}",
+          "arguments": {}
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 1
+        }
+      ],
+      "Assign": {
+        "ownerEmail": "{% $states.result.ResponseBody.data.emailAddress %}"
+      },
+      "Output": "{% $states.input %}",
+      "Next": "HasOwnerEmail"
+    },
+    "HasOwnerEmail": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $exists($ownerEmail) %}",
+          "Next": "Send"
+        }
+      ],
+      "Default": "NoGmail"
+    },
+    "NoGmail": {
+      "Type": "Fail",
+      "Error": "NoGmailConnection",
+      "Cause": "No Gmail profile for the tenant in Composio; run scripts/connect-composio.mts <tenantId> gmail"
+    },
+    "Send": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "https://backend.composio.dev/api/v3.1/tools/execute/GMAIL_SEND_EMAIL",
+        "Method": "POST",
+        "Authentication": {
+          "ConnectionArn": "arn:aws:events:us-west-2:123456789012:connection/placeholder/00000000-0000-0000-0000-000000000000"
+        },
+        "RequestBody": {
+          "user_id": "{% $tenant.tenantId.S %}",
+          "arguments": {
+            "recipient_email": "{% $ownerEmail %}",
+            "subject": "{% 'New lead: ' & $states.input.detail.lead.callerName & ' - ' & $substring($states.input.detail.lead.reason, 0, 60) %}",
+            "body": "{% 'New lead from the phone receptionist.\\n\\n' & 'Name: ' & $states.input.detail.lead.callerName & '\\n' & 'Phone: ' & ($exists($states.input.detail.lead.phone) ? $states.input.detail.lead.phone : 'not provided') & '\\n' & 'Reason: ' & $states.input.detail.lead.reason & '\\n' & ($exists($states.input.detail.lead.preferredCallbackTime) ? 'Preferred callback: ' & $states.input.detail.lead.preferredCallbackTime & '\\n' : '') & ($exists($states.input.detail.lead.notes) ? 'Notes: ' & $states.input.detail.lead.notes & '\\n' : '') & '\\nCRM: ' & ($exists($contact) ? 'known contact ' & $trim(($exists($contact.properties.firstname) and $contact.properties.firstname != null ? $contact.properties.firstname : '') & ' ' & ($exists($contact.properties.lastname) and $contact.properties.lastname != null ? $contact.properties.lastname : '')) & ' ' & $contact.url & ($exists($note.hs_note_body) ? '\\nLast note (' & $substring($note.hs_createdate, 0, 10) & '):\\n' & $substring($replace($replace($replace($note.hs_note_body, /<br[^>]*>/, '\\n'), /<[^>]+>/, ''), '&nbsp;', ' '), 0, 800) : '\\nNo notes on this contact yet.') : 'no matching contact.') & '\\n' & ($count($memories) > 0 ? '\\nCaller preferences (from earlier calls):\\n' & $join($memories.('- ' & ($substring($, 0, 1) = '{' ? $match($, /\"preference\":\"([^\"]*)\"/)[0].groups[0] : $)), '\\n') & '\\n' : '') & '\\nSuggested text: Hi ' & $split($states.input.detail.lead.callerName, ' ')[0] & ', this is ' & $tenant.business.M.name.S & '. Thanks for calling about ' & $states.input.detail.lead.reason & '. When is a good time to talk? Reply here or call ' & $tenant.phoneNumber.S & '.\\n' & '\\nCall ' & $states.input.detail.callId %}"
+          }
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 1
+        }
+      ],
+      "Assign": {
+        "sent": "{% $states.result.ResponseBody.successful = true %}"
+      },
+      "Output": "{% $states.input %}",
+      "Next": "SentOk"
+    },
+    "SentOk": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $sent %}",
+          "Next": "MarkDone"
+        }
+      ],
+      "Default": "SendRejected"
+    },
+    "SendRejected": {
+      "Type": "Fail",
+      "Error": "SendRejected",
+      "Cause": "Composio answered 200 but successful=false for GMAIL_SEND_EMAIL; see the execution history"
+    },
+    "MarkDone": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "placeholder",
+        "Key": {
+          "callId": {
+            "S": "{% $states.input.detail.callId %}"
+          }
+        },
+        "UpdateExpression": "SET #k = :at, expiresAt = if_not_exists(expiresAt, :ttl)",
+        "ConditionExpression": "attribute_not_exists(#k)",
+        "ExpressionAttributeNames": {
+          "#k": "{% 'done:email:lead:' & $states.input.detail.lead.leadId %}"
+        },
+        "ExpressionAttributeValues": {
+          ":at": {
+            "S": "{% $now() %}"
+          },
+          ":ttl": {
+            "N": "{% $string($floor($millis() / 1000) + 90 * 86400) %}"
+          }
+        }
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "DynamoDB.ConditionalCheckFailedException"
+          ],
+          "Output": "{% $states.input %}",
+          "Next": "UsageEmail"
+        }
+      ],
+      "Output": "{% $states.input %}",
+      "Next": "UsageEmail"
+    },
+    "UsageEmail": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Arguments": {
+        "TableName": "placeholder",
+        "Item": {
+          "tenantId": {
+            "S": "{% $tenant.tenantId.S %}"
+          },
+          "sk": {
+            "S": "{% $now() & '#emails_sent#' & $uuid() %}"
+          },
+          "meter": {
+            "S": "emails_sent"
+          },
+          "units": {
+            "N": "1"
+          },
+          "ref": {
+            "S": "{% $states.input.detail.callId %}"
+          }
+        }
+      },
+      "End": true
+    }
+  }
+}

@@ -192,6 +192,19 @@ describe('synthesized state machine definitions', () => {
     }));
   });
 
+  // The isolation proof for a shared source file: every machine's synthesized
+  // definition is a file in git. An edit to a stock definition shows up here
+  // as a diff on every tenant machine it changes, before any deploy. The diff
+  // must list only the tenants meant to change; then `npm run test:update`
+  // records the new definitions in the same commit. Deploy-time tokens are
+  // placeholders, so the files are stable across accounts.
+  it('every machine matches its snapshot: a change must touch only the tenants it was meant for', async () => {
+    for (const d of defs) {
+      const pretty = `${JSON.stringify(JSON.parse(d.text), null, 2)}\n`;
+      await expect(pretty).toMatchFileSnapshot(path.join(path.dirname(fileURLToPath(import.meta.url)), 'snapshots', `${d.stack}.${d.id.replace(/[0-9A-F]{8}$/, '')}.json`));
+    }
+  });
+
   it('every definition is valid Step Functions (JSONata parsed, states resolve)', async () => {
     if (!credentials) return;
     const failures: string[] = [];
