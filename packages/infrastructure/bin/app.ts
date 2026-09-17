@@ -18,7 +18,10 @@ const voice = new VoiceStack(app, 'wnk-voice-dev', {
   env,
   callerMemory,
 });
-const identity = new IdentityStack(app, 'wnk-identity-dev', {
+// AgentCore Identity providers. Nothing reads them since the assistant moved
+// into the workflows (the keys ride in EventBridge Connections); the stack
+// stays until it is retired on purpose (`cdk destroy wnk-identity-dev`).
+new IdentityStack(app, 'wnk-identity-dev', {
   prefix,
   env,
   openaiSecret: voice.openaiSecret,
@@ -40,8 +43,7 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   prefix,
   env,
   ...platform,
-  openaiProviderArn: identity.openaiProvider.credentialProviderArn,
-  composioProviderArn: identity.composioProvider.credentialProviderArn,
+  openaiConnection: voice.openaiConnection,
   peopleTable: voice.peopleTable,
   api: voice.api,
 });

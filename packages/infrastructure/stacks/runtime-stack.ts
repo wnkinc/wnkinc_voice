@@ -2,7 +2,6 @@ import * as cdk from 'aws-cdk-lib';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpSqsIntegration, HttpStepFunctionsIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as pipes from 'aws-cdk-lib/aws-pipes';
-import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
@@ -18,6 +17,7 @@ import { expressNoData, grantHttp } from '../infra_utils/state-machine.js';
 import { browserLoginDefinition } from '../workflows/browser-login.js';
 import { callEndedDefinition } from '../workflows/call-ended.js';
 import { assistantHealthDefinition } from '../workflows/assistant-health.js';
+import { ASSISTANT_LOOP_ENDPOINTS } from '../workflows/assistant-loop.js';
 import { composioHealthDefinition } from '../workflows/composio-health.js';
 import { smsDefinition, TWILIO_API } from '../workflows/sms.js';
 import { telegramDefinition } from '../workflows/telegram.js';
@@ -25,10 +25,8 @@ import { Construct } from 'constructs';
 
 export interface RuntimeStackProps extends cdk.StackProps {
   readonly prefix: string;
-  /** Identity API key provider holding the OpenAI key; the assistant harness reads the key from the vault. */
-  readonly openaiProviderArn: string;
-  /** Identity API key provider holding the Composio key; the harness resolves it into the MCP session header. */
-  readonly composioProviderArn: string;
+  /** EventBridge Connection carrying the OpenAI API key (voice stack owns it); the assistant loop calls the model through it. */
+  readonly openaiConnection: events.IConnection;
   /** EventBridge Connection carrying the Composio API key (voice stack owns it); every Composio HTTP task here authenticates through it. */
   readonly composioConnection: events.IConnection;
   readonly bus: events.IEventBus;
@@ -42,34 +40,33 @@ export interface RuntimeStackProps extends cdk.StackProps {
   /** The platform HTTP API; the Telegram and SMS webhook routes are added here. */
   readonly api: apigwv2.IHttpApi;
   readonly alarmTopic: sns.ITopic;
-  /** Platform memory: the harness threads sessions and retrieves facts from it; the call-ended workflow writes transcripts. */
+  /** Platform memory: the assistant loop reads and writes each person's session and recalls their facts; the call-ended workflow writes transcripts. */
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
 }
 
 /**
- * The platform's agent, My Assistant (an AgentCore harness driven by the
- * Telegram and SMS workflows), and the platform workflows every tenant shares: the
- * call-ended tail (memory, usage), the browser login handoff, and the
- * Composio health canary. Per-tenant automations are in TenantStack. Each
- * definition lives in workflows/; this stack wraps it in a state machine,
- * routes its event to it, and grants what it touches. No code.
+ * The platform's assistant (the agent loop inside the Telegram and SMS
+ * workflows; no runtime) and the platform workflows every tenant shares: the
+ * call-ended tail (memory, usage), the browser login handoff, and the two
+ * canaries. Per-tenant automations are in TenantStack. Each definition lives
+ * in workflows/; this stack wraps it in a state machine, routes its event to
+ * it, and grants what it touches. No code.
  */
 export class RuntimeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: RuntimeStackProps) {
     super(scope, id, props);
     const { prefix } = props;
 
-    // ---- My Assistant: Telegram -> API Gateway -> Step Functions -> harness --
+    // ---- My Assistant: Telegram -> API Gateway -> Step Functions (the loop) --
     //
-    // No code on this path. The assistant is an AgentCore HARNESS: model,
-    // default prompt, memory, and limits are configuration below. Per
-    // invocation the workflow (workflows/telegram.ts) passes the message, a
-    // prompt built from the tenant row, and the tenant's Composio MCP session
-    // (its URL on the row, bound to the owner's connected accounts), so the
-    // only SaaS the model can reach is that tenant's. The reply leaves through
-    // an EventBridge API destination (Telegram wants the bot token in the URL
-    // path, which no managed HTTP target can inject — but a destination's
-    // endpoint can carry it).
+    // No code and no runtime on this path. The agent loop is states inside
+    // the workflow (workflows/assistant-loop.ts): the model through the
+    // OpenAI Connection, each tool the model asks for run through the
+    // Composio Connection naming the tenant, history and recall from the
+    // platform Memory, the tenant row's tool list as the allow-list. The
+    // reply leaves through an EventBridge API destination (Telegram wants
+    // the bot token in the URL path, which no managed HTTP target can
+    // inject, but a destination's endpoint can carry it).
 
     // Bot token (set by hand, see README) plus a generated secret path segment
     // for the webhook URL — Telegram's recommended way to authenticate posts.
@@ -83,77 +80,23 @@ export class RuntimeStack extends cdk.Stack {
       },
     });
 
-    const agentcoreArn = (resource: string) => `arn:aws:bedrock-agentcore:${this.region}:${this.account}:${resource}`;
-
-    // The harness's execution role: the documented sample, scoped to what it
-    // touches — the OpenAI and Composio key providers and the platform Memory
-    // instance.
-    const harnessRole = new iam.Role(this, 'AssistantHarnessRole', {
-      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
-      description: 'Execution role for the My Assistant harness',
-    });
-    harnessRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['ecr-public:GetAuthorizationToken', 'sts:GetServiceBearerToken', 'xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets',
-        'logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams', 'logs:DescribeLogGroups', 'logs:PutResourcePolicy'],
-      resources: ['*'],
-    }));
-    harnessRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['cloudwatch:PutMetricData'], resources: ['*'], conditions: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } },
-    }));
-    harnessRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:GetWorkloadAccessToken', 'bedrock-agentcore:GetWorkloadAccessTokenForJWT', 'bedrock-agentcore:GetResourceApiKey'],
-      resources: [
-        agentcoreArn('workload-identity-directory/default'),
-        agentcoreArn('workload-identity-directory/default/workload-identity/*'),
-        agentcoreArn('token-vault/default'),
-        props.openaiProviderArn,
-        props.composioProviderArn,
-      ],
-    }));
-    harnessRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['secretsmanager:GetSecretValue'],
-      resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:bedrock-agentcore-identity!*`],
-    }));
-    if (props.callerMemory) {
-      harnessRole.addToPolicy(new iam.PolicyStatement({
-        actions: MEMORY_USE_ACTIONS,
-        resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
-      }));
-    }
-
-    const harness = new agentcore.CfnHarness(this, 'AssistantHarness', {
-      harnessName: `${prefix.replace(/-/g, '_')}_assistant`,
-      executionRoleArn: harnessRole.roleArn,
-      model: { openAiModelConfig: { modelId: process.env.ASSISTANT_MODEL ?? 'gpt-5.5', apiKeyArn: props.openaiProviderArn, apiFormat: 'responses', maxTokens: 1200 } },
-      systemPrompt: [{ text: 'You are My Assistant for a small business. Be brief and plain. The per-invocation prompt names the business and the person.' }],
-      // No default tools: the workflow passes the TENANT's Composio MCP
-      // session per invocation. Never the built-in shell/file tools.
-      allowedTools: ['@crm/*'],
-      // Attached platform Memory: the harness threads each session's history
-      // from it (surviving microVM expiry) and, per turn, retrieves what is
-      // relevant from every strategy across ALL of the actor's sessions —
-      // facts, preferences, and prior sessions' summaries via the parent path.
-      memory: props.callerMemory ? { agentCoreMemoryConfiguration: {
-        arn: props.callerMemory.memoryArn,
-        messagesCount: 40,
-        retrievalConfig: {
-          '/callers/{actorId}/facts': { topK: 6, relevanceScore: 0.2 },
-          '/callers/{actorId}/preferences': { topK: 4, relevanceScore: 0.2 },
-          '/callers/{actorId}/summaries/': { topK: 3, relevanceScore: 0.2 },
-        },
-      } } : { disabled: {} },
-      // Nothing is lost when the microVM goes (history is in Memory), but a
-      // fresh one takes ~70 s to come up, which a person mid-conversation
-      // feels. Idle time is not a cost lever: the AWS/Bedrock-AgentCore
-      // MemoryUsed-GBHours metric bills this harness a flat 8 GB every minute
-      // the VM lives (~0.13 cents/min), so the timeout only buys warmth.
-      // Fifteen minutes (the AWS default) covers a texting session; a longer
-      // gap pays the cold start again.
-      environment: { agentCoreRuntimeEnvironment: { lifecycleConfiguration: { idleRuntimeSessionTimeout: 900 } } },
-      maxIterations: 8,
-      timeoutSeconds: 120,
-    });
-    harness.node.addDependency(harnessRole);
+    // What every machine that runs the loop needs: the two Connections and
+    // Memory. One object and one grant, so the three cannot drift.
+    const loopRefs = {
+      openaiConnectionArn: props.openaiConnection.connectionArn,
+      composioConnectionArn: props.composioConnection.connectionArn,
+      memoryId: props.callerMemory?.memoryId,
+      model: process.env.ASSISTANT_MODEL ?? 'gpt-5.5',
+    };
+    const grantLoop = (wf: sfn.StateMachine) => {
+      grantHttp(wf, [props.openaiConnection, props.composioConnection], ASSISTANT_LOOP_ENDPOINTS);
+      if (props.callerMemory) {
+        wf.addToRolePolicy(new iam.PolicyStatement({
+          actions: MEMORY_USE_ACTIONS,
+          resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
+        }));
+      }
+    };
 
     // ---- Reply path: EventBridge -> API destination -> Bot API sendMessage ----
     // The destination's endpoint carries the bot token, resolved from the
@@ -237,8 +180,7 @@ export class RuntimeStack extends cdk.Stack {
         tenantsTable: props.tenantsTable.tableName,
         usageTable: props.usageTable.tableName,
         busName: props.bus.eventBusName,
-        harnessArn: harness.attrArn,
-        composioProviderArn: props.composioProviderArn,
+        ...loopRefs,
         browserLoginArn: loginWorkflow.stateMachineArn,
       }))),
       timeout: cdk.Duration.minutes(5),
@@ -248,10 +190,7 @@ export class RuntimeStack extends cdk.Stack {
     props.usageTable.grantWriteData(workflow);
     props.bus.grantPutEventsTo(workflow);
     loginWorkflow.grantStartExecution(workflow);
-    workflow.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:InvokeHarness', 'bedrock-agentcore:InvokeAgentRuntime'],
-      resources: [harness.attrArn, `${harness.attrArn}/*`],
-    }));
+    grantLoop(workflow);
     failedExecutionsAlarm(this, 'TelegramWorkflowFailed', workflow, props.alarmTopic, 'Assistant (Telegram)');
 
     // Telegram posts here; API Gateway starts an execution and answers 200 at
@@ -268,9 +207,9 @@ export class RuntimeStack extends cdk.Stack {
       }),
     });
 
-    // ---- My Assistant over SMS: Twilio -> API Gateway -> SQS -> Pipe -> Step Functions -> harness --
+    // ---- My Assistant over SMS: Twilio -> API Gateway -> SQS -> Pipe -> Step Functions (the loop) --
     //
-    // The same harness through a second front door (workflows/sms.ts). Twilio
+    // The same loop through a second front door (workflows/sms.ts). Twilio
     // posts each text form-encoded, which is not JSON, and API Gateway's
     // StartExecution mapping accepts only a JSON body or a single variable
     // (a static string embedding ${request.body} is rejected at deploy). So
@@ -304,8 +243,7 @@ export class RuntimeStack extends cdk.Stack {
         peopleTable: props.peopleTable.tableName,
         tenantsTable: props.tenantsTable.tableName,
         usageTable: props.usageTable.tableName,
-        harnessArn: harness.attrArn,
-        composioProviderArn: props.composioProviderArn,
+        ...loopRefs,
         twilioConnectionArn: twilioConnection.connectionArn,
       }))),
       timeout: cdk.Duration.minutes(5),
@@ -313,10 +251,7 @@ export class RuntimeStack extends cdk.Stack {
     props.peopleTable.grantReadData(smsWorkflow);
     props.tenantsTable.grantReadData(smsWorkflow);
     props.usageTable.grantWriteData(smsWorkflow);
-    smsWorkflow.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:InvokeHarness', 'bedrock-agentcore:InvokeAgentRuntime'],
-      resources: [harness.attrArn, `${harness.attrArn}/*`],
-    }));
+    grantLoop(smsWorkflow);
     grantHttp(smsWorkflow, [twilioConnection], [`${TWILIO_API}*`]);
     failedExecutionsAlarm(this, 'SmsWorkflowFailed', smsWorkflow, props.alarmTopic, 'Assistant (SMS)');
 
@@ -424,22 +359,18 @@ export class RuntimeStack extends cdk.Stack {
     // around it only fire when a person's message fails; nobody messages the
     // bot on a quiet week, so this is the traffic that proves it still works.
     // Ten minutes after the connection check, so a failure here is about the
-    // harness rather than about Composio.
+    // loop (model, Memory, tool execution) rather than about Composio.
     const assistantHealth = new sfn.StateMachine(this, 'AssistantHealthWorkflow', {
       stateMachineName: `${prefix}-assistant-health`,
       tracingEnabled: true,
       definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(assistantHealthDefinition({
         tenantsTable: props.tenantsTable.tableName,
-        harnessArn: harness.attrArn,
-        composioProviderArn: props.composioProviderArn,
+        ...loopRefs,
       }))),
       timeout: cdk.Duration.minutes(10),
     });
     props.tenantsTable.grantReadData(assistantHealth);
-    assistantHealth.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:InvokeHarness', 'bedrock-agentcore:InvokeAgentRuntime'],
-      resources: [harness.attrArn, `${harness.attrArn}/*`],
-    }));
+    grantLoop(assistantHealth);
     new events.Rule(this, 'AssistantHealthSchedule', {
       description: 'Daily assistant liveness probe for every tenant with the assistant on (15:10 UTC)',
       schedule: events.Schedule.cron({ minute: '10', hour: '15' }),
@@ -447,7 +378,6 @@ export class RuntimeStack extends cdk.Stack {
     });
     failedExecutionsAlarm(this, 'AssistantHealthFailed', assistantHealth, props.alarmTopic, 'Assistant health: a tenant assistant did not answer');
 
-    new cdk.CfnOutput(this, 'assistantHarnessArn', { value: harness.attrArn });
     new cdk.CfnOutput(this, 'callEndedWorkflowArn', { value: endedWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'telegramWorkflowArn', { value: workflow.stateMachineArn });

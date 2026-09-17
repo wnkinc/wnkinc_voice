@@ -5,11 +5,15 @@ description: Add a new agent (a new surface/system) — a harness on AgentCore R
 
 # Add a new agent
 
-**Harness first.** If the behavior is "a model with a prompt, tools, memory, and limits", it is an
-AgentCore harness: a `CfnHarness` in `stacks/runtime-stack.ts` (see the assistant), invoked from Step
-Functions with the optimized `arn:aws:states:::bedrockagentcore:invokeHarness` state, reaching the
-the tenant's Composio MCP session through its `assistant.composioMcpUrl` (tools override per invocation).
-Zero agent code.
+**The loop in a workflow first.** If the behavior is "a model with a prompt, tools, memory, and limits"
+that a person drives by chatting, it is the assistant loop in `workflows/assistant-loop.ts`, spread into
+a Step Functions workflow: the model through the OpenAI Connection, each tool the model asks for gated
+against the tenant row's `assistant.tools` and run through the Composio Connection naming the tenant,
+history and recall from the platform Memory, rounds capped. A new tool is a catalog entry there (slim
+schema the model sees, Composio slug and argument mapping that runs) plus its name in
+`ASSISTANT_TOOL_NAMES`. Zero agent code, no runtime, no cold start. An AgentCore harness or Runtime is
+the option for a model that must write and run code (a filesystem and a shell per session); this
+platform has none.
 
 **Workflow second.** If the behavior is a fixed sequence of managed-service calls (read the
 tenant, check a once-marker, fetch, format, send, write usage) it is a Step Functions state
@@ -17,7 +21,7 @@ machine on an EventBridge rule, with no package and no model. The lead email wor
 `workflows/lead-email.ts` is the worked example (one definition per file under `workflows/`, wrapped in a state machine in `stacks/runtime-stack.ts`): JSONata states, Composio reached with HTTP tasks
 through an EventBridge Connection (the tenant id as `user_id` on every call), the email formatted
 in JSONata from the data already fetched, `failedExecutionsAlarm` + a DLQ on the rule target.
-Reach for the harness only when the step is open-ended (a person chatting); a fixed sequence
+Reach for the loop only when the step is open-ended (a person chatting); a fixed sequence
 never needs a model, and a model in the loop costs ~90k tokens per run.
 
 **Lambda third.** Only when a step needs code (an HMAC check, deterministic writes with fixed
@@ -37,14 +41,14 @@ An agent = a `packages/<name>/` folder (behavior) + wiring in `packages/infrastr
 1. **Package**: create `packages/<name>/package.json` (`@wnk/<name>`, private, type module) and `src/<name>.ts` exporting `handler`. Keep behavior in a function that takes a channel-neutral payload so a test can drive it without the event envelope; channel-specific delivery stays in its own file.
 2. **Shared code**: anything another deployable also needs goes in `packages/shared` (imported as `@wnk/shared`). Deployables never import each other.
 3. **Hosting** in `stacks/runtime-stack.ts`: a `NodejsFunction` (ESM, node22, ARM, X-Ray active, a dead-letter queue, `dlqAlarm` + `errorAlarm`) with env vars for everything the agent needs. If it imports `@wnk/shared/composio`, add the `createRequire` banner the voice-stack `fn` helper uses.
-4. **Identity**: the agent acts for the tenant selected upstream — an automation takes `tenantId` from the event and passes it to every Composio adapter call; a harness is handed the tenant's `assistant.composioMcpUrl` per invocation. No agent holds a credential or a Cognito identity.
+4. **Identity**: the agent acts for the tenant selected upstream — an automation takes `tenantId` from the event and passes it to every Composio adapter call; the assistant loop runs each tool through Composio naming the tenant from the row. No agent holds a credential or a Cognito identity.
 5. **Grants**: the execution role gets exactly what the agent touches — tables, secrets, memory actions (`MEMORY_USE_ACTIONS` on the memory ARN + `/*`), `cognito-idp:DescribeUserPoolClient` on the pool. Expect to discover one missing action from an AccessDenied message; the error names the exact action + resource — encode it, don't wildcard the service.
 6. **Trigger**: a bus event → `events.Rule` with the Lambda as target (`retryAttempts: 2`, the DLQ). A request/response surface → HTTP API route → Step Functions (`StepFunctions-StartExecution` integration, `Input: $request.body`), see the Telegram workflow. Prefer a state machine over a Lambda when the steps are all managed-service calls.
-7. **Allow-list**: for a harness, the Composio session's toolkits (minted by the seed) and the harness `allowedTools`; for a Lambda, the code is the policy. A platform tool for an open-ended model is the trigger for a Gateway + Cedar (new-tool skill).
+7. **Allow-list**: for the assistant, the catalog in `workflows/assistant-loop.ts` and the row's `assistant.tools`; for a Lambda, the code is the policy. A platform tool for an open-ended model is the trigger for a Gateway + Cedar (new-tool skill).
 7b. **Tenant opt-in**: a bus-driven automation that tenants may run differently is a tenant automation: export an `Automation` descriptor from its workflow file (`workflows/automation.ts`: event, Express or not, timeout, grants, definition) and list it in `tenants/<id>.ts` for each tenant that gets it; the tenant stack deploys it with a rule matching only that tenant's events. No row flag needed for that. A platform workflow every tenant gets identically (like call-ended) stays in the runtime stack; if it acts per tenant, its first states are the tenant lookup by the event's `tenantPhoneNumber` and a Choice on its service block's `enabled` (a new block in `TenantConfigSchema`, default `false`); a missing row or a false flag ends in Succeed without acting — no `?? 'wnk'` defaults, ever.
 8. **Prove it**: a `scripts/test-<name>.mts` that puts a real event on the bus (or invokes the function) and checks the side effect.
 9. `npx tsc --noEmit && npm test`, `npx cdk deploy wnk-runtime-dev` (plus auth/policy stacks if touched), run the test script, commit.
 
 ## Logs
 
-Lambda agents: `/aws/lambda/<function name>`. Harness: `/aws/bedrock-agentcore/runtimes/<name>-<id>-DEFAULT`.
+Lambda agents: `/aws/lambda/<function name>`. Workflows: the execution history, and the Express log group for the ones that do not keep it.

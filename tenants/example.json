@@ -36,6 +36,6 @@
   },
 
   "emailResponder": { "enabled": true },
-  "assistant": { "enabled": false },
+  "assistant": { "enabled": false, "tools": ["search_contacts", "add_note"] },
   "browser": { "enabled": false }
 }

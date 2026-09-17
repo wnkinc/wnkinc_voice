@@ -4,41 +4,39 @@
  *
  * composio-health proves the tenant's *connections* are ACTIVE. This proves
  * the rest of the path, none of which an ACTIVE connection vouches for: that
- * the harness answers at all (a cold start slow enough to outrun its caller
- * looks exactly like a healthy idle one), that the model key resolves from
- * the vault, that Memory threads a session, and that the tenant's own
- * Composio MCP session — minted once by the seed — still serves tools.
+ * the model answers through the OpenAI Connection, that Memory reads and
+ * writes, and that a tool call reaches Composio and comes back. It runs the
+ * same loop the Telegram and SMS workflows run (workflows/assistant-loop.ts),
+ * with search_contacts as its one allowed tool.
  *
  * The probe reads and never writes: it asks after a phone number no contact
- * has. What it asserts is deliberately thin — the invoke returned, with text.
- * Asserting on what the model *said* would make the canary flaky, and a flaky
- * canary only teaches you to ignore the alarm it rings.
+ * has. What it asserts is deliberately thin: the loop produced text. Asserting
+ * on what the model *said* would make the canary flaky, and a flaky canary
+ * only teaches you to ignore the alarm it rings.
  *
- * Known blind spot: if the MCP session is dead the model may apologize in
- * prose instead of failing, and prose passes here. The connection behind it
- * is composio-health's job; this is liveness.
+ * Known blind spot: a tenant whose HubSpot connection is gone gets a failed
+ * tool result and the model apologizes in prose, and prose passes here. The
+ * connection is composio-health's job; this is liveness.
  */
 import { q } from './asl.js';
+import { assistantLoopStart, assistantLoopStates, assistantPrepare, assistantSaveTurnState, type AssistantLoopRefs } from './assistant-loop.js';
 
-export interface AssistantHealthRefs {
+export interface AssistantHealthRefs extends AssistantLoopRefs {
   tenantsTable: string;
-  harnessArn: string;
-  composioProviderArn: string;
 }
 
-/** Read-only, and no contact carries this number, so the answer is "nothing found" however it is worded. */
-export const PROBE_TEXT = 'Search the CRM for the phone number +15555550100 and reply in one short sentence with what you find.';
+/** Read-only, and no contact carries this number, so the answer is "nothing found" however it is worded. (+15555550100 is the Composio smoke-test contact.) */
+export const PROBE_TEXT = 'Search the CRM for the phone number +15555550177 and reply in one short sentence with what you find.';
 
 /**
- * A tenant row whose assistant is on and has a session to use. Note `Bool`, not
- * `BOOL`: this row comes from the aws-sdk scan integration, which spells the
- * all-caps AttributeValue tags in SDK case. The optimized `dynamodb:getItem`
+ * A tenant row (DynamoDB AttributeValue shape) whose assistant is on. `Bool`,
+ * as the aws-sdk scan integration returns it; the optimized getItem
  * used elsewhere returns `BOOL`, so the two are not interchangeable.
  */
-export const assistantUsableExpr = (rowExpr: string) =>
-  `${rowExpr}.assistant.M.enabled.Bool = true and $exists(${rowExpr}.assistant.M.composioMcpUrl.S)`;
+export const assistantUsableExpr = (rowExpr: string) => `${rowExpr}.assistant.M.enabled.Bool = true`;
 
 export function assistantHealthDefinition(refs: AssistantHealthRefs) {
+  const save = assistantSaveTurnState(refs);
   return {
     QueryLanguage: 'JSONata',
     StartAt: 'ListTenants',
@@ -61,48 +59,37 @@ export function assistantHealthDefinition(refs: AssistantHealthRefs) {
           States: {
             AssistantOn: {
               Type: 'Choice',
-              Choices: [{ Condition: q(assistantUsableExpr('$states.input')), Next: 'Probe' }],
+              Choices: [{ Condition: q(assistantUsableExpr('$states.input')), Next: 'Prepare' }],
               Default: 'NotUsed',
             },
             NotUsed: { Type: 'Succeed' },
-            Probe: {
-              Type: 'Task', Resource: 'arn:aws:states:::bedrockagentcore:invokeHarness',
-              Arguments: {
-                HarnessArn: refs.harnessArn,
-                // Its own actor, and a session per day, so the canary's turns
-                // never land in a real person's memory. Ids must be >= 33 chars.
-                RuntimeSessionId: q("'canary-' & $states.input.tenantId.S & '-' & $fromMillis($millis(), '[Y0001][M01][D01]') & '-0000000000000000'"),
-                ActorId: q("$states.input.tenantId.S & '_canary'"),
-                Messages: [{ Role: 'user', Content: [{ Text: PROBE_TEXT }] }],
-                SystemPrompt: [{ Text: 'You are a scheduled health probe for a small business assistant. Use your tools to answer, and reply in one short sentence.' }],
-                // The tenant's own Composio session, chosen by its row; the key
-                // rides by ARN and is resolved from the vault at invocation.
-                Tools: [{ Type: 'remote_mcp', Name: 'crm', Config: { RemoteMcp: { Url: q('$states.input.assistant.M.composioMcpUrl.S'), Headers: { 'x-api-key': `\${${refs.composioProviderArn}}` } } } }],
-                AllowedTools: ['@crm/*'],
-                TimeoutSeconds: 120,
+            // Its own actor, and a session per day, so the canary's turns
+            // never land in a real person's memory. The loop reads $tenant
+            // as `tenantId.S`, which the scan row carries in the same shape.
+            Prepare: {
+              Type: 'Pass',
+              Assign: {
+                ...assistantPrepare(),
+                tenant: q('$states.input'),
+                text: PROBE_TEXT,
+                systemPrompt: 'You are a scheduled health probe for a small business assistant. Use your tools to answer, and reply in one short sentence.',
+                actorId: q("$states.input.tenantId.S & '_canary'"),
+                sessionId: q("'canary-' & $states.input.tenantId.S & '-' & $fromMillis($millis(), '[Y0001][M01][D01]')"),
+                allowedTools: ['search_contacts'],
               },
-              // A first invoke against a cold microVM can outrun AgentCore's 120s
-              // init budget and come back 424 — reliably so after a deploy, when the
-              // image is pulled again. The next invoke finds it warm, so one retry
-              // separates that self-healing miss from a harness that is actually
-              // down. Measured: ~62s cold, ~13s warm, failure only on the first
-              // invoke after a deploy.
-              Retry: [
-                { ErrorEquals: ['BedrockAgentCore.ThrottlingException'], IntervalSeconds: 5, MaxAttempts: 2, BackoffRate: 2 },
-                { ErrorEquals: ['BedrockAgentCore.RuntimeClientErrorException'], IntervalSeconds: 10, MaxAttempts: 1 },
-              ],
-              Assign: { reply: q('$states.result.Output.Message.Content[0].Text') },
-              Output: q('$states.input'), Next: 'Answered',
+              Output: q('$states.input'), Next: assistantLoopStart(refs),
             },
+            ...assistantLoopStates(refs, 'Answered'),
             Answered: {
               Type: 'Choice',
-              Choices: [{ Condition: q('$exists($reply) and $length($trim($reply)) > 0'), Next: 'Healthy' }],
+              Choices: [{ Condition: q('$exists($reply) and $length($trim($reply)) > 0'), Next: save ? 'SaveTurn' : 'Healthy' }],
               Default: 'Silent',
             },
+            ...(save ? { SaveTurn: { ...save, Output: q('$states.input'), Next: 'Healthy' } } : {}),
             Healthy: { Type: 'Succeed' },
             Silent: {
               Type: 'Fail', Error: 'AssistantSilent',
-              Cause: q("'tenant ' & $states.input.tenantId.S & ': the assistant harness returned no text. Check its log group, then reproduce with scripts/test-assistant.mts against this tenant.'"),
+              Cause: q("'tenant ' & $states.input.tenantId.S & ': the assistant loop produced no text. Check this execution, then reproduce with scripts/test-assistant.mts against this tenant.'"),
             },
           },
         },

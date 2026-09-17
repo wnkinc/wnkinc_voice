@@ -54,6 +54,8 @@ export class VoiceStack extends cdk.Stack {
   readonly composioSecret: secretsmanager.Secret;
   /** EventBridge Connection carrying that key; every Composio HTTP task in every stack authenticates through it. */
   readonly composioConnection: events.Connection;
+  /** EventBridge Connection carrying the OpenAI key; the accept workflow and the assistant loop (runtime stack) call OpenAI through it. */
+  readonly openaiConnection: events.Connection;
   /** Every alarm in every stack pages this topic. */
   readonly alarmTopic: sns.Topic;
   /** Channel identity -> tenant + person: `telegram:<id>` or `sms:<e164>`. Seeded from each tenant's `people`. */
@@ -210,9 +212,10 @@ export class VoiceStack extends cdk.Stack {
       authorization: events.Authorization.apiKey('x-api-key', this.composioSecret.secretValueFromJson('COMPOSIO_API_KEY')),
     });
     const openaiConnection = new events.Connection(this, 'OpenAIConnection', {
-      description: 'OpenAI API key for the accept workflow',
+      description: 'OpenAI API key for the accept workflow and the assistant loop',
       authorization: events.Authorization.apiKey('Authorization', cdk.SecretValue.unsafePlainText(`Bearer ${this.openaiSecret.secretValueFromJson('OPENAI_API_KEY').unsafeUnwrap()}`)),
     });
+    this.openaiConnection = openaiConnection;
     const acceptWorkflow = new sfn.StateMachine(this, 'AcceptWorkflow', {
       stateMachineName: `${prefix}-accept`,
       tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried

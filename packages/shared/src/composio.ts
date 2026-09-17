@@ -9,11 +9,9 @@
  *
  * At runtime nothing imports this file: the workflows call Composio's HTTP API
  * directly (Step Functions HTTP tasks, the tenant id as user_id, the key in an
- * EventBridge Connection), and the assistant harness gets Composio's meta tools
- * over MCP through a per-tenant session minted by `composioAssistant.ensureSession`
- * at seed time (bound to the tenant's connected accounts, so the URL alone
- * selects the tenant's credentials). What remains here is for the seed and the
- * consent scripts: connect links, the owner's Gmail address, the session.
+ * EventBridge Connection), and the assistant loop runs each tool the model asks
+ * for the same way. What remains here is for the consent scripts: connect
+ * links and the owner's Gmail address.
  *
  * Deliberately NOT re-exported from the shared index: import from
  * '@wnk/shared/composio' (scripts only) so no Lambda bundle carries the SDK.
@@ -106,29 +104,3 @@ async function connectLink(tenantId: string, toolkit: ComposioToolkit = 'gmail')
 
 export const composioGmail = { ownerEmail, connectLink: (tenantId: string) => connectLink(tenantId, 'gmail') };
 export const composioConnect = { link: connectLink };
-
-// ---- Assistant: meta-tools MCP session ------------------------------------
-
-/**
- * Mint the tenant's Composio session for the assistant harness: Composio's
- * meta tools (search tools, execute) over the toolkits the tenant has
- * connected, with the model's context carrying a handful of small tools
- * instead of every raw schema. Bound explicitly to the tenant's ACTIVE
- * connected accounts — a session otherwise binds only accounts under the
- * project's default auth config and reports "no active connection" for the
- * rest. No connected account at all fails closed: no session, no URL.
- * Connection management and the code sandbox are off; the assistant may
- * only use the SaaS the owner already consented to.
- */
-async function ensureSession(tenantId: string): Promise<{ sessionId: string; url: string; toolkits: string[] }> {
-  const c = await client();
-  const accounts = await c.connectedAccounts.list({ userIds: [tenantId] });
-  const connectedAccounts: Record<string, string[]> = {};
-  for (const a of accounts.items) if (a.status === 'ACTIVE' && !a.isDisabled) (connectedAccounts[a.toolkit.slug] ??= []).push(a.id);
-  const toolkits = Object.keys(connectedAccounts);
-  if (!toolkits.length) throw new Error(`tenant ${tenantId} has no active Composio connected accounts; run scripts/connect-composio.mts first`);
-  const session = await c.create(tenantId, { toolkits, connectedAccounts, manageConnections: false, sandbox: { enable: false }, mcp: true });
-  return { sessionId: session.sessionId, url: session.mcp.url, toolkits };
-}
-
-export const composioAssistant = { ensureSession };

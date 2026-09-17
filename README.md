@@ -21,7 +21,7 @@ CRM sync, a lead email from the owner's Gmail, the assistant, the saved browser.
 
 The platform is thin custom code on thick rented infrastructure. Two Lambdas are code
 (the webhook verifier and the session that holds a call). Everything else is a Step
-Functions definition, an AgentCore harness, or a CDK declaration. See `CLAUDE.md` for the
+Functions definition or a CDK declaration. See `CLAUDE.md` for the
 goals that decide how to change it.
 
 ## 1. Platform: what every tenant gets
@@ -105,40 +105,47 @@ number the receptionist answers), and the sender's number is the identity.
                                                                                           │ unknown sender / assistant off? → done, silently
                                                                                           │ /login from the owner? → browser-login workflow
                                                                                           ▼
-                                                                    AgentCore harness (InvokeHarness state)
-                                                       Composio MCP session AS the tenant · Memory · reply text back
-                                                                                          │ PutEvents telegram.reply
+                                                              the agent loop (workflows/assistant-loop.ts):
+                                                    Memory: this session's history + what it recalls about the person
+                                                    ──▶ OpenAI Responses (HTTP task) ──▶ tool call? gate it, run it through
+                                                        Composio AS the tenant, back to the model ──▶ ... until it answers
+                                                                                          │ PutEvents telegram.reply · Memory: save the turn
                                                                                           ▼
                                                                     EventBridge API destination → Bot API sendMessage
 ```
 
-**No code on the path.** The assistant is a harness: model, default prompt, memory, and limits are
-configuration in the runtime stack. Per invocation the workflow passes the message, a system prompt
-built from the tenant row, and the tenant's Composio MCP session (`assistant.composioMcpUrl`, minted by the
-seed and bound to the owner's connected accounts), so the only SaaS the model can reach is that
-tenant's; Composio's meta tools keep the context small, and the harness `allowedTools` fences the
-server. The harness threads the conversation and extracts facts through the platform Memory instance
-(actor = tenant + person), surviving microVM expiry. Each person gets a fresh session per day, rolling
-at 3 AM in the tenant's timezone (`sessionDayOffsetMinutes`, computed by the seed; drifts an hour
-across DST until the next seed); facts, preferences, and per-session summaries are retrieved across
-all prior days. The reply goes out through an EventBridge API destination whose endpoint holds the bot
-token (resolved from the Telegram secret at deploy); failures land in a dead-letter queue with an
-alarm. Replies over Telegram's 4096-character limit fail there — the prompt asks for brevity;
-splitting is deferred until it is actually needed.
+**No code and no runtime on the path.** The agent loop is states inside the workflow
+(`workflows/assistant-loop.ts`, shared by the Telegram and SMS workflows and the canary). The model
+makes every judgment: which tool, what arguments, when to stop. The states between its decisions are
+mechanical, and they are the seam the platform controls: the tool must be on the tenant row's
+`assistant.tools` list, every Composio call names the tenant, tool results are bounded, rounds are
+capped at six, and each call is a line in the execution history. Rounds inside one turn chain with
+OpenAI's `previous_response_id`, so a later round sends only the tool results. Tools are a catalog in
+the loop file: what the model sees is a slim schema (`search_contacts(query)`), what runs is a Composio
+slug with defaults. Adding a tool is one catalog entry and a name on the rows that get it.
+
+Memory is the platform Memory instance: at the start of a turn the loop reads this session's earlier
+turns and retrieves what the service has extracted about the person (facts, preferences, summaries);
+at the end it writes the turn back, and extraction happens on its own. Each person gets a fresh
+session per day, rolling at 3 AM in the tenant's timezone (`sessionDayOffsetMinutes`, computed by the
+seed; drifts an hour across DST until the next seed). The reply goes out through an EventBridge API
+destination whose endpoint holds the bot token (resolved from the Telegram secret at deploy); failures
+land in a dead-letter queue with an alarm. Replies over Telegram's 4096-character limit fail there —
+the prompt asks for brevity; splitting is deferred until it is actually needed.
 
 Identity is Telegram's: the Bot API vouches for the sender's user id, the People table (seeded from
-each tenant's `people`) maps it to a tenant and a role, and the workflow never invokes the harness
-for anyone else. The same reply path carries the receptionist's owner alerts.
+each tenant's `people`) maps it to a tenant and a role, and the workflow never runs the loop for
+anyone else. The same reply path carries the receptionist's owner alerts.
 
-Prove it without Telegram: `npx tsx scripts/test-assistant.mts "who is Sarah?"` (invokes the harness
-with the same arguments the workflow uses).
+Prove it end to end: `npx tsx scripts/test-assistant.mts "who is Sarah?" <tenantId>` starts the
+Telegram workflow as the tenant's owner; the reply lands on their Telegram and is printed.
 
 **SMS.** Twilio posts each inbound text to a secret path on the same API. Twilio sends a
 form-encoded body, which is not JSON and so cannot start a state machine directly, so the route
 puts the raw string on a queue and an EventBridge Pipe starts the SMS workflow (`workflows/sms.ts`)
 with it; the workflow's first state parses it. The People lookup is `sms:<sender>`, plus one check
 Telegram cannot make: the number texted must be that person's tenant's number. From there it is the
-Telegram path: the same harness, the tenant's Composio session, a session per phone per day, an actor
+Telegram path: the same loop, a session per phone per day, an actor
 per person (`<tenant>_sms_<digits>`, separate from the caller memory of whoever phones from that
 number). The reply is an HTTP task inside the workflow straight to Twilio's Messages API, form-encoded
 through a basic-auth Connection, addressed with the account SID the inbound post carried. A reply
@@ -162,17 +169,17 @@ Stagehand session); today nothing but the owner drives it.
 ### The clock hits 15:00 UTC
 
 Silent degradation gets a canary. Two run daily, ten minutes apart so a failure in the second is
-about the harness and not about Composio:
+about the loop and not about Composio:
 
 - **15:00, `composio-health`** scans the Tenants table and asks Composio for each tenant's ACTIVE
   connected accounts, expecting HubSpot when `crm.via` is composio, Gmail when the email responder
   is on, and at least one when the assistant is on. A missing connection would otherwise fail
   nothing (every CRM and Gmail state catches and carries on); here it fails the execution, which
   alarms with the tenant and the reconnect command.
-- **15:10, `assistant-health`** invokes each enabled tenant's assistant with one read-only question
-  (a phone number no contact has) and asserts only that it answered with text. It proves the harness
-  answers, the model key resolves, Memory threads a session, and the tenant's MCP session serves
-  tools. Nobody messages the bot on a quiet week, so this is the traffic that proves it still works.
+- **15:10, `assistant-health`** runs the same loop for each enabled tenant with one read-only
+  question (a phone number no contact has) and asserts only that it produced text. It proves the model
+  answers through the OpenAI Connection, Memory reads and writes, and a tool call reaches Composio and
+  comes back. Nobody messages the bot on a quiet week, so this is the traffic that proves it still works.
 
 ### How the tenant is chosen
 
@@ -188,9 +195,9 @@ input, and that selection picks the credential:
   event's phone number; every Composio HTTP call names that tenant as Composio's user, and the
   owner alert delivers to the owner listed on the row.
 - **Assistant**: the People table maps the Telegram sender id, or the texting phone number, to a
-  tenant; the workflow hands the harness that tenant's Composio session URL from the row. The
-  session is bound to the owner's connected accounts, so the model's tools cannot reach another
-  tenant's SaaS. Both channels' posts arrive on a secret path only the channel knows.
+  tenant; the loop runs each tool the model asks for through Composio naming that tenant, and only
+  tools on the tenant row's list. The model's tools cannot reach another tenant's SaaS because no
+  state ever names one. Both channels' posts arrive on a secret path only the channel knows.
 
 Neither a model nor a caller ever names a tenant. AgentCore Gateway with Cedar is the option for the
 day an open-ended model needs a *platform* tool, or a SaaS Composio does not broker needs OAuth in
@@ -220,7 +227,7 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `receptionist.maxCallSeconds` (default 600, max 840) | Ours, not OpenAI's: the agent is asked to wrap up, then the call is hung up |
 | `crm` | `{ "type": "hubspot", "via": "composio" }` enables caller recognition, CRM sync, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
 | `emailResponder` | `{ enabled }`: owner follow-up email per lead, from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default off; the workflow refuses a tenant whose flag is off. |
-| `assistant` | `{ enabled, composioMcpUrl }`: the chat assistant for the tenant's people. `composioMcpUrl` is the tenant's Composio meta-tools MCP session, minted by the seed once the owner has connected accounts; the workflow hands it to the harness per invocation; no URL, no SaaS tools. |
+| `assistant` | `{ enabled, tools }`: the chat assistant for the tenant's people. `tools` is the allow-list, by name from the catalog in `workflows/assistant-loop.ts` (`search_contacts`, `add_note`; both need the HubSpot consent). Empty means it answers from the prompt and memory alone. |
 | `browser` | `{ enabled, contextId }`: the tenant's saved browser in Browserbase (cookies, logins). The browser-login workflow creates the context on the owner's first `/login` and writes it to the row; copy it into the file when the reply says so, or a re-seed starts a fresh browser. |
 
 ### The automations menu
@@ -438,10 +445,10 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 | `packages/voice-session/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
 | `packages/voice-session/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/voice-session/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload. To add a tool: a zod args schema, a handler, a `tool({...})` entry, then its name in a tenant's `tools`. Tools that need durability publish an event and return; a workflow consumes it |
-| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, sms, browser-login, call-ended, composio-health, assistant-health, and the four automations): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair). `automation.ts` is the descriptor the four automations export |
+| `packages/infrastructure/workflows/` | One file per Step Functions definition (accept, telegram, sms, browser-login, call-ended, composio-health, assistant-health, and the four automations; `assistant-loop.ts` is the agent loop and tool catalog the two chat workflows and the canary share): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair). `automation.ts` is the descriptor the four automations export |
 | `tenants/<id>.ts`, `tenants/index.ts` | What that tenant runs on the bus, and the registry (one line per tenant). Tracked, unlike the rows |
 | `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant from its file |
-| `packages/infrastructure/stacks/runtime-stack.ts` | The assistant as an AgentCore **harness** (configuration, no agent code) with its Telegram reply path, and the platform workflows every tenant shares: Telegram, SMS, browser login, call-ended, the two canaries |
+| `packages/infrastructure/stacks/runtime-stack.ts` | The platform workflows every tenant shares: Telegram and SMS (each running the assistant loop), browser login, call-ended, the two canaries, and the Telegram reply path |
 | `packages/infrastructure/stacks/voice-stack.ts`, `memory-stack.ts`, `identity-stack.ts` | The call path (API, two Lambdas, accept workflow, tables, bus, queues, alarm topic); caller memory; credential providers |
 | `packages/infrastructure/bin/app.ts`, `infra_utils/` | Stack wiring; alarm and state-machine presets |
 | `packages/shared/src/` | `types.ts` (`TenantConfig` zod schema, records, events), `store.ts` (DynamoDB behind one `Store` interface plus an in-memory version; no leads table, the CRM holds the lead and the call row is the audit), `events.ts` (EventBridge publisher), `config.ts` (env, secrets, OpenAI client, logger), `composio.ts` (Composio SDK, scripts only) |

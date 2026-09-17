@@ -7,28 +7,9 @@
  * Also mirrors the tenant's `people` into the People table (one row per channel
  * identity) and removes rows this tenant no longer lists — that is how someone
  * gains or loses access to the assistant. No deploy.
- *
- * And, when the assistant is on, mints the tenant's Composio meta-tools MCP
- * session (bound to the owner's connected accounts) and writes its URL back
- * as `assistant.composioMcpUrl`. Needs COMPOSIO_SECRET_ARN (voice stack output) or
- * COMPOSIO_API_KEY; the owner must have run connect-composio first.
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dynamoStore } from '@wnk/shared';
-import { composioAssistant } from '@wnk/shared/composio';
-
-/** The assistant's SaaS tools: one Composio meta-tools session per tenant. */
-async function ensureComposioSession(raw: { tenantId?: string; assistant?: { enabled?: boolean; composioMcpUrl?: string } }, file: string): Promise<void> {
-  if (raw.assistant?.composioMcpUrl || !raw.tenantId || !raw.assistant?.enabled) return;
-  if (!process.env.COMPOSIO_SECRET_ARN && !process.env.COMPOSIO_API_KEY) {
-    console.warn(`${raw.tenantId}: assistant is on but no composioMcpUrl and COMPOSIO_SECRET_ARN unset; the assistant has no SaaS tools until one exists`);
-    return;
-  }
-  const s = await composioAssistant.ensureSession(raw.tenantId);
-  raw.assistant.composioMcpUrl = s.url;
-  writeBack(file, 'assistant', 'composioMcpUrl', s.url);
-  console.log(`minted Composio session for ${raw.tenantId}: ${s.sessionId} (toolkits: ${s.toolkits.join(', ')})`);
-}
 
 /**
  * Minutes to subtract from UTC so days roll at 3 AM local: 180 minus the
@@ -44,17 +25,6 @@ export function sessionDayOffsetMinutes(timeZone: string, now = new Date()): num
   return 180 - zoneOffset;
 }
 
-/** Write a minted value into its service block (`"<block>": {`), keeping the file's formatting. */
-function writeBack(file: string, block: string, key: string, value: string): void {
-  const text = readFileSync(file, 'utf8');
-  const marker = new RegExp(`"${block}":\\s*\\{`);
-  if (marker.test(text) && !text.includes(`"${key}"`)) {
-    writeFileSync(file, text.replace(marker, (m) => `${m}\n    "${key}": "${value}",`));
-  } else {
-    console.warn(`add "${key}": "${value}" to ${file} by hand`);
-  }
-}
-
 const files = process.argv.slice(2);
 if (!files.length) {
   console.error('usage: npm run seed -- <tenant.json> [...]');
@@ -64,7 +34,6 @@ const store = dynamoStore();
 for (const file of files) {
   const list = [JSON.parse(readFileSync(file, 'utf8')) as unknown]; // one tenant per file, named tenants/<tenantId>.json
   for (const raw of list) {
-    await ensureComposioSession(raw as Parameters<typeof ensureComposioSession>[0], file);
     const tz = (raw as { business?: { timezone?: string } }).business?.timezone ?? 'America/Los_Angeles';
     (raw as { sessionDayOffsetMinutes?: number }).sessionDayOffsetMinutes = sessionDayOffsetMinutes(tz);
     const t = await store.putTenant(raw as Parameters<typeof store.putTenant>[0]);

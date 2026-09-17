@@ -3,6 +3,9 @@ import { z } from 'zod';
 /** E.164 phone number, e.g. +15555550100 */
 export const E164 = z.string().regex(/^\+[1-9]\d{6,14}$/, 'must be E.164 (+15555550100)');
 
+/** Assistant tool names; the catalog that runs them is `workflows/assistant-loop.ts` (kept in step by a test). */
+export const ASSISTANT_TOOL_NAMES = ['search_contacts', 'add_note'] as const;
+
 export const PersonSchema = z.object({
   name: z.string().min(1),
   role: z.enum(['owner', 'employee']),
@@ -120,12 +123,13 @@ export const TenantConfigSchema = z.object({
   assistant: z.object({
     enabled: z.boolean().default(false),
     /**
-     * The assistant's SaaS tools: this tenant's Composio meta-tools MCP session,
-     * minted by the seed (`composioAssistant.ensureSession`) and bound to the
-     * tenant's connected accounts. The workflow hands it to the harness per
-     * invocation; a tenant without one gets no SaaS tools.
+     * The tools this tenant's assistant may use, by name from
+     * ASSISTANT_TOOL_NAMES: the allow-list the loop's Gate state enforces.
+     * Each runs through Composio naming the tenant, so a tool needs the
+     * matching connected account (HubSpot for the CRM tools). Empty means
+     * the assistant answers from the prompt and memory alone.
      */
-    composioMcpUrl: z.url().optional(),
+    tools: z.array(z.enum(ASSISTANT_TOOL_NAMES)).default([]),
   }).prefault({}),
 
   /** A saved browser for the business: the owner signs into sites over a live view (`/login` on Telegram); logins persist in Browserbase. */

@@ -41,8 +41,8 @@ should live.
   channel identity the channel vouches for.
 - The tenant is selected before any model runs, and that selection picks the
   credential: in-process tools carry the call's tenant, automations take it
-  from the event and name it on every Composio call, and the assistant is
-  handed the tenant's own Composio session. Neither the model nor a caller
+  from the event and name it on every Composio call, and the assistant's loop runs
+  each tool the model asks for through Composio naming the tenant. Neither the model nor a caller
   ever names a tenant. AgentCore Gateway with Cedar is a per-capability option
   for a model that needs platform tools, not a mandatory hop.
 - Every per-tenant resource is addressed by tenant id in its key.

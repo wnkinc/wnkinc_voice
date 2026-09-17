@@ -5,8 +5,51 @@ import { loginSiteExpr } from '../workflows/browser-login.js';
 import { expectedToolkitsExpr, missingToolkitsExpr } from '../workflows/composio-health.js';
 import { nextBusinessMorningExpr } from '../workflows/crm-lead.js';
 import { parseFormExpr } from '../workflows/sms.js';
+import { ASSISTANT_TOOLS, callsExpr, historyExpr, outputsExpr, textExpr, toolResultExpr } from '../workflows/assistant-loop.js';
+import { ASSISTANT_TOOL_NAMES } from '../../shared/src/types.js';
 
-const evalExpr = (expr: string, input: unknown) => jsonata(expr).evaluate(input);
+const evalExpr = (expr: string, input: unknown, bindings: Record<string, unknown> = {}) => {
+  const e = jsonata(expr);
+  // Step Functions adds $parse; the jsonata library has $eval instead. Same contract for JSON text.
+  e.registerFunction('parse', (text: string) => JSON.parse(text) as unknown);
+  return e.evaluate(input, bindings);
+};
+
+describe('assistant loop', () => {
+  it('the tenant row may only name tools the catalog runs', () => {
+    expect(Object.keys(ASSISTANT_TOOLS).sort()).toEqual([...ASSISTANT_TOOL_NAMES].sort());
+  });
+  // A Responses API body as OpenAI returned it in the spike (one tool call, no text), and one with text only.
+  const toolTurn = { id: 'resp_1', output: [{ type: 'function_call', call_id: 'call_1', name: 'search_contacts', arguments: '{"query":"+15555550100"}' }], usage: { total_tokens: 157 } };
+  const textTurn = { id: 'resp_2', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Found one contact.' }] }], usage: { total_tokens: 198 } };
+  it('reads tool calls and text from a Responses body', async () => {
+    expect(await evalExpr(callsExpr('$b'), {}, { b: toolTurn })).toEqual(toolTurn.output);
+    expect(await evalExpr(callsExpr('$b'), {}, { b: textTurn })).toEqual([]);
+    expect(await evalExpr(textExpr('$b'), {}, { b: toolTurn })).toBe('');
+    expect(await evalExpr(textExpr('$b'), {}, { b: textTurn })).toBe('Found one contact.');
+  });
+  it('shapes a Composio result for the model, bounded, and carries the error when it failed', async () => {
+    const ok = { successful: true, data: { total: 1, results: [{ id: '9', properties: { firstname: 'Composio', lastname: null, phone: '+15555550100', email: null } }] } };
+    const shaped = await evalExpr(toolResultExpr('$r', ASSISTANT_TOOLS.search_contacts.shape), {}, { r: ok, callId: 'call_1' }) as { call_id: string; output: string };
+    expect(shaped.call_id).toBe('call_1');
+    expect(JSON.parse(shaped.output)).toEqual({ total: 1, contacts: [{ id: '9', name: 'Composio', phone: '+15555550100', email: null }] });
+    const failed = await evalExpr(toolResultExpr('$r', ASSISTANT_TOOLS.search_contacts.shape), {}, { r: { successful: false, error: 'no HubSpot connection' }, callId: 'call_1' }) as { output: string };
+    expect(JSON.parse(failed.output)).toEqual({ error: 'no HubSpot connection' });
+    const big = { successful: true, data: { total: 1, results: [{ id: 'x'.repeat(7000), properties: {} }] } };
+    const cut = await evalExpr(toolResultExpr('$r', ASSISTANT_TOOLS.search_contacts.shape), {}, { r: big, callId: 'c' }) as { output: string };
+    expect(cut.output.endsWith('...[truncated]')).toBe(true);
+    expect(cut.output.length).toBeLessThan(6100);
+  });
+  it('turns tool results into the next round and session events into history, oldest first', async () => {
+    expect(await evalExpr(outputsExpr('$results'), {}, { results: [{ call_id: 'c1', output: '{"total":0}' }] })).toEqual([{ type: 'function_call_output', call_id: 'c1', output: '{"total":0}' }]);
+    const events = [
+      { EventTimestamp: '2026-09-16T21:10:00Z', Payload: [{ Conversational: { Role: 'USER', Content: { Text: 'second' } } }] },
+      { EventTimestamp: '2026-09-16T21:00:00Z', Payload: [{ Conversational: { Role: 'USER', Content: { Text: 'first' } } }, { Conversational: { Role: 'ASSISTANT', Content: { Text: 'reply' } } }] },
+    ];
+    expect(await evalExpr(historyExpr('$e'), {}, { e: events })).toEqual([{ role: 'user', content: 'first' }, { role: 'assistant', content: 'reply' }, { role: 'user', content: 'second' }]);
+    expect(await evalExpr(historyExpr('$e'), {}, { e: [] })).toEqual([]);
+  });
+});
 
 describe('parseFormExpr', () => {
   const parse = (body: string) => evalExpr(parseFormExpr('body'), { body });

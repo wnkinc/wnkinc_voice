@@ -83,10 +83,16 @@ function allStates(def: { States: Record<string, State> }, prefix = ''): [string
 
 const isHttp = (s: State) => s.Type === 'Task' && s.Resource === 'arn:aws:states:::http:invoke';
 const isComposio = (s: State) => isHttp(s) && String(s.Arguments?.ApiEndpoint ?? '').startsWith('https://backend.composio.dev/');
-/** A side effect that costs money or reaches a customer irreversibly (CLAUDE.md: those need a once-marker). */
+/**
+ * A side effect that costs money or reaches a customer irreversibly (CLAUDE.md:
+ * those need a once-marker). A CRM note or a memory event is neither: a
+ * duplicate is clutter. That is why the assistant may add notes and write its
+ * turn to memory on a person's say-so without a marker, and why sending email
+ * is not yet one of its tools. (call-ended keeps its marker for the minutes
+ * it meters, not for the memory write.)
+ */
 const isCostly = (s: State) =>
-  (isComposio(s) && /tools\/execute\/(GMAIL_SEND_EMAIL|HUBSPOT_(CREATE|UPDATE)_)/.test(String(s.Arguments.ApiEndpoint)))
-  || s.Resource === 'arn:aws:states:::aws-sdk:bedrockagentcore:createEvent';
+  isComposio(s) && /tools\/execute\/(GMAIL_SEND_EMAIL|HUBSPOT_(CREATE|UPDATE)_(CONTACT|TASK))/.test(String(s.Arguments.ApiEndpoint));
 const isOnceMarker = (s: State, resource: string) =>
   s.Resource === `arn:aws:states:::dynamodb:${resource}` && String(s.Arguments?.ExpressionAttributeNames?.['#k'] ?? '').includes('done:');
 

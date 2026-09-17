@@ -1,31 +1,29 @@
 /**
- * My Assistant over SMS: Twilio -> API Gateway -> this workflow -> AgentCore harness.
+ * My Assistant over SMS: Twilio -> API Gateway -> SQS -> Pipe -> this workflow -> the agent loop.
  *
  * The second front door to the same assistant. Twilio posts each inbound
  * text form-encoded, which is not JSON, and API Gateway can hand a state
  * machine only JSON: so the route drops the raw body on a queue (any string
  * goes) and an EventBridge Pipe starts this machine with the message, a
  * one-element array whose `body` is the form string. The first state parses
- * it (a direct start with {"body": ...} is accepted too, for tests). Sender -> person ->
- * tenant as on Telegram, plus one check Telegram cannot make: the number
- * texted must be that person's tenant's number. Then the same harness
- * invocation with the same prompt shape, the tenant's Composio session, and
- * a person-scoped memory actor. The reply is an HTTP task straight to
- * Twilio's Messages API (form-encoded, basic auth through the Connection),
- * addressed with the account SID the inbound post carried, so the URL needs
- * no configuration. Tokens are metered per invocation.
+ * it (a direct start with {"body": ...} is accepted too, for tests). Sender ->
+ * person -> tenant as on Telegram, plus one check Telegram cannot make: the
+ * number texted must be that person's tenant's number. Then the same loop
+ * (workflows/assistant-loop.ts) with the tenant's allowed tools. The reply
+ * is an HTTP task straight to Twilio's Messages API (form-encoded, basic
+ * auth through the Connection), addressed with the account SID the inbound
+ * post carried, so the URL needs no configuration. The turn is written to
+ * the person's memory; tokens are metered per turn.
  */
 import { q } from './asl.js';
+import { assistantLoopStart, assistantLoopStates, assistantPrepare, assistantSaveTurnState, type AssistantLoopRefs } from './assistant-loop.js';
 
 export const TWILIO_API = 'https://api.twilio.com/2010-04-01/';
 
-export interface SmsRefs {
+export interface SmsRefs extends AssistantLoopRefs {
   peopleTable: string;
   tenantsTable: string;
   usageTable: string;
-  harnessArn: string;
-  /** Identity API key provider holding the Composio key; resolved into the MCP session header at invocation. */
-  composioProviderArn: string;
   /** EventBridge Connection with Twilio basic auth (account SID, auth token). */
   twilioConnectionArn: string;
 }
@@ -46,9 +44,10 @@ export function smsDefinition(refs: SmsRefs) {
     "($exists($tenant.business.M.description.S) ? 'About the business: ' & $tenant.business.M.description.S & ' ' : '')",
     "($exists($tenant.business.M.services.L) and $count($tenant.business.M.services.L) > 0 ? 'Services: ' & $join($tenant.business.M.services.L.S, ', ') & '. ' : '')",
     "($exists($tenant.business.M.hours.S) ? 'Hours: ' & $tenant.business.M.hours.S & '. ' : '')",
-    "($exists($tenant.assistant.M.composioMcpUrl.S) ? 'Your tools reach the business systems the owner connected (CRM, email): search for the right tool, then run it; do not stop at search results. CRM phone numbers are stored in E.164 form such as +15095551234, so search the phone property with that exact format. ' : '')",
-    "'This is a text message conversation (SMS): be brief and plain, no markdown, no lists. Use your tools to look things up or record things; say what you did and what you found. Never invent records. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 1000 characters.'",
+    "($count($allowedTools) > 0 ? 'Your tools reach the business systems the owner connected. Use them to look things up or record things; say what you did and what you found. Never invent records. ' : 'You have no tools connected for this business. ')",
+    "'This is a text message conversation (SMS): be brief and plain, no markdown, no lists. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 1000 characters.'",
   ].join(' & ');
+  const save = assistantSaveTurnState(refs);
 
   return {
     QueryLanguage: 'JSONata',
@@ -93,34 +92,28 @@ export function smsDefinition(refs: SmsRefs) {
       },
       AssistantEnabled: {
         Type: 'Choice',
-        Choices: [{ Condition: q('$exists($tenant) and $tenant.assistant.M.enabled.BOOL = true and $exists($tenant.assistant.M.composioMcpUrl.S)'), Next: 'Invoke' }],
+        Choices: [{ Condition: q('$exists($tenant) and $tenant.assistant.M.enabled.BOOL = true'), Next: 'Prepare' }],
         Default: 'Ignored',
       },
-      Invoke: {
-        Type: 'Task', Resource: 'arn:aws:states:::bedrockagentcore:invokeHarness',
-        Arguments: {
-          HarnessArn: refs.harnessArn,
-          // One session per phone PER DAY, rolling at 3 AM tenant-local
-          // (sessionDayOffsetMinutes, computed by the seed; 600 = Pacific if
-          // unset), as on Telegram. Ids must be >= 33 chars and plain: the
-          // number's digits only. One actor per person, tenant-prefixed and
-          // channel-named, so a person's chat memory is theirs and not the
-          // caller memory of whoever phones from that number.
-          RuntimeSessionId: q("'sms-chat-' & $replace($sms.From, /[^0-9]/, '') & '-' & $fromMillis($millis() - ($exists($tenant.sessionDayOffsetMinutes.N) ? $number($tenant.sessionDayOffsetMinutes.N) : 600) * 60000, '[Y0001][M01][D01]') & '-000000000000'"),
-          ActorId: q("$tenant.tenantId.S & '_sms_' & $replace($sms.From, /[^0-9]/, '')"),
-          Messages: [{ Role: 'user', Content: [{ Text: q('$sms.Body') }] }],
-          SystemPrompt: [{ Text: q(prompt) }],
-          // The tenant's SaaS tools: its Composio meta-tools session. The row
-          // selects it; the key rides by ARN and is resolved from the vault at
-          // invocation. Nothing the model or the sender sends can pick another.
-          Tools: [{ Type: 'remote_mcp', Name: 'crm', Config: { RemoteMcp: { Url: q('$tenant.assistant.M.composioMcpUrl.S'), Headers: { 'x-api-key': `\${${refs.composioProviderArn}}` } } } }],
-          AllowedTools: ['@crm/*'],
-          TimeoutSeconds: 120,
+      // What the loop reads. One memory session per phone PER DAY, rolling at
+      // 3 AM tenant-local (sessionDayOffsetMinutes, computed by the seed; 600
+      // = Pacific if unset), as on Telegram. One actor per person, tenant-
+      // prefixed and channel-named, so a person's chat memory is theirs and
+      // not the caller memory of whoever phones from that number. The
+      // allow-list is the row's `assistant.tools`.
+      Prepare: {
+        Type: 'Pass',
+        Assign: {
+          ...assistantPrepare(),
+          text: q('$sms.Body'),
+          systemPrompt: q(prompt),
+          actorId: q("$tenant.tenantId.S & '_sms_' & $replace($sms.From, /[^0-9]/, '')"),
+          sessionId: q("'sms-chat-' & $replace($sms.From, /[^0-9]/, '') & '-' & $fromMillis($millis() - ($exists($tenant.sessionDayOffsetMinutes.N) ? $number($tenant.sessionDayOffsetMinutes.N) : 600) * 60000, '[Y0001][M01][D01]')"),
+          allowedTools: q('[$tenant.assistant.M.tools.L.S]'),
         },
-        Retry: [{ ErrorEquals: ['BedrockAgentCore.ThrottlingException'], IntervalSeconds: 5, MaxAttempts: 2, BackoffRate: 2 }],
-        Assign: { reply: q('$states.result.Output.Message.Content[0].Text'), usage: q('$states.result.Usage') },
-        Output: q('$states.input'), Next: 'Reply',
+        Output: q('$states.input'), Next: assistantLoopStart(refs),
       },
+      ...assistantLoopStates(refs, 'Reply'),
       // Twilio's Messages API wants a form body: Step Functions encodes it.
       // From is the tenant's number (what they texted), To is the sender. A
       // body over Twilio's 1600 characters is rejected here, fails the
@@ -136,15 +129,16 @@ export function smsDefinition(refs: SmsRefs) {
           Transform: { RequestBodyEncoding: 'URL_ENCODED' },
         },
         Retry: [{ ErrorEquals: ['States.TaskFailed'], IntervalSeconds: 2, MaxAttempts: 1 }],
-        Output: q('$states.input'), Next: 'Usage',
+        Output: q('$states.input'), Next: save ? 'SaveTurn' : 'Usage',
       },
+      ...(save ? { SaveTurn: { ...save, Output: q('$states.input'), Next: 'Usage' } } : {}),
       Usage: {
         Type: 'Task', Resource: 'arn:aws:states:::dynamodb:putItem',
         Arguments: { TableName: refs.usageTable, Item: {
           tenantId: { S: q('$tenant.tenantId.S') },
           sk: { S: q("$now() & '#llm_tokens#' & $uuid()") },
           meter: { S: 'llm_tokens' },
-          units: { N: q('$string($usage.TotalTokens)') },
+          units: { N: q('$string($tokens)') },
           ref: { S: q("'sms:' & $sms.From") },
         } },
         End: true,
