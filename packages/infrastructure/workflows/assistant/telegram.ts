@@ -26,7 +26,7 @@ export function telegramDefinition(refs: TelegramRefs) {
     "($exists($tenant.business.M.description.S) ? 'About the business: ' & $tenant.business.M.description.S & ' ' : '')",
     "($exists($tenant.business.M.services.L) and $count($tenant.business.M.services.L) > 0 ? 'Services: ' & $join($tenant.business.M.services.L.S, ', ') & '. ' : '')",
     "($exists($tenant.business.M.hours.S) ? 'Hours: ' & $tenant.business.M.hours.S & '. ' : '')",
-    "($count($allowedTools) > 0 ? 'Your tools reach the business systems the owner connected. Use them to look things up or record things; say what you did and what you found. Never invent records. ' : 'You have no tools connected for this business. ')",
+    "($count($tenant.assistant.M.tools.L) > 0 ? 'Your tools reach the business systems the owner connected. Use them to look things up or record things; say what you did and what you found. Never invent records. ' : 'You have no tools connected for this business. ')",
     "'This is a chat: be brief and plain, no markdown. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 3000 characters.'",
   ].join(' & ');
   const save = assistantSaveTurnState(refs);
