@@ -37,7 +37,8 @@ should live.
 - The coding agent runs as the `wnk-ops` operator profile: rows, secrets,
   Connections, executions, reads. It cannot deploy or change IAM, and it must
   not switch profiles to get around that. An AccessDenied names the action;
-  the fix is a line in the `WnkOperate` policy, applied by a person.
+  the fix is a line in `ops/wnk-operate-policy.json`, committed with the
+  reason and applied by a person (see `ops/README.md`).
 - Build deferred items only when their trigger fires. The `new-tenant` skill keeps
   the trigger list. Don't pre-build membership models, per-tenant KMS keys, or
   config lineage.

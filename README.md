@@ -322,8 +322,9 @@ config drift between file and row, secrets, services, owner alert channel, Gmail
   write tenant rows, platform secrets, and Connections, start and read executions, read logs and
   metrics, and run `cdk diff`, but cannot touch CloudFormation or IAM. It is the laptop's default
   profile and the one this repo pins for its coding agent (`.claude/settings.json`). Admin is a
-  named profile (`wnk-admin`) used by hand for deploys and account changes. A script that hits an
-  AccessDenied names the exact action; add it to the policy, never reach for admin.
+  named profile (`wnk-admin`) used by hand for deploys and account changes. The policy is
+  `ops/wnk-operate-policy.json`; a script that hits an AccessDenied names the exact action, and the
+  fix is a line there, applied by a person (`ops/README.md`), never a switch to admin.
 - An OpenAI project with Realtime access (note the `proj_…` id under *Settings → Project → General*)
 - A Twilio account with a phone number
 
@@ -462,6 +463,7 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 | `packages/shared/src/` | `types.ts` (`TenantConfig` zod schema, records, events), `store.ts` (DynamoDB behind one `Store` interface plus an in-memory version; no leads table, the CRM holds the lead and the call row is the audit), `events.ts` (EventBridge publisher), `config.ts` (env, secrets, OpenAI client, logger), `composio.ts` (Composio SDK, scripts only) |
 | `scripts/` | `seed-tenant.ts` (row upsert), `check-tenant.ts` (pre-flight), `connect-composio.mts` (consent links), `telegram-webhook.mts` and `twilio-webhook.mts` (point each channel at the platform), and the `test-*.mts` provers |
 | `tenants/example.json` | Example tenant config |
+| `ops/` | Operator data applied by hand from the admin profile: the `WnkOperate` policy the coding agent runs under |
 | `packages/*/test/` | vitest suites. The infrastructure one synthesizes every state machine, checks the platform invariants, validates each with the service, and compares each to its file under `test/snapshots/`: a change to a shared definition shows as a diff on every tenant machine it alters. `npm run deploy` runs the tests first; `npm run test:update` records intended changes |
 
 ## Roadmap

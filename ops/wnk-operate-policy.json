@@ -1,0 +1,220 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "TenantRows",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:DescribeTable"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-west-2:539247450358:table/wnk-voice-dev-*",
+        "arn:aws:dynamodb:us-west-2:539247450358:table/wnk-voice-dev-*/index/*"
+      ]
+    },
+    {
+      "Sid": "PlatformSecrets",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:DescribeSecret"
+      ],
+      "Resource": [
+        "arn:aws:secretsmanager:us-west-2:539247450358:secret:OpenAISecret*",
+        "arn:aws:secretsmanager:us-west-2:539247450358:secret:ComposioSecret*",
+        "arn:aws:secretsmanager:us-west-2:539247450358:secret:TelegramSecret*",
+        "arn:aws:secretsmanager:us-west-2:539247450358:secret:TwilioSecret*",
+        "arn:aws:secretsmanager:us-west-2:539247450358:secret:BrowserbaseSecret*",
+        "arn:aws:secretsmanager:us-west-2:539247450358:secret:wnkinc-voice-dev/*"
+      ]
+    },
+    {
+      "Sid": "ListSecrets",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:ListSecrets"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Connections",
+      "Effect": "Allow",
+      "Action": [
+        "events:DescribeConnection",
+        "events:UpdateConnection"
+      ],
+      "Resource": "arn:aws:events:us-west-2:539247450358:connection/*"
+    },
+    {
+      "Sid": "Bus",
+      "Effect": "Allow",
+      "Action": [
+        "events:PutEvents"
+      ],
+      "Resource": "arn:aws:events:us-west-2:539247450358:event-bus/wnkinc-voice-dev-events"
+    },
+    {
+      "Sid": "EventsRead",
+      "Effect": "Allow",
+      "Action": [
+        "events:ListConnections",
+        "events:DescribeEventBus",
+        "events:ListRules",
+        "events:DescribeRule",
+        "events:ListTargetsByRule",
+        "events:ListEventBuses",
+        "events:ListApiDestinations",
+        "events:DescribeApiDestination"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Workflows",
+      "Effect": "Allow",
+      "Action": [
+        "states:StartExecution",
+        "states:DescribeExecution",
+        "states:GetExecutionHistory",
+        "states:ListExecutions",
+        "states:DescribeStateMachine",
+        "states:TestState",
+        "states:StopExecution"
+      ],
+      "Resource": [
+        "arn:aws:states:us-west-2:539247450358:stateMachine:wnkinc-voice-dev-*",
+        "arn:aws:states:us-west-2:539247450358:execution:wnkinc-voice-dev-*:*"
+      ]
+    },
+    {
+      "Sid": "WorkflowsRead",
+      "Effect": "Allow",
+      "Action": [
+        "states:ListStateMachines",
+        "states:ValidateStateMachineDefinition"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TestStateAsWorkflowRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:PassRole"
+      ],
+      "Resource": "arn:aws:iam::539247450358:role/wnk-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "states.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "StacksRead",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:ListStackResources",
+        "cloudformation:GetTemplate",
+        "cloudformation:GetTemplateSummary",
+        "cloudformation:ListStacks",
+        "cloudformation:DescribeChangeSet",
+        "cloudformation:ListChangeSets",
+        "cloudformation:ListExports"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CdkDiffOnly",
+      "Effect": "Allow",
+      "Action": [
+        "sts:AssumeRole"
+      ],
+      "Resource": "arn:aws:iam::539247450358:role/cdk-hnb659fds-lookup-role-539247450358-us-west-2"
+    },
+    {
+      "Sid": "CdkBootstrapRead",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ],
+      "Resource": "arn:aws:ssm:us-west-2:539247450358:parameter/cdk-bootstrap/*"
+    },
+    {
+      "Sid": "Observe",
+      "Effect": "Allow",
+      "Action": [
+        "logs:FilterLogEvents",
+        "logs:GetLogEvents",
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams",
+        "logs:StartQuery",
+        "logs:GetQueryResults",
+        "logs:StopQuery",
+        "logs:StartLiveTail",
+        "cloudwatch:GetMetricStatistics",
+        "cloudwatch:GetMetricData",
+        "cloudwatch:ListMetrics",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:DescribeAlarmHistory",
+        "xray:GetTraceSummaries",
+        "xray:BatchGetTraces",
+        "xray:GetServiceGraph",
+        "sqs:ListQueues",
+        "sts:GetCallerIdentity",
+        "lambda:GetFunction",
+        "lambda:ListFunctions",
+        "pipes:DescribePipe",
+        "pipes:ListPipes"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Queues",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:ReceiveMessage",
+        "sqs:PurgeQueue"
+      ],
+      "Resource": "arn:aws:sqs:us-west-2:539247450358:wnk-*"
+    },
+    {
+      "Sid": "MemoryRead",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:ListEvents",
+        "bedrock-agentcore:RetrieveMemoryRecords",
+        "bedrock-agentcore:ListMemoryRecords",
+        "bedrock-agentcore:GetMemory",
+        "bedrock-agentcore:ListSessions",
+        "bedrock-agentcore:ListActors",
+        "bedrock-agentcore:GetEvent"
+      ],
+      "Resource": [
+        "arn:aws:bedrock-agentcore:us-west-2:539247450358:memory/wnkinc_voice_dev_caller_memory-*",
+        "arn:aws:bedrock-agentcore:us-west-2:539247450358:memory/wnkinc_voice_dev_caller_memory-*/*"
+      ]
+    },
+    {
+      "Sid": "Alarms",
+      "Effect": "Allow",
+      "Action": [
+        "sns:Subscribe",
+        "sns:ListSubscriptionsByTopic",
+        "sns:GetTopicAttributes"
+      ],
+      "Resource": "arn:aws:sns:us-west-2:539247450358:wnkinc-voice-dev-alarms"
+    }
+  ]
+}
