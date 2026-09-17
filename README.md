@@ -331,7 +331,7 @@ npm run deploy
 ```
 
 IaC is AWS CDK (TypeScript, `packages/infrastructure/`); Lambdas are bundled by `NodejsFunction`
-(esbuild) at deploy time. Stacks: memory, voice, identity, runtime, then one per tenant
+(esbuild) at deploy time. Stacks: memory, voice, runtime, then one per tenant
 (`bin/app.ts` builds one platform object and feeds it to the runtime stack and every tenant stack).
 
 The alarm topic is created by the stack; **who it pages is not** — subscribe once, out of band,
@@ -449,7 +449,7 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 | `tenants/<id>.ts`, `tenants/index.ts` | What that tenant runs on the bus, and the registry (one line per tenant). Tracked, unlike the rows |
 | `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant from its file |
 | `packages/infrastructure/stacks/runtime-stack.ts` | The platform workflows every tenant shares: Telegram and SMS (each running the assistant loop), browser login, call-ended, the two canaries, and the Telegram reply path |
-| `packages/infrastructure/stacks/voice-stack.ts`, `memory-stack.ts`, `identity-stack.ts` | The call path (API, two Lambdas, accept workflow, tables, bus, queues, alarm topic); caller memory; credential providers |
+| `packages/infrastructure/stacks/voice-stack.ts`, `memory-stack.ts` | The call path (API, two Lambdas, accept workflow, tables, bus, queues, the OpenAI and Composio Connections, alarm topic); caller memory |
 | `packages/infrastructure/bin/app.ts`, `infra_utils/` | Stack wiring; alarm and state-machine presets |
 | `packages/shared/src/` | `types.ts` (`TenantConfig` zod schema, records, events), `store.ts` (DynamoDB behind one `Store` interface plus an in-memory version; no leads table, the CRM holds the lead and the call row is the audit), `events.ts` (EventBridge publisher), `config.ts` (env, secrets, OpenAI client, logger), `composio.ts` (Composio SDK, scripts only) |
 | `scripts/` | `seed-tenant.ts` (row upsert), `check-tenant.ts` (pre-flight), `connect-composio.mts` (consent links), `telegram-webhook.mts` and `twilio-webhook.mts` (point each channel at the platform), and the `test-*.mts` provers |

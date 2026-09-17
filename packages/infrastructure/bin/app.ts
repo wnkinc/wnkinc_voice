@@ -1,5 +1,4 @@
 import * as cdk from 'aws-cdk-lib';
-import { IdentityStack } from '../stacks/identity-stack.js';
 import { MemoryStack } from '../stacks/memory-stack.js';
 import { RuntimeStack } from '../stacks/runtime-stack.js';
 import { TenantStack } from '../stacks/tenant-stack.js';
@@ -17,15 +16,6 @@ const voice = new VoiceStack(app, 'wnk-voice-dev', {
   prefix,
   env,
   callerMemory,
-});
-// AgentCore Identity providers. Nothing reads them since the assistant moved
-// into the workflows (the keys ride in EventBridge Connections); the stack
-// stays until it is retired on purpose (`cdk destroy wnk-identity-dev`).
-new IdentityStack(app, 'wnk-identity-dev', {
-  prefix,
-  env,
-  openaiSecret: voice.openaiSecret,
-  composioSecret: voice.composioSecret,
 });
 // The platform handles every bus-driven stack takes: the runtime stack and
 // each tenant stack. Built once so the two cannot drift.
