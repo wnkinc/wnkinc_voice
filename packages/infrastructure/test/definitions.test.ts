@@ -199,10 +199,13 @@ describe('synthesized state machine definitions', () => {
   // records the new definitions in the same commit. Deploy-time tokens are
   // placeholders, so the files are stable across accounts.
   it('every machine matches its snapshot: a change must touch only the tenants it was meant for', async () => {
+    const changed: string[] = [];
     for (const d of defs) {
       const pretty = `${JSON.stringify(JSON.parse(d.text), null, 2)}\n`;
-      await expect(pretty).toMatchFileSnapshot(path.join(path.dirname(fileURLToPath(import.meta.url)), 'snapshots', `${d.stack}.${d.id.replace(/[0-9A-F]{8}$/, '')}.json`));
+      const file = path.join(path.dirname(fileURLToPath(import.meta.url)), 'snapshots', `${d.stack}.${d.id.replace(/[0-9A-F]{8}$/, '')}.json`);
+      try { await expect(pretty).toMatchFileSnapshot(file); } catch (e) { changed.push(`${d.stack}/${d.id.replace(/[0-9A-F]{8}$/, '')}\n${(e as Error).message}`); }
     }
+    expect(changed, `These machines changed. Read each diff; if every change is intended, \`npm run test:update\` and commit the snapshots with the change.\n\n${changed.join('\n\n')}`).toEqual([]);
   });
 
   it('every definition is valid Step Functions (JSONata parsed, states resolve)', async () => {

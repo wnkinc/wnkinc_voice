@@ -30,7 +30,8 @@ should live.
   of preference. Never a Choice state inside a definition another tenant runs on.
 - Every synthesized state machine is a snapshot file under
   `packages/infrastructure/test/snapshots/`, and `npm run deploy` runs the tests
-  first. A change to a stock definition must show as a diff only on the tenant
+  first (deploy through `npm run deploy -- <stack>`, never a bare `cdk deploy`,
+  which skips the gate). A change to a stock definition must show as a diff only on the tenant
   machines it was meant for; then `npm run test:update` records it in the same
   commit. Never update a snapshot to make a diff go away without reading it.
 - Build deferred items only when their trigger fires. The `new-tenant` skill keeps
