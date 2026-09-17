@@ -17,6 +17,8 @@ import { MEMORY_USE_ACTIONS } from './memory-stack.js';
 export interface TenantAutomations {
   readonly tenantId: string;
   readonly automations: readonly Automation[];
+  /** Serve this tenant's Telegram account as an MCP server, in its own stack (`telegram-mcp-stack.ts`). */
+  readonly telegramMcp?: boolean;
 }
 
 export interface TenantStackProps extends cdk.StackProps, TenantAutomations {

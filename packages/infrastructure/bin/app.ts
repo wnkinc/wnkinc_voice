@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { MemoryStack } from '../stacks/memory-stack.js';
 import { RuntimeStack } from '../stacks/runtime-stack.js';
+import { TelegramMcpStack } from '../stacks/telegram-mcp-stack.js';
 import { TenantStack } from '../stacks/tenant-stack.js';
 import { VoiceStack } from '../stacks/voice-stack.js';
 import { tenants } from '../../../tenants/index.js';
@@ -38,6 +39,10 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   api: voice.api,
 });
 
-// One stack per tenant (tenants/<id>.ts): its automations, its rules filtered
-// on its id. Deploying one touches no other tenant and nothing above.
-for (const t of tenants) new TenantStack(app, `wnk-tenant-${t.tenantId}-dev`, { ...t, prefix, env, ...platform });
+// Per tenant (tenants/<id>.ts), the stacks its file asks for: its automations,
+// rules filtered on its id; its Telegram connector, which takes no platform
+// handles. Deploying one touches no other tenant and nothing above.
+for (const t of tenants) {
+  if (t.automations.length) new TenantStack(app, `wnk-tenant-${t.tenantId}-dev`, { ...t, prefix, env, ...platform });
+  if (t.telegramMcp) new TelegramMcpStack(app, `wnk-telegram-mcp-${t.tenantId}-dev`, { tenantId: t.tenantId, prefix, env });
+}
