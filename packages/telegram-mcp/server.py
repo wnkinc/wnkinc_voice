@@ -1,19 +1,15 @@
 """One tenant's Telegram account as a remote MCP server, on Lambda.
 
 The engine (chigwell/telegram-mcp) runs unmodified; this file only loads the
-tenant's secrets, removes the tools Lambda can't serve, and puts the server
+tenant's secret, removes the tools Lambda can't serve, and puts the server
 behind a secret URL path. The token is the only gate: anyone holding the full
 URL holds this Telegram account.
 """
 
+import json
 import os
 
-SSM_PARAMS = {
-    "api-id": "TELEGRAM_API_ID",
-    "api-hash": "TELEGRAM_API_HASH",
-    "session-string": "TELEGRAM_SESSION_STRING",
-    "url-token": "URL_TOKEN",
-}
+SECRET_KEYS = ("TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION_STRING", "URL_TOKEN")
 
 # Tools that can't work here: nothing the client holds reaches this disk, and
 # anything written to it is gone at the next cold start.
@@ -46,16 +42,16 @@ UNSUPPORTED_ON_LAMBDA = [
 def load_secrets() -> None:
     import boto3
 
-    # The stack sets the tenant's path; without it there is no tenant, so no server.
-    prefix = os.environ.get("SSM_PREFIX")
-    if not prefix:
-        raise SystemExit("SSM_PREFIX is not set")
-    names = [f"{prefix}/{key}" for key in SSM_PARAMS]
-    resp = boto3.client("ssm").get_parameters(Names=names, WithDecryption=True)
-    if resp["InvalidParameters"]:
-        raise SystemExit(f"Missing SSM parameters: {resp['InvalidParameters']}")
-    for param in resp["Parameters"]:
-        os.environ[SSM_PARAMS[param["Name"].rsplit("/", 1)[1]]] = param["Value"]
+    # The stack names the tenant's secret; without it there is no tenant, so no server.
+    arn = os.environ.get("SECRET_ARN")
+    if not arn:
+        raise SystemExit("SECRET_ARN is not set")
+    secret = json.loads(boto3.client("secretsmanager").get_secret_value(SecretId=arn)["SecretString"])
+    missing = [key for key in SECRET_KEYS if not secret.get(key)]
+    if missing:
+        raise SystemExit(f"{arn} is still a placeholder for: {', '.join(missing)}")
+    for key in SECRET_KEYS:
+        os.environ[key] = str(secret[key])
 
 
 def main() -> None:
@@ -64,7 +60,7 @@ def main() -> None:
     if "URL_TOKEN" not in os.environ:
         load_secrets()
     if len(os.environ["URL_TOKEN"]) < 32:
-        raise SystemExit("url-token must be at least 32 characters")
+        raise SystemExit("URL_TOKEN must be at least 32 characters")
     os.environ.setdefault("TELEGRAM_TRANSCRIBE", "off")
 
     import uvicorn

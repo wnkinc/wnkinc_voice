@@ -456,7 +456,7 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 | `packages/telegram-mcp/` | A tenant's own Telegram account (a user login, not the assistant's bot) as a remote MCP server for their ChatGPT or Claude: the pinned chigwell/telegram-mcp engine in a container Lambda behind a secret URL. `server.py` only loads the tenant's secrets and removes the tools Lambda can't serve. Onboarding in its README |
 | `tenants/<id>.ts`, `tenants/index.ts` | What that tenant runs: its automations on the bus, and `telegramMcp` for the connector. The registry is one line per tenant. Tracked, unlike the rows |
 | `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant with automations, from its file |
-| `packages/infrastructure/stacks/telegram-mcp-stack.ts` | One stack per tenant with `telegramMcp`: the connector Lambda, its Function URL, a role that reads only that tenant's SSM path. Takes no platform handles |
+| `packages/infrastructure/stacks/telegram-mcp-stack.ts` | One stack per tenant with `telegramMcp`: the connector Lambda, its Function URL, a role that reads only that tenant's secret. Takes no platform handles |
 | `packages/infrastructure/stacks/runtime-stack.ts` | The platform workflows every tenant shares: Telegram and SMS (each running the assistant loop), browser login, call-ended, the two canaries, and the Telegram reply path |
 | `packages/infrastructure/stacks/voice-stack.ts`, `memory-stack.ts` | The call path (API, two Lambdas, accept workflow, tables, bus, queues, the OpenAI and Composio Connections, alarm topic); caller memory |
 | `packages/infrastructure/bin/app.ts`, `infra_utils/` | Stack wiring; alarm and state-machine presets |

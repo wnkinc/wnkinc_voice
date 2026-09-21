@@ -2,9 +2,9 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type { Construct } from 'constructs';
 
 const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../telegram-mcp');
@@ -14,9 +14,9 @@ export interface TelegramMcpStackProps extends cdk.StackProps {
   readonly tenantId: string;
 }
 
-/** Where one tenant's connector secrets live in SSM: `api-id`, `api-hash`, `session-string`, `url-token` under it. */
-export function telegramMcpSecretPath(prefix: string, tenantId: string): string {
-  return `/${prefix}/${tenantId}/telegram-mcp`;
+/** The tenant-named secret holding this tenant's connector credentials. */
+export function telegramMcpSecretName(prefix: string, tenantId: string): string {
+  return `${prefix}/${tenantId}/telegram-mcp`;
 }
 
 /**
@@ -29,8 +29,21 @@ export function telegramMcpSecretPath(prefix: string, tenantId: string): string 
 export class TelegramMcpStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: TelegramMcpStackProps) {
     super(scope, id, props);
-    const secretPath = telegramMcpSecretPath(props.prefix, props.tenantId);
     const fnName = `${props.prefix}-${props.tenantId}-telegram-mcp`;
+
+    // The tenant's Telegram credentials, with the URL token generated here so it
+    // never passes through a person. The three Telegram values are placeholders
+    // until the tenant's login is put in (packages/telegram-mcp/README.md).
+    const secret = new secretsmanager.Secret(this, 'Credentials', {
+      secretName: telegramMcpSecretName(props.prefix, props.tenantId),
+      description: `Telegram MCP connector for tenant ${props.tenantId}`,
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ TELEGRAM_API_ID: '', TELEGRAM_API_HASH: '', TELEGRAM_SESSION_STRING: '' }),
+        generateStringKey: 'URL_TOKEN',
+        passwordLength: 64,
+        excludePunctuation: true,
+      },
+    });
 
     const fn = new lambda.DockerImageFunction(this, 'Server', {
       functionName: fnName,
@@ -41,20 +54,17 @@ export class TelegramMcpStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(90),
       // Telegram revokes a session it sees from two IPs at once, and every instance has its own IP.
       reservedConcurrentExecutions: 1,
-      environment: { SSM_PREFIX: secretPath, TELEGRAM_EXPOSED_TOOLS: 'all' },
+      environment: { SECRET_ARN: secret.secretArn, TELEGRAM_EXPOSED_TOOLS: 'all' },
       logGroup: new logs.LogGroup(this, 'Logs', {
         logGroupName: `/aws/lambda/${fnName}`,
         retention: logs.RetentionDays.ONE_MONTH,
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       }),
     });
-    fn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['ssm:GetParameters'],
-      resources: [this.formatArn({ service: 'ssm', resource: 'parameter', resourceName: `${secretPath.slice(1)}/*` })],
-    }));
+    secret.grantRead(fn);
 
     const url = fn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE });
-    new cdk.CfnOutput(this, 'baseUrl', { value: url.url, description: 'The connector URL is this + mcp/<url-token>' });
-    new cdk.CfnOutput(this, 'secretPath', { value: secretPath });
+    new cdk.CfnOutput(this, 'baseUrl', { value: url.url, description: 'The connector URL is this + mcp/<URL_TOKEN from the secret>' });
+    new cdk.CfnOutput(this, 'secretArn', { value: secret.secretArn });
   }
 }
