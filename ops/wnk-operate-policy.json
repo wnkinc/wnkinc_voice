@@ -85,7 +85,6 @@
         "states:GetExecutionHistory",
         "states:ListExecutions",
         "states:DescribeStateMachine",
-        "states:TestState",
         "states:StopExecution"
       ],
       "Resource": [
@@ -98,7 +97,8 @@
       "Effect": "Allow",
       "Action": [
         "states:ListStateMachines",
-        "states:ValidateStateMachineDefinition"
+        "states:ValidateStateMachineDefinition",
+        "states:TestState"
       ],
       "Resource": "*"
     },
