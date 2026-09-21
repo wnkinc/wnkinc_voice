@@ -80,7 +80,8 @@ async function ownerEmail(tenantId: string): Promise<string> {
   return email;
 }
 
-export type ComposioToolkit = 'gmail' | 'hubspot';
+export const COMPOSIO_TOOLKITS = ['gmail', 'hubspot', 'facebook'] as const;
+export type ComposioToolkit = (typeof COMPOSIO_TOOLKITS)[number];
 
 /** Mint the OAuth connect link a tenant owner clicks once at onboarding, per toolkit. */
 async function connectLink(tenantId: string, toolkit: ComposioToolkit = 'gmail'): Promise<{ redirectUrl: string; waitForActive: (timeoutMs?: number) => Promise<string> }> {
