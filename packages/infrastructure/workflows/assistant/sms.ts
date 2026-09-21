@@ -14,9 +14,17 @@
  * auth through the Connection), addressed with the account SID the inbound
  * post carried, so the URL needs no configuration. The turn is written to
  * the person's memory; tokens are metered per turn.
+ *
+ * With `facebook` refs the workflow also carries Facebook posts
+ * (workflows/assistant/facebook-post.ts) for tenants that enable them: a
+ * texted photo reaches the model, the model drafts, the workflow texts the
+ * draft from the ledger row, and the person's POST publishes it without
+ * the model. SMS only: a texted photo is the input, and Telegram's file
+ * links carry the bot token, so they cannot be handed to anyone.
  */
 import { q } from '../asl.js';
-import { assistantLoopStart, assistantLoopStates, assistantPrepare, assistantSaveTurnState, type AssistantLoopRefs } from './assistant-loop.js';
+import { assistantLoopStart, assistantLoopStates, assistantPrepare, assistantSaveTurnState, COMPOSIO_TOOL_NAMES, type AssistantLoopRefs } from './assistant-loop.js';
+import { contentExpr, FACEBOOK_TOOLS, facebookApprovalStates, facebookOnExpr, facebookPromptExpr, facebookShowDraftStates, facebookToolRunners, type FacebookPostRefs } from './facebook-post.js';
 
 export const TWILIO_API = 'https://api.twilio.com/2010-04-01/';
 
@@ -26,6 +34,8 @@ export interface SmsRefs extends AssistantLoopRefs {
   usageTable: string;
   /** EventBridge Connection with Twilio basic auth (account SID, auth token). */
   twilioConnectionArn: string;
+  /** The Actions ledger and the media link resolver; omit and the workflow carries no Facebook states. */
+  facebook?: Omit<FacebookPostRefs, 'composioConnectionArn'>;
 }
 
 // ---- Expressions (exported unwrapped so the tests can evaluate them) ---------
@@ -38,7 +48,38 @@ export interface SmsRefs extends AssistantLoopRefs {
 export const parseFormExpr = (bodyExpr: string) =>
   `$merge($map($split(${bodyExpr}, '&'), function($p) { { $decodeUrlComponent($substringBefore($p, '=')): $decodeUrlComponent($replace($substringAfter($p, '='), '+', ' ')) } }))`;
 
+/**
+ * The photos on an inbound post (NumMedia, MediaUrl<n>, MediaContentType<n>) as
+ * the ledger stores them: Twilio ids, DynamoDB-typed. Images only; the media
+ * id is the last segment of the URL. The outer brackets keep one photo a list.
+ */
+export const mediaExpr = (smsExpr: string) =>
+  `[($n := $exists(${smsExpr}.NumMedia) ? $number(${smsExpr}.NumMedia) : 0; $n > 0 ? [0..$n - 1].($i := $string($); $substring($lookup(${smsExpr}, 'MediaContentType' & $i), 0, 6) = 'image/' ? { 'M': { 'messageSid': { 'S': ${smsExpr}.MessageSid }, 'mediaSid': { 'S': $split($lookup(${smsExpr}, 'MediaUrl' & $i), '/')[-1] } } }) : [])]`;
+/** The row's allow-list, without the Facebook tools unless the tenant has the service on: a tool name on the row is not enough. */
+export const allowedToolsExpr = `[$tenant.assistant.M.tools.L.S[$facebookOn or $not($ in [${FACEBOOK_TOOLS.map((t) => `'${t}'`).join(', ')}])]]`;
+/** What the model and memory get as the person's text: the body, or a stand-in for a photo sent alone. */
+export const textOrPhotosExpr = (smsExpr: string) => `$trim(${smsExpr}.Body) != '' ? ${smsExpr}.Body : 'Sent ' & ${smsExpr}.NumMedia & ' photos with no text.'`;
+
 export function smsDefinition(refs: SmsRefs) {
+  const fb = refs.facebook ? { ...refs.facebook, composioConnectionArn: refs.composioConnectionArn } : undefined;
+  const tools = fb ? [...COMPOSIO_TOOL_NAMES, ...FACEBOOK_TOOLS] : COMPOSIO_TOOL_NAMES;
+  // Twilio's Messages API wants a form body: Step Functions encodes it. From
+  // is the tenant's number (what they texted), To is the sender. A body over
+  // Twilio's 1600 characters is rejected, fails the execution, and alarms.
+  const sendText = (bodyExpr: string, next: string) => ({
+    Type: 'Task', Resource: 'arn:aws:states:::http:invoke',
+    Arguments: {
+      ApiEndpoint: q(`'${TWILIO_API}Accounts/' & $sms.AccountSid & '/Messages.json'`),
+      Method: 'POST',
+      Authentication: { ConnectionArn: refs.twilioConnectionArn },
+      Headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      RequestBody: { To: q('$sms.From'), From: q('$sms.To'), Body: q(bodyExpr) },
+      Transform: { RequestBodyEncoding: 'URL_ENCODED' },
+    },
+    Retry: [{ ErrorEquals: ['States.TaskFailed'], IntervalSeconds: 2, MaxAttempts: 1 }],
+    Output: q('$states.input'), Next: next,
+  });
+  const save = assistantSaveTurnState(refs);
   const prompt = [
     "'You are My Assistant for ' & $tenant.business.M.name.S & ', texting with ' & $person.name.S & ' (' & $person.role.S & ') who works there. '",
     "($exists($tenant.business.M.description.S) ? 'About the business: ' & $tenant.business.M.description.S & ' ' : '')",
@@ -46,8 +87,9 @@ export function smsDefinition(refs: SmsRefs) {
     "($exists($tenant.business.M.hours.S) ? 'Hours: ' & $tenant.business.M.hours.S & '. ' : '')",
     "($count($tenant.assistant.M.tools.L) > 0 ? 'Your tools reach the business systems the owner connected. Use them to look things up or record things; say what you did and what you found. Never invent records. ' : 'You have no tools connected for this business. ')",
     "'This is a text message conversation (SMS): be brief and plain, no markdown, no lists. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 1000 characters.'",
+    ...(fb ? [`($facebookOn ? ${facebookPromptExpr} : '')`] : []),
   ].join(' & ');
-  const save = assistantSaveTurnState(refs);
+  const afterReply = save ? 'SaveTurn' : 'Usage';
 
   return {
     QueryLanguage: 'JSONata',
@@ -71,7 +113,7 @@ export function smsDefinition(refs: SmsRefs) {
       },
       IsText: {
         Type: 'Choice',
-        Choices: [{ Condition: q("$exists($sms.From) and $exists($sms.To) and $exists($sms.AccountSid) and $exists($sms.Body) and $trim($sms.Body) != ''"), Next: 'LookupPerson' }],
+        Choices: [{ Condition: q(`$exists($sms.From) and $exists($sms.To) and $exists($sms.AccountSid) and $exists($sms.Body) and ($trim($sms.Body) != ''${fb ? " or $number($sms.NumMedia) > 0" : ''})`), Next: 'LookupPerson' }],
         Default: 'Ignored',
       },
       Ignored: { Type: 'Succeed' },
@@ -92,9 +134,21 @@ export function smsDefinition(refs: SmsRefs) {
       },
       AssistantEnabled: {
         Type: 'Choice',
-        Choices: [{ Condition: q('$exists($tenant) and $tenant.assistant.M.enabled.BOOL = true'), Next: 'Prepare' }],
+        Choices: [{ Condition: q('$exists($tenant) and $tenant.assistant.M.enabled.BOOL = true'), Next: fb ? 'Inbound' : 'Prepare' }],
         Default: 'Ignored',
       },
+      ...(fb ? {
+        // What the Facebook states read. A tenant without the service goes
+        // straight to the model, which then has no Facebook tools either.
+        Inbound: {
+          Type: 'Pass',
+          Assign: { approver: q("'sms:' & $sms.From"), inboundText: q('$sms.Body'), media: q(mediaExpr('$sms')), imageLinks: [], draft: {}, facebookOn: q(facebookOnExpr) },
+          Output: q('$states.input'), Next: 'FacebookOn',
+        },
+        FacebookOn: { Type: 'Choice', Choices: [{ Condition: q('$facebookOn'), Next: 'FindDraft' }], Default: 'Prepare' },
+        ...facebookApprovalStates(fb, sendText, 'Prepare', 'Done'),
+        Done: { Type: 'Succeed' },
+      } : {}),
       // What the loop reads. One memory session per phone PER DAY, rolling at
       // 3 AM tenant-local (sessionDayOffsetMinutes, computed by the seed; 600
       // = Pacific if unset), as on Telegram. One actor per person, tenant-
@@ -104,33 +158,22 @@ export function smsDefinition(refs: SmsRefs) {
       Prepare: {
         Type: 'Pass',
         Assign: {
-          ...assistantPrepare(),
-          text: q('$sms.Body'),
+          ...assistantPrepare(tools),
+          text: q(fb ? textOrPhotosExpr('$sms') : '$sms.Body'),
           systemPrompt: q(prompt),
           actorId: q("$tenant.tenantId.S & '_sms_' & $replace($sms.From, /[^0-9]/, '')"),
           sessionId: q("'sms-chat-' & $replace($sms.From, /[^0-9]/, '') & '-' & $fromMillis($millis() - ($exists($tenant.sessionDayOffsetMinutes.N) ? $number($tenant.sessionDayOffsetMinutes.N) : 600) * 60000, '[Y0001][M01][D01]')"),
-          allowedTools: q('[$tenant.assistant.M.tools.L.S]'),
+          allowedTools: q(fb ? allowedToolsExpr : '[$tenant.assistant.M.tools.L.S]'),
         },
         Output: q('$states.input'), Next: assistantLoopStart(refs),
       },
-      ...assistantLoopStates(refs, 'Reply'),
-      // Twilio's Messages API wants a form body: Step Functions encodes it.
-      // From is the tenant's number (what they texted), To is the sender. A
-      // body over Twilio's 1600 characters is rejected here, fails the
-      // execution, and alarms; the prompt asks for far less.
-      Reply: {
-        Type: 'Task', Resource: 'arn:aws:states:::http:invoke',
-        Arguments: {
-          ApiEndpoint: q(`'${TWILIO_API}Accounts/' & $sms.AccountSid & '/Messages.json'`),
-          Method: 'POST',
-          Authentication: { ConnectionArn: refs.twilioConnectionArn },
-          Headers: { 'content-type': 'application/x-www-form-urlencoded' },
-          RequestBody: { To: q('$sms.From'), From: q('$sms.To'), Body: q('$reply') },
-          Transform: { RequestBodyEncoding: 'URL_ENCODED' },
-        },
-        Retry: [{ ErrorEquals: ['States.TaskFailed'], IntervalSeconds: 2, MaxAttempts: 1 }],
-        Output: q('$states.input'), Next: save ? 'SaveTurn' : 'Usage',
-      },
+      ...assistantLoopStates(refs, 'Reply', fb ? { tools, runners: facebookToolRunners(fb), content: contentExpr } : {}),
+      // The prompt asks for far less than Twilio's limit.
+      Reply: sendText('$reply', fb ? 'ShowDraft' : afterReply),
+      ...(fb ? {
+        ShowDraft: { Type: 'Choice', Choices: [{ Condition: q('$facebookOn'), Next: 'FindUnshown' }], Default: afterReply },
+        ...facebookShowDraftStates(fb, sendText, afterReply),
+      } : {}),
       ...(save ? { SaveTurn: { ...save, Output: q('$states.input'), Next: 'Usage' } } : {}),
       Usage: {
         Type: 'Task', Resource: 'arn:aws:states:::dynamodb:putItem',

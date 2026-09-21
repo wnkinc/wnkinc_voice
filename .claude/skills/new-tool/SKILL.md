@@ -17,9 +17,13 @@ Composio brokers it; the model gets Composio's meta tools over the tenant's sess
 4. If the model needs guidance the toolkit's schemas do not give (formats, ids), add one sentence to the workflow prompt in `workflows/assistant/telegram.ts` — data, not code.
 5. Prove with `npx tsx scripts/test-assistant.mts "<a question that needs it>"`.
 
+## The action reaches a customer irreversibly, or costs money (a post, an email, a refund)
+
+Not a tool the model can run. The Actions ledger (`ActionSchema` in `@wnk/shared`, the Actions table) with `workflows/assistant/facebook-post.ts` as the worked example: the model gets a *draft* tool that writes a `pending` row; the workflow texts the draft word for word from the row; the person's exact approval word (`ACTION_APPROVAL_WORDS`, named after the action, never YES) is matched by the workflow before the model runs, on the revision they were shown; the workflow locks the row and executes, never retrying the irreversible call. The definitions test holds this for Facebook; add the same checks for a new action type. Text-message approval is only as strong as the inbound webhook (a secret path today): for money, use a stronger approval than a texted word.
+
 ## A workflow needs a SaaS (CRM sync, lead email, caller recognition)
 
-Add a task state to the workflow file under `workflows/`: `composio(connectionArn, tenantIdExpr)` from `workflows/asl.ts`, then `.execute(slug, args)` for a toolkit tool, `.accounts(toolkit)` for the connected account id, or `.proxy(accountId, ...)` for a REST call no tool covers. The helper names the tenant on every call; the definitions test rejects a Composio task that does not. Spike the call with curl first to learn the response shape (see the runtime stack's comments). A second CRM is another set of states selected by the row's `crm.type`; never a default.
+Add a task state to the workflow file under `workflows/`: `composio(connectionArn, tenantIdExpr)` from `workflows/asl.ts`, then `.execute(slug, args, version)` for a toolkit tool (pin `version` for a new toolkit: the REST API runs a toolkit's OLDEST release when none is named, and Facebook's cannot post; list releases with `GET /api/v3/tools/<SLUG>` -> `available_versions`), `.accounts(toolkit)` for the connected account id, or `.proxy(accountId, ...)` for a REST call no tool covers. The helper names the tenant on every call; the definitions test rejects a Composio task that does not. Spike the call with curl first to learn the response shape (see the runtime stack's comments). A second CRM is another set of states selected by the row's `crm.type`; never a default.
 
 ## The voice receptionist needs a tool
 

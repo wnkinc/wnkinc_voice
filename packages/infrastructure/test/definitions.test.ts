@@ -192,6 +192,44 @@ describe('synthesized state machine definitions', () => {
     }));
   });
 
+  // ---- The approval ledger (workflows/assistant/facebook-post.ts) ---------------
+  // A post to a tenant's Page reaches their customers and cannot be taken
+  // back. The model proposes; a person's exact word approves; the workflow
+  // executes. These hold that split in every machine, whoever edits it next.
+  describe('publishing to Facebook', () => {
+    const slugOf = (s: State) => /tools\/execute\/(FACEBOOK_[A-Z_]+)/.exec(String(s.Arguments?.ApiEndpoint ?? ''))?.[1];
+    const isPublish = (s: State) => isComposio(s) && /^FACEBOOK_(CREATE|UPDATE|DELETE|PUBLISH|RESCHEDULE)/.test(slugOf(s) ?? '');
+    const machines = () => defs.map((d) => ({ id: `${d.stack}/${d.id}`, states: allStates(JSON.parse(d.text)) })).filter((m) => m.states.some(([, s]) => isPublish(s)));
+
+    it('some machine publishes (or these checks check nothing)', () => expect(machines().length).toBeGreaterThan(0));
+
+    it('the model has no publish tool: nothing inside the loop\'s tool Map writes to Facebook', () => {
+      const failures = machines().flatMap((m) => m.states.filter(([p, s]) => p.includes('RunTools/') && isPublish(s)).map(([p]) => `${m.id}: ${p}`));
+      expect(failures, failures.join('\n')).toEqual([]);
+    });
+
+    it('publishes only after locking the row on the revision the person was shown, and never retries', () => {
+      const failures: string[] = [];
+      for (const m of machines()) {
+        const lock = m.states.find(([, s]) => s.Resource === 'arn:aws:states:::dynamodb:updateItem' && /:executing/.test(String(s.Arguments?.UpdateExpression)));
+        const condition = String(lock?.[1].Arguments?.ConditionExpression ?? '');
+        for (const need of ['#s = :pending', 'revision = :rev', 'shownRevision = :rev', 'approveBy > :epoch']) if (!condition.includes(need)) failures.push(`${m.id}: the lock does not require ${need}`);
+        for (const [p, s] of m.states.filter(([, s]) => isPublish(s))) {
+          if (s.Retry?.length) failures.push(`${m.id}: ${p} retries; a lost answer would post twice`);
+          if (!s.TimeoutSeconds) failures.push(`${m.id}: ${p} has no TimeoutSeconds`);
+        }
+      }
+      expect(failures, failures.join('\n')).toEqual([]);
+    });
+
+    it('every Facebook call pins the toolkit release (an unpinned call runs the oldest, which cannot post)', () => each2((id, states) =>
+      states.filter(([, s]) => isComposio(s) && slugOf(s) && !s.Arguments.RequestBody?.version).map(([p]) => `${id}: ${p} has no version`)));
+    function each2(check: (id: string, states: [string, State][]) => string[]) {
+      const failures = defs.flatMap((d) => check(`${d.stack}/${d.id}`, allStates(JSON.parse(d.text))));
+      expect(failures, failures.join('\n')).toEqual([]);
+    }
+  });
+
   // The isolation proof for a shared source file: every machine's synthesized
   // definition is a file in git. An edit to a stock definition shows up here
   // as a diff on every tenant machine it changes, before any deploy. The diff

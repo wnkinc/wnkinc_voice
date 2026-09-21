@@ -6,12 +6,17 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { MEMORY_USE_ACTIONS } from './memory-stack.js';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
-import { dlqAlarm, failedExecutionsAlarm } from '../infra_utils/alarms.js';
+import { dlqAlarm, errorAlarm, failedExecutionsAlarm } from '../infra_utils/alarms.js';
 import { BROWSERBASE_API, COMPOSIO_API } from '../workflows/asl.js';
 import { expressNoData, grantHttp } from '../infra_utils/state-machine.js';
 import { browserLoginDefinition } from '../workflows/assistant/browser-login.js';
@@ -37,6 +42,8 @@ export interface RuntimeStackProps extends cdk.StackProps {
   readonly callsTable: dynamodb.ITable;
   /** Channel identity -> tenant + person; the Telegram and SMS workflows' one lookup. */
   readonly peopleTable: dynamodb.ITable;
+  /** The approval ledger; the SMS workflow's Facebook states read and write the person's rows. */
+  readonly actionsTable: dynamodb.ITable;
   /** The platform HTTP API; the Telegram and SMS webhook routes are added here. */
   readonly api: apigwv2.IHttpApi;
   readonly alarmTopic: sns.ITopic;
@@ -50,7 +57,8 @@ export interface RuntimeStackProps extends cdk.StackProps {
  * call-ended tail (memory, usage), the browser login handoff, and the two
  * canaries. Per-tenant automations are in TenantStack. Each definition lives
  * in workflows/; this stack wraps it in a state machine, routes its event to
- * it, and grants what it touches. No code.
+ * it, and grants what it touches. One piece of code: the media link resolver
+ * (packages/media-link), for the one thing a workflow cannot read.
  */
 export class RuntimeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: RuntimeStackProps) {
@@ -236,6 +244,28 @@ export class RuntimeStack extends cdk.Stack {
       description: 'Twilio REST API (basic auth: account SID + auth token) for SMS replies',
       authorization: events.Authorization.basic(twilioSecret.secretValueFromJson('TWILIO_ACCOUNT_SID').unsafeUnwrap(), twilioSecret.secretValueFromJson('TWILIO_AUTH_TOKEN')),
     });
+    // The media link resolver: a texted photo's Twilio ids -> the signed link
+    // Twilio redirects to. Code because Step Functions fails an HTTP task on a
+    // 307 and keeps the Location header from the workflow. Invoked as a task
+    // (synchronously), so its failures surface in the execution; no queue.
+    const mediaLinkName = `${prefix}-media-link`;
+    const mediaLinkFn = new NodejsFunction(this, 'MediaLink', {
+      functionName: mediaLinkName,
+      description: 'Texted photo ids -> the signed link Twilio redirects to (nothing fetched, nothing stored)',
+      entry: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../media-link/src/media-link.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(10),
+      environment: { TWILIO_SECRET_ARN: twilioSecret.secretArn, NODE_OPTIONS: '--enable-source-maps' },
+      logGroup: new logs.LogGroup(this, 'MediaLinkLogs', { logGroupName: `/aws/lambda/${mediaLinkName}`, retention: logs.RetentionDays.ONE_MONTH, removalPolicy: cdk.RemovalPolicy.DESTROY }),
+      tracing: lambda.Tracing.ACTIVE,
+      bundling: { format: OutputFormat.ESM, target: 'node22', mainFields: ['module', 'main'], sourceMap: true },
+    });
+    twilioSecret.grantRead(mediaLinkFn);
+    errorAlarm(this, 'MediaLinkErrors', mediaLinkFn, props.alarmTopic, 'Media link resolver');
+
     const smsWorkflow = new sfn.StateMachine(this, 'SmsWorkflow', {
       stateMachineName: `${prefix}-sms`,
       tracingEnabled: true,
@@ -245,9 +275,12 @@ export class RuntimeStack extends cdk.Stack {
         usageTable: props.usageTable.tableName,
         ...loopRefs,
         twilioConnectionArn: twilioConnection.connectionArn,
+        facebook: { actionsTable: props.actionsTable.tableName, mediaLinkFunctionArn: mediaLinkFn.functionArn },
       }))),
       timeout: cdk.Duration.minutes(5),
     });
+    props.actionsTable.grantReadWriteData(smsWorkflow);
+    mediaLinkFn.grantInvoke(smsWorkflow);
     props.peopleTable.grantReadData(smsWorkflow);
     props.tenantsTable.grantReadData(smsWorkflow);
     props.usageTable.grantWriteData(smsWorkflow);

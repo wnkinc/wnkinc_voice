@@ -60,6 +60,8 @@ export class VoiceStack extends cdk.Stack {
   readonly alarmTopic: sns.Topic;
   /** Channel identity -> tenant + person: `telegram:<id>` or `sms:<e164>`. Seeded from each tenant's `people`. */
   readonly peopleTable: dynamodb.Table;
+  /** The approval ledger (@wnk/shared ActionSchema): one row per action that reaches a customer irreversibly, kept as the log. */
+  readonly actionsTable: dynamodb.Table;
   /** The platform's HTTP API; other stacks add their own routes to it. */
   readonly api: apigwv2.HttpApi;
 
@@ -107,6 +109,17 @@ export class VoiceStack extends cdk.Stack {
       sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // tenantId, then `<approver channel id>#<type>#<created>#<id>`: a person's
+    // pending action of a type is one Query, and no row is ever overwritten.
+    // RETAIN, unlike the learning tables: this is the record of who approved what.
+    this.actionsTable = new dynamodb.Table(this, 'Actions', {
+      partitionKey: { name: 'tenantId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'expiresAt',
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
     this.bus = new events.EventBus(this, 'Events', { eventBusName: `${prefix}-events` });
@@ -298,6 +311,7 @@ export class VoiceStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'tenantsTableName', { value: this.tenantsTable.tableName });
     new cdk.CfnOutput(this, 'peopleTableName', { value: this.peopleTable.tableName });
     new cdk.CfnOutput(this, 'callsTableName', { value: this.callsTable.tableName });
+    new cdk.CfnOutput(this, 'actionsTableName', { value: this.actionsTable.tableName });
     new cdk.CfnOutput(this, 'eventBusName', { value: this.bus.eventBusName });
     /** Subscribe an address here once; no deploy touches the subscribers. */
     new cdk.CfnOutput(this, 'alarmTopicArn', { value: this.alarmTopic.topicArn });

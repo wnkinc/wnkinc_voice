@@ -30,9 +30,10 @@ export interface ComposioHealthRefs {
  * other workflows returns `BOOL`, so the two spellings are not interchangeable.
  */
 export const expectedToolkitsExpr = (rowExpr: string) => [
-  '$append(',
+  '$append($append(',
   `(${hasCrm(rowExpr)} ? ['hubspot'] : []),`,
-  `(${rowExpr}.emailResponder.M.enabled.Bool = true ? ['gmail'] : [])`,
+  `(${rowExpr}.emailResponder.M.enabled.Bool = true ? ['gmail'] : [])),`,
+  `(${rowExpr}.facebookPosts.M.enabled.Bool = true ? ['facebook'] : [])`,
   ')',
 ].join(' ');
 

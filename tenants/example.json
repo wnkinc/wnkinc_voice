@@ -37,5 +37,6 @@
 
   "emailResponder": { "enabled": true },
   "assistant": { "enabled": false, "tools": ["search_contacts", "add_note"] },
+  "facebookPosts": { "enabled": false },
   "browser": { "enabled": false }
 }

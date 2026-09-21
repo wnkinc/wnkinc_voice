@@ -28,7 +28,7 @@
             "Type": "Pass",
             "Assign": {
               "tenantId": "{% $states.input.tenantId.S %}",
-              "expected": "{% $append( ($states.input.crm.M.type.S = 'hubspot' and $states.input.crm.M.via.S = 'composio' ? ['hubspot'] : []), ($states.input.emailResponder.M.enabled.Bool = true ? ['gmail'] : []) ) %}",
+              "expected": "{% $append($append( ($states.input.crm.M.type.S = 'hubspot' and $states.input.crm.M.via.S = 'composio' ? ['hubspot'] : []), ($states.input.emailResponder.M.enabled.Bool = true ? ['gmail'] : [])), ($states.input.facebookPosts.M.enabled.Bool = true ? ['facebook'] : []) ) %}",
               "needsAny": "{% $states.input.assistant.M.enabled.Bool = true %}"
             },
             "Output": "{% $states.input %}",

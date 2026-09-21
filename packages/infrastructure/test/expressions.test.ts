@@ -4,9 +4,10 @@ import { htmlToTextExpr, sipNumberExpr, SIP_CALLED_HEADERS, SIP_CALLER_HEADERS }
 import { loginSiteExpr } from '../workflows/assistant/browser-login.js';
 import { expectedToolkitsExpr, missingToolkitsExpr } from '../workflows/canaries/composio-health.js';
 import { nextBusinessMorningExpr } from '../workflows/automations/crm-lead.js';
-import { parseFormExpr } from '../workflows/assistant/sms.js';
+import { allowedToolsExpr, mediaExpr, parseFormExpr, textOrPhotosExpr } from '../workflows/assistant/sms.js';
+import { APPROVAL_WORD, contentExpr, draftMessageExpr, FACEBOOK_TOOLS, isApprovalExpr, nextMediaExpr, pendingExpr, postIdExpr } from '../workflows/assistant/facebook-post.js';
 import { ASSISTANT_TOOLS, callsExpr, historyExpr, outputsExpr, textExpr, toolResultExpr } from '../workflows/assistant/assistant-loop.js';
-import { ASSISTANT_TOOL_NAMES } from '../../shared/src/types.js';
+import { ACTION_APPROVAL_WORDS, ASSISTANT_TOOL_NAMES } from '../../shared/src/types.js';
 
 const evalExpr = (expr: string, input: unknown, bindings: Record<string, unknown> = {}) => {
   const e = jsonata(expr);
@@ -115,11 +116,16 @@ describe('composio health expressions', () => {
   // it — not the optimized integration's `BOOL`. The fixture spelled it the
   // API way while the expression did too, so both were wrong and this test
   // stayed green while gmail went unchecked in production.
-  const row = (crm: boolean, email: boolean) => ({ crm: crm ? { M: { type: { S: 'hubspot' }, via: { S: 'composio' } } } : undefined, emailResponder: { M: { enabled: { Bool: email } } } });
+  const row = (crm: boolean, email: boolean, facebook = false) => ({ crm: crm ? { M: { type: { S: 'hubspot' }, via: { S: 'composio' } } } : undefined, emailResponder: { M: { enabled: { Bool: email } } }, facebookPosts: { M: { enabled: { Bool: facebook } } } });
   it('expects hubspot for crm via composio and gmail for the email responder', async () => {
     expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(true, true) })).toEqual(['hubspot', 'gmail']);
     expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(true, false) })).toEqual(['hubspot']);
     expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(false, false) })).toEqual([]);
+  });
+  it('expects facebook for Facebook posts, and nothing for a row written before the service existed', async () => {
+    expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(true, true, true) })).toEqual(['hubspot', 'gmail', 'facebook']);
+    expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(false, false, true) })).toEqual(['facebook']);
+    expect(await evalExpr(expectedToolkitsExpr('row'), { row: { emailResponder: { M: { enabled: { Bool: true } } } } })).toEqual(['gmail']);
   });
   it('reports the expected toolkits Composio does not list as active', async () => {
     expect(await evalExpr(missingToolkitsExpr('expected', 'active'), { expected: ['hubspot', 'gmail'], active: ['gmail'] })).toEqual(['hubspot']);
@@ -137,5 +143,90 @@ describe('loginSiteExpr', () => {
   it("'' for a bare /login", async () => {
     expect(await site('/login')).toBe('');
     expect(await site('/login ')).toBe('');
+  });
+});
+
+describe('facebook posts', () => {
+  const photo = (n: string) => ({ M: { messageSid: { S: 'MM1' }, mediaSid: { S: `ME${n}` } } });
+  const sms = (media: [string, string][], body = 'post this') => ({
+    Body: body, MessageSid: 'MM1', NumMedia: String(media.length),
+    ...Object.fromEntries(media.flatMap(([type, id], i) => [[`MediaContentType${i}`, type], [`MediaUrl${i}`, `https://api.twilio.com/2010-04-01/Accounts/AC1/Messages/MM1/Media/ME${id}`]])),
+  });
+
+  it('the approval word is the one the ledger names, and the tools are ones a row may list', () => {
+    expect(APPROVAL_WORD).toBe(ACTION_APPROVAL_WORDS.facebook_post);
+    for (const t of FACEBOOK_TOOLS) expect(ASSISTANT_TOOL_NAMES).toContain(t);
+  });
+
+  it('reads the texted photos as a list of Twilio ids: none, one, several, images only', async () => {
+    // A variable, as in the workflow: inside the per-photo step the context is the index, not the message.
+    const media = (message: unknown) => evalExpr(mediaExpr('$sms'), {}, { sms: message });
+    expect(await media(sms([]))).toEqual([]);
+    expect(await media({ Body: 'hi' })).toEqual([]);
+    expect(await media(sms([['image/jpeg', 'a']]))).toEqual([photo('a')]);
+    expect(await media(sms([['image/jpeg', 'a'], ['video/mp4', 'v'], ['image/png', 'b']]))).toEqual([photo('a'), photo('b')]);
+    expect(await media(sms([['video/mp4', 'v']]))).toEqual([]);
+  });
+  it('a photo sent alone still has text for the model', async () => {
+    expect(await evalExpr(textOrPhotosExpr('sms'), { sms: sms([['image/jpeg', 'a']], ' ') })).toBe('Sent 1 photos with no text.');
+    expect(await evalExpr(textOrPhotosExpr('sms'), { sms: sms([['image/jpeg', 'a']], 'post this') })).toBe('post this');
+  });
+
+  // The approval: nothing but the word, on the revision the person was shown.
+  const draft = (revision: number, shown: number) => ({ sk: { S: 'sms:+1#facebook_post#t#1' }, revision: { N: String(revision) }, shownRevision: { N: String(shown) } });
+  const approves = (inboundText: string, d: unknown) => evalExpr(isApprovalExpr, {}, { inboundText, draft: d });
+  it('only the whole word approves, in any case, with stray spaces', async () => {
+    for (const text of ['POST', 'post', ' Post \n']) expect(await approves(text, draft(2, 2))).toBe(true);
+    for (const text of ['post it', 'yes', 'YES POST', 'POST.', 'go ahead and post', '']) expect(await approves(text, draft(2, 2))).toBe(false);
+  });
+  it('approves nothing without a draft, or on a revision the person has not been shown', async () => {
+    expect(await approves('POST', {})).toBe(false);
+    expect(await approves('POST', draft(3, 2))).toBe(false);
+    expect(await approves('POST', draft(1, 0))).toBe(false);
+  });
+  it('takes the newest pending row of a query, or {}', async () => {
+    expect(await evalExpr(pendingExpr('r'), { r: { Count: 0, Items: [] } })).toEqual({});
+    expect(await evalExpr(pendingExpr('r'), { r: { Count: 2, Items: [draft(2, 2), draft(1, 1)] } })).toEqual(draft(2, 2));
+  });
+
+  // Always a list: DynamoDB refuses an L that is a bare object, and JSONata unwraps a one-item array.
+  const next = (photos: string, existing: unknown[] | undefined, media: unknown[]) =>
+    evalExpr(nextMediaExpr('$row.payload.M.media.L'), {}, { a: { photos }, media, row: existing ? { payload: { M: { media: { L: existing } } } } : {} });
+  it('applies the model\'s photos choice to the draft', async () => {
+    expect(await next('use_new', [photo('old')], [photo('new')])).toEqual([photo('new')]);
+    expect(await next('add_new', [photo('old')], [photo('new')])).toEqual([photo('old'), photo('new')]);
+    expect(await next('keep', [photo('old')], [photo('new')])).toEqual([photo('old')]);
+    expect(await next('none', [photo('old')], [photo('new')])).toEqual([]);
+  });
+  it('a new draft has no photos to keep, and an empty message adds none', async () => {
+    expect(await next('keep', undefined, [photo('new')])).toEqual([]);
+    expect(await next('add_new', undefined, [photo('new')])).toEqual([photo('new')]);
+    expect(await next('use_new', undefined, [])).toEqual([]);
+    expect(await next('add_new', [photo('a'), photo('b')], [])).toEqual([photo('a'), photo('b')]);
+  });
+
+  it('states the Page, the caption word for word, the photos, and the word that publishes', async () => {
+    const tenant = { facebookPosts: { M: { pageName: { S: 'Deck Co' } } } };
+    const row = (media: unknown[]) => ({ payload: { M: { caption: { S: 'Cedar deck, finished today.' }, media: { L: media } } } });
+    const text = await evalExpr(draftMessageExpr('$shown'), {}, { tenant, shown: row([photo('a'), photo('b')]) }) as string;
+    expect(text).toContain('Draft for the Facebook Page Deck Co:\n\nCedar deck, finished today.\n\n');
+    expect(text).toContain('With the 2 photos you sent. Reply POST to publish it');
+    expect(await evalExpr(draftMessageExpr('$shown'), {}, { tenant, shown: row([photo('a')]) })).toContain('With the 1 photo you sent.');
+    expect(await evalExpr(draftMessageExpr('$shown'), {}, { tenant, shown: row([]) })).toContain('No photos.');
+  });
+  it('reads the post id from either tool shape', async () => {
+    expect(await evalExpr(postIdExpr('b'), { b: { data: { id: 'photo1', post_id: 'page_post1' } } })).toBe('page_post1');
+    expect(await evalExpr(postIdExpr('b'), { b: { data: { id: 'page_post2' } } })).toBe('page_post2');
+  });
+  it('gives the model the photos when their links were minted, the text alone otherwise', async () => {
+    expect(await evalExpr(contentExpr, {}, { text: 'post this', imageLinks: [] })).toBe('post this');
+    expect(await evalExpr(contentExpr, {}, { text: 'post this', imageLinks: ['https://a'] })).toEqual([{ type: 'input_text', text: 'post this' }, { type: 'input_image', image_url: 'https://a' }]);
+    expect(await evalExpr(contentExpr, {}, { text: 'post this', imageLinks: ['https://a', 'https://b'] })).toHaveLength(3);
+  });
+  it('hides the Facebook tools from a tenant that lists them without the service on', async () => {
+    const tenant = { assistant: { M: { tools: { L: [{ S: 'search_contacts' }, { S: 'draft_facebook_post' }, { S: 'cancel_facebook_draft' }] } } } };
+    expect(await evalExpr(allowedToolsExpr, {}, { tenant, facebookOn: false })).toEqual(['search_contacts']);
+    expect(await evalExpr(allowedToolsExpr, {}, { tenant, facebookOn: true })).toEqual(['search_contacts', 'draft_facebook_post', 'cancel_facebook_draft']);
+    expect(await evalExpr(allowedToolsExpr, {}, { tenant: { assistant: { M: { tools: { L: [{ S: 'draft_facebook_post' }] } } } }, facebookOn: false })).toEqual([]);
   });
 });

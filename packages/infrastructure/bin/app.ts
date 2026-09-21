@@ -36,6 +36,7 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   ...platform,
   openaiConnection: voice.openaiConnection,
   peopleTable: voice.peopleTable,
+  actionsTable: voice.actionsTable,
   api: voice.api,
 });
 

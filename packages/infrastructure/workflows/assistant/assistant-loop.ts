@@ -49,8 +49,9 @@ const esc = (expr: string) => `$replace($replace($replace(${expr}, '&', '&amp;')
  * Gate state enforces. Mirror of ASSISTANT_TOOL_NAMES in @wnk/shared.
  *
  * Deferred: `send_email`. Sending mail on the model's say-so reaches a
- * customer irreversibly, which CLAUDE.md makes the trigger for a
- * pending -> completed ledger; build that first.
+ * customer irreversibly. The Actions ledger exists now (facebook-post.ts is
+ * its first user): email gets the same split, a draft tool here and a SEND
+ * the workflow matches, never a send tool.
  */
 export const ASSISTANT_TOOLS = {
   search_contacts: {
@@ -79,18 +80,50 @@ export const ASSISTANT_TOOLS = {
     },
     shape: "{ 'ok': successful = true, 'note_id': data.id }",
   },
+  // No slug: these run states their channel supplies (workflows/assistant/facebook-post.ts),
+  // because they write the Actions ledger, not Composio. There is no publish
+  // tool and there must never be one: the person's POST publishes, matched by
+  // the workflow before the model runs.
+  draft_facebook_post: {
+    description: 'Create or change the draft of a post for the business Facebook Page. This never publishes. The system texts the exact draft to the person, and only their reply POST publishes it. Call it again to change the caption or the photos.',
+    parameters: {
+      type: 'object',
+      properties: {
+        caption: { type: 'string', description: 'The full text of the post, as it should appear on the Page' },
+        photos: { type: 'string', enum: ['keep', 'use_new', 'add_new', 'none'], description: 'keep: the photos already on the draft. use_new: only the photos sent with this message. add_new: the photos on the draft plus the ones sent with this message. none: a post with no photos.' },
+      },
+      required: ['caption', 'photos'], additionalProperties: false,
+    },
+  },
+  cancel_facebook_draft: {
+    description: 'Discard the pending Facebook post draft when the person no longer wants it.',
+    parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+  },
 } as const;
 
 export type AssistantToolName = keyof typeof ASSISTANT_TOOLS;
+type ComposioTool = { slug: string; args: Record<string, unknown>; shape: string };
+const isComposioTool = (t: object): t is ComposioTool => 'slug' in t;
+/** The tools every channel's loop carries: the ones that are a single Composio call. */
+export const COMPOSIO_TOOL_NAMES = (Object.keys(ASSISTANT_TOOLS) as AssistantToolName[]).filter((n) => isComposioTool(ASSISTANT_TOOLS[n]));
+
+export interface AssistantLoopOptions {
+  /** The catalog entries this channel's loop carries. Default: the Composio ones. */
+  tools?: readonly AssistantToolName[];
+  /** States for the carried tools that have no slug, inside the tool Map: each enters at `Run_<name>` and ends with Output { call_id, output }. */
+  runners?: Record<string, unknown>;
+  /** The user message's `content` for the model, a JSONata fragment. Default: the text. */
+  content?: string;
+}
 
 /** The tool definitions the model sees, in the Responses API's function-tool shape. Filtered per tenant at call time. */
-export function assistantToolDefs() {
-  return Object.entries(ASSISTANT_TOOLS).map(([name, t]) => ({ type: 'function', name, description: t.description, parameters: t.parameters, strict: true }));
+export function assistantToolDefs(tools: readonly AssistantToolName[] = COMPOSIO_TOOL_NAMES) {
+  return tools.map((name) => ({ type: 'function', name, description: ASSISTANT_TOOLS[name].description, parameters: ASSISTANT_TOOLS[name].parameters, strict: true }));
 }
 
 /** Constant variables the loop needs; a caller merges these into its Prepare state's Assign. */
-export function assistantPrepare() {
-  return { toolDefs: assistantToolDefs(), round: 0, tokens: 0, history: [] as unknown[], memories: [] as unknown[] };
+export function assistantPrepare(tools?: readonly AssistantToolName[]) {
+  return { toolDefs: assistantToolDefs(tools), round: 0, tokens: 0, history: [] as unknown[], memories: [] as unknown[] };
 }
 
 // ---- Expressions (exported unwrapped so the tests can evaluate them) ---------
@@ -117,7 +150,8 @@ export const instructionsExpr = "$systemPrompt & ($count($memories) > 0 ? ' Thin
 export const assistantLoopStart = (refs: AssistantLoopRefs) => (refs.memoryId ? 'LoadHistory' : 'CallModel');
 
 /** The loop's states; `exit` is the caller's state after the loop (its Reply). */
-export function assistantLoopStates(refs: AssistantLoopRefs, exit: string) {
+export function assistantLoopStates(refs: AssistantLoopRefs, exit: string, opts: AssistantLoopOptions = {}) {
+  const tools = opts.tools ?? COMPOSIO_TOOL_NAMES;
   const crm = composio(refs.composioConnectionArn, q('$tenant.tenantId.S'));
   const modelCall = (body: Record<string, unknown>) => ({
     Type: 'Task', Resource: 'arn:aws:states:::http:invoke',
@@ -138,13 +172,16 @@ export function assistantLoopStates(refs: AssistantLoopRefs, exit: string) {
   });
 
   // One Choice branch and one execute state per catalog entry: the Gate is the allow-list.
-  const gate = Object.keys(ASSISTANT_TOOLS).map((name) => ({ Condition: q(`$tool = '${name}' and '${name}' in $allowedTools`), Next: `Run_${name}` }));
-  const runners = Object.fromEntries(Object.entries(ASSISTANT_TOOLS).map(([name, t]) => [`Run_${name}`, {
-    ...crm.execute(t.slug, t.args as Record<string, unknown>),
-    Catch: [{ ErrorEquals: ['States.ALL'], Next: 'Failed' }],
-    Output: q(toolResultExpr('$states.result.ResponseBody', t.shape)),
-    End: true,
-  }]));
+  const gate = tools.map((name) => ({ Condition: q(`$tool = '${name}' and '${name}' in $allowedTools`), Next: `Run_${name}` }));
+  const runners = {
+    ...Object.fromEntries(tools.map((name) => [name, ASSISTANT_TOOLS[name]] as const).filter(([, t]) => isComposioTool(t)).map(([name, t]) => [`Run_${name}`, {
+      ...crm.execute((t as ComposioTool).slug, (t as ComposioTool).args),
+      Catch: [{ ErrorEquals: ['States.ALL'], Next: 'Failed' }],
+      Output: q(toolResultExpr('$states.result.ResponseBody', (t as ComposioTool).shape)),
+      End: true,
+    }])),
+    ...(opts.runners ?? {}),
+  };
 
   return {
     ...(refs.memoryId ? {
@@ -168,7 +205,7 @@ export function assistantLoopStates(refs: AssistantLoopRefs, exit: string) {
         Output: q('$states.input'), Next: 'CallModel',
       },
     } : {}),
-    CallModel: modelCall({ input: q("$append($history, [{ 'role': 'user', 'content': $text }])") }),
+    CallModel: modelCall({ input: q(`$append($history, [{ 'role': 'user', 'content': ${opts.content ?? '$text'} }])`) }),
     Decide: {
       Type: 'Choice',
       Choices: [

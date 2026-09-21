@@ -4,7 +4,59 @@ import { z } from 'zod';
 export const E164 = z.string().regex(/^\+[1-9]\d{6,14}$/, 'must be E.164 (+15555550100)');
 
 /** Assistant tool names; the catalog that runs them is `workflows/assistant/assistant-loop.ts` (kept in step by a test). */
-export const ASSISTANT_TOOL_NAMES = ['search_contacts', 'add_note'] as const;
+export const ASSISTANT_TOOL_NAMES = ['search_contacts', 'add_note', 'draft_facebook_post', 'cancel_facebook_draft'] as const;
+
+// ---- Actions: the approval ledger ---------------------------------------------
+// One row per action that reaches a customer irreversibly or costs money, in
+// the Actions table: tenantId, then `<approver channel id>#<type>#<created>#<id>`,
+// never overwritten, so the table is also the log of what was proposed, who
+// approved it, and what came of it. A model proposes (writes `pending` rows and
+// revises them); it never approves and never executes. Approval is a person's
+// exact word, matched by the workflow before any model runs, on the revision
+// they were last shown; the workflow then locks the row (`executing`) and acts.
+// A row stuck in `executing` means the outcome is unknown: a person reconciles
+// it, nothing retries it.
+
+export const ACTION_STATUSES = ['pending', 'executing', 'completed', 'failed', 'rejected'] as const;
+
+/** Each action type and the exact word (any case, nothing else in the message) that approves it. It names the action so a YES meant for something else approves nothing. */
+export const ACTION_APPROVAL_WORDS = { facebook_post: 'POST' } as const;
+export type ActionType = keyof typeof ACTION_APPROVAL_WORDS;
+
+/** An Actions row as the workflows write it (plain values; the table holds the DynamoDB-typed form). */
+export const ActionSchema = z.object({
+  tenantId: z.string().min(1),
+  sk: z.string().min(1),
+  type: z.enum(Object.keys(ACTION_APPROVAL_WORDS) as [ActionType, ...ActionType[]]),
+  status: z.enum(ACTION_STATUSES),
+  /** Channel id (`sms:<e164>`) of the person who may approve it. */
+  approver: z.string().min(1),
+  proposedBy: z.literal('assistant'),
+  /** Bumped on every change to the payload. Approval counts only when `shownRevision` equals it. */
+  revision: z.number().int().positive(),
+  /** The revision last texted to the approver, word for word from this row; 0 before the first send. */
+  shownRevision: z.number().int().nonnegative(),
+  shownAt: z.string().optional(),
+  /** Epoch seconds after which a pending row can no longer be approved. */
+  approveBy: z.number().int().positive(),
+  payload: z.object({
+    caption: z.string(),
+    /** Texted photos by Twilio id; links are minted when needed, never stored. */
+    media: z.array(z.object({ messageSid: z.string(), mediaSid: z.string() })),
+  }),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  approvedAt: z.string().optional(),
+  approvedBy: z.string().optional(),
+  /** The approver's message as received. */
+  approvalText: z.string().optional(),
+  completedAt: z.string().optional(),
+  result: z.object({ postId: z.string() }).optional(),
+  error: z.string().optional(),
+  /** Table TTL (epoch seconds): when the log row itself is deleted. */
+  expiresAt: z.number().int().positive(),
+});
+export type Action = z.infer<typeof ActionSchema>;
 
 export const PersonSchema = z.object({
   name: z.string().min(1),
@@ -131,6 +183,19 @@ export const TenantConfigSchema = z.object({
      */
     tools: z.array(z.enum(ASSISTANT_TOOL_NAMES)).default([]),
   }).prefault({}),
+
+  /**
+   * Posts to the business's Facebook Page, drafted by the assistant over SMS
+   * and published only on the person's POST (the Actions ledger). Needs the
+   * Facebook consent (`scripts/connect-composio.mts <id> facebook`) and the
+   * `draft_facebook_post` / `cancel_facebook_draft` assistant tools.
+   */
+  facebookPosts: z.object({
+    enabled: z.boolean().default(false),
+    /** The Page's numeric id and its name as the draft message states it (FACEBOOK_GET_USER_PAGES after the consent). */
+    pageId: z.string().regex(/^\d+$/).optional(),
+    pageName: z.string().min(1).optional(),
+  }).prefault({}).refine((f) => !f.enabled || (f.pageId && f.pageName), 'facebookPosts.enabled needs pageId and pageName'),
 
   /** A saved browser for the business: the owner signs into sites over a live view (`/login` on Telegram); logins persist in Browserbase. */
   browser: z.object({

@@ -52,9 +52,13 @@ export function httpTask(connectionArn: string, method: 'GET' | 'POST', url: str
 /** Composio's HTTP API for one tenant, through the Connection that holds the platform key. */
 export function composio(connectionArn: string, tenantId: string) {
   return {
-    /** Run a toolkit tool (`HUBSPOT_CREATE_NOTE`, `GMAIL_SEND_EMAIL`, ...) with the tenant's connected account. `args` may be a q() expression. */
-    execute: (slug: string, args: Record<string, unknown> | string) =>
-      httpTask(connectionArn, 'POST', `${COMPOSIO_API}tools/execute/${slug}`, { user_id: tenantId, arguments: args }),
+    /**
+     * Run a toolkit tool (`HUBSPOT_CREATE_NOTE`, `GMAIL_SEND_EMAIL`, ...) with the tenant's connected account. `args` may be a q() expression.
+     * `version` pins the toolkit release. Without it the REST API runs the toolkit's oldest release (`00000000_00`), not the newest:
+     * fine where that one works (Gmail, HubSpot today), wrong where it does not (Facebook's cannot post to a Page).
+     */
+    execute: (slug: string, args: Record<string, unknown> | string, version?: string) =>
+      httpTask(connectionArn, 'POST', `${COMPOSIO_API}tools/execute/${slug}`, { user_id: tenantId, arguments: args, ...(version ? { version } : {}) }),
     /** The tenant's ACTIVE connected accounts, for one toolkit or all. */
     accounts: (toolkit?: string) =>
       httpTask(connectionArn, 'GET', `${COMPOSIO_API}connected_accounts`, undefined, { user_ids: tenantId, ...(toolkit ? { toolkit_slugs: toolkit } : {}), statuses: 'ACTIVE' }),
