@@ -7,5 +7,5 @@
  * new version (scripts/temporal-release.mts).
  */
 export const DEPLOYMENT_NAME = 'wnkinc-voice-dev-worker';
-export const BUILD_ID = 'build-7';
+export const BUILD_ID = 'build-8';
 export const TASK_QUEUE = 'wnkinc-voice-dev';
