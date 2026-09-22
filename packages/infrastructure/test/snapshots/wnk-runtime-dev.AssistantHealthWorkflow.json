@@ -87,6 +87,8 @@
               ],
               "round": 0,
               "tokens": 0,
+              "inputTokens": 0,
+              "outputTokens": 0,
               "history": [],
               "memories": [],
               "tenant": "{% $states.input %}",
@@ -192,7 +194,9 @@
               "responseId": "{% $states.result.ResponseBody.id %}",
               "calls": "{% [$states.result.ResponseBody.output[type='function_call']] %}",
               "reply": "{% $count($states.result.ResponseBody.output[type='message']) > 0 ? $join($states.result.ResponseBody.output[type='message'].content[type='output_text'].text, ' ') : '' %}",
-              "tokens": "{% $tokens + $states.result.ResponseBody.usage.total_tokens %}"
+              "tokens": "{% $tokens + $states.result.ResponseBody.usage.total_tokens %}",
+              "inputTokens": "{% $inputTokens + $states.result.ResponseBody.usage.input_tokens %}",
+              "outputTokens": "{% $outputTokens + $states.result.ResponseBody.usage.output_tokens %}"
             },
             "Output": "{% $states.input %}",
             "Next": "Decide"
@@ -403,7 +407,9 @@
               "responseId": "{% $states.result.ResponseBody.id %}",
               "calls": "{% [$states.result.ResponseBody.output[type='function_call']] %}",
               "reply": "{% $count($states.result.ResponseBody.output[type='message']) > 0 ? $join($states.result.ResponseBody.output[type='message'].content[type='output_text'].text, ' ') : '' %}",
-              "tokens": "{% $tokens + $states.result.ResponseBody.usage.total_tokens %}"
+              "tokens": "{% $tokens + $states.result.ResponseBody.usage.total_tokens %}",
+              "inputTokens": "{% $inputTokens + $states.result.ResponseBody.usage.input_tokens %}",
+              "outputTokens": "{% $outputTokens + $states.result.ResponseBody.usage.output_tokens %}"
             },
             "Output": "{% $states.input %}",
             "Next": "Decide"

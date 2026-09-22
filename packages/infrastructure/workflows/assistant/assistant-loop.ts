@@ -20,7 +20,9 @@
  * What the workflow assigns before entering (see the callers):
  *   $text, $systemPrompt, $actorId, $sessionId, $allowedTools, $tenant,
  *   plus `assistantPrepare()` (tool definitions, counters).
- * What it leaves: $reply (the text to send) and $tokens (for usage).
+ * What it leaves: $reply (the text to send) and $tokens, $inputTokens,
+ * $outputTokens (for usage; output costs several times input, so the usage
+ * row carries the split).
  */
 import { COMPOSIO_API, OPENAI_API, composio, q } from '../asl.js';
 
@@ -123,7 +125,7 @@ export function assistantToolDefs(tools: readonly AssistantToolName[] = COMPOSIO
 
 /** Constant variables the loop needs; a caller merges these into its Prepare state's Assign. */
 export function assistantPrepare(tools?: readonly AssistantToolName[]) {
-  return { toolDefs: assistantToolDefs(tools), round: 0, tokens: 0, history: [] as unknown[], memories: [] as unknown[] };
+  return { toolDefs: assistantToolDefs(tools), round: 0, tokens: 0, inputTokens: 0, outputTokens: 0, history: [] as unknown[], memories: [] as unknown[] };
 }
 
 // ---- Expressions (exported unwrapped so the tests can evaluate them) ---------
@@ -167,6 +169,8 @@ export function assistantLoopStates(refs: AssistantLoopRefs, exit: string, opts:
       calls: q(callsExpr('$states.result.ResponseBody')),
       reply: q(textExpr('$states.result.ResponseBody')),
       tokens: q('$tokens + $states.result.ResponseBody.usage.total_tokens'),
+      inputTokens: q('$inputTokens + $states.result.ResponseBody.usage.input_tokens'),
+      outputTokens: q('$outputTokens + $states.result.ResponseBody.usage.output_tokens'),
     },
     Output: q('$states.input'), Next: 'Decide',
   });

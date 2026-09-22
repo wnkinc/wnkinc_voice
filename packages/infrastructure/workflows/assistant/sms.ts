@@ -183,6 +183,8 @@ export function smsDefinition(refs: SmsRefs) {
           sk: { S: q("$now() & '#llm_tokens#' & $uuid()") },
           meter: { S: 'llm_tokens' },
           units: { N: q('$string($tokens)') },
+          inputTokens: { N: q('$string($inputTokens)') },
+          outputTokens: { N: q('$string($outputTokens)') },
           ref: { S: q("'sms:' & $sms.From") },
         } },
         End: true,

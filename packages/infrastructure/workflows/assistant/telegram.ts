@@ -107,6 +107,8 @@ export function telegramDefinition(refs: TelegramRefs) {
           sk: { S: q("$now() & '#llm_tokens#' & $uuid()") },
           meter: { S: 'llm_tokens' },
           units: { N: q('$string($tokens)') },
+          inputTokens: { N: q('$string($inputTokens)') },
+          outputTokens: { N: q('$string($outputTokens)') },
           ref: { S: q("'telegram:' & $string($states.input.message.chat.id)") },
         } },
         End: true,
