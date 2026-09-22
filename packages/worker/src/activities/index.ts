@@ -10,7 +10,7 @@ export { sendText } from './twilio.js';
 export { mintLinks } from './media.js';
 export { callModel } from './model.js';
 export { composioAccounts, composioProxy, executeTool } from './composio.js';
-export { loadHistory, recall, recallPreferences, saveTurn } from './memory.js';
+export { loadHistory, recall, recallPreferences, rememberCall, saveTurn } from './memory.js';
 export { recordMeter, recordUsage } from './usage.js';
 export { markDone, readCall } from './calls.js';
 export { sendTelegram } from './telegram.js';

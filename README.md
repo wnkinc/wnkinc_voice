@@ -47,9 +47,9 @@ goals that decide how to change it.
                                        EventBridge bus (wnkinc.voice)
                               lead.recorded · owner.notify · call.ended
                                                     │
-                       platform (runtime stack), the same for every tenant:
+                       platform (the worker stack's rule), the same for every tenant:
                         call.ended    → transcript to caller memory, minutes to usage
-                       per tenant, in that tenant's stack, rules filtered on its id:
+                       per tenant, in that tenant's stack, rules filtered on its id, run on the worker:
                         lead.recorded → HubSpot contact + note + task (via Composio HTTP)
                         lead.recorded → CRM + memory → owner's Gmail
                         call.ended    → transcript note on the HubSpot contact
@@ -85,8 +85,8 @@ the after-call work (memory and usage always; the rest per tenant, see section 2
    15-minute timeout is the ceiling, hence `maxCallSeconds` maxes at 840.
 8. **End** — on socket close the call record gets `status`/`endedAt`, a `call.ended` event
    (ids and outcome; the transcript stays on the row) is published, and the SQS message is
-   deleted by the event source mapping. The call-ended workflow writes the transcript to the
-   caller's memory and meters the minutes.
+   deleted by the event source mapping. The `callEnded` workflow on the worker writes the
+   transcript to the caller's memory and meters the minutes.
 9. **Failures** — an attach failure is reported as a batch item failure and the message
    dead-letters at once (a retry after the 16-minute visibility timeout would reach a call
    that ended long ago); the DLQ alarms. There is no mid-call re-attach: if an invocation
@@ -162,18 +162,19 @@ and only for a tenant with `browser.enabled`. What the assistant does with that 
 
 ### The clock hits 15:00 UTC
 
-Silent degradation gets a canary. Two run daily, ten minutes apart so a failure in the second is
-about the loop and not about Composio:
+Silent degradation gets a canary. Two run daily as Temporal Schedules (created by the release
+script when missing), ten minutes apart so a failure in the second is about the loop and not about
+Composio. A failing canary fails its workflow, which the WorkflowFailed alarm pages on:
 
 - **15:00, `composio-health`** scans the Tenants table and asks Composio for each tenant's ACTIVE
   connected accounts, expecting HubSpot when `crm.via` is composio, Gmail when the email responder
   is on, and at least one when the assistant is on. A missing connection would otherwise fail
-  nothing (every CRM and Gmail state catches and carries on); here it fails the execution, which
-  alarms with the tenant and the reconnect command.
+  nothing (enrichment carries on without it); here it fails the workflow, naming the tenant and
+  the reconnect command.
 - **15:10, `assistant-health`** runs the same loop for each enabled tenant with one read-only
   question (a phone number no contact has) and asserts only that it produced text. It proves the model
-  answers through the OpenAI Connection, Memory reads and writes, and a tool call reaches Composio and
-  comes back. Nobody messages the bot on a quiet week, so this is the traffic that proves it still works.
+  answers, Memory reads and writes, and a tool call reaches Composio and comes back. Nobody messages
+  the bot on a quiet week, so this is the traffic that proves it still works.
 
 ### How the tenant is chosen
 
@@ -285,10 +286,10 @@ and sets it after success (`checkDone` / `markDone` states from `workflows/asl.t
 a crash between the send and the mark; it is not exactly-once. Anything that costs money or reaches
 a customer irreversibly should get a pending → completed ledger with reconciliation instead.
 
-Standard workflows (Telegram, owner alert, CRM lead, the canaries) keep their history for replay;
-workflows that handle transcripts or CRM notes (accept, call-ended, lead email, CRM call) are Express
-with execution data not logged, so only the state path and the error are kept. Events carry ids and
-outcomes; the transcript stays on the call row and is fetched by id where needed.
+Temporal keeps every workflow's history for the namespace's retention (30 days), activity inputs
+included: a transcript an activity reads is in that history. The accept machine, which handles SIP
+headers and the caller's last CRM note, is Express with execution data not logged. Events carry ids
+and outcomes; the transcript stays on the call row and is fetched by id where needed.
 
 **The session Lambda.** `aws logs tail /aws/lambda/wnkinc-voice-dev-session --follow`. Deploying
 new session code is `npm run deploy`. Because in-flight calls live inside a Lambda invocation, a
@@ -335,8 +336,9 @@ npm run deploy
 ```
 
 IaC is AWS CDK (TypeScript, `packages/infrastructure/`); Lambdas are bundled by `NodejsFunction`
-(esbuild) at deploy time. Stacks: memory, voice, runtime, then one per tenant
-(`bin/app.ts` builds one platform object and feeds it to the runtime stack and every tenant stack).
+(esbuild) at deploy time. Stacks: memory, voice, runtime (the assistant's secrets and the media
+link resolver), worker, then one per tenant (`bin/app.ts` builds one platform object and feeds it to
+the worker; a tenant stack takes only the bus, the alarm topic, and the worker's automation starter).
 
 The alarm topic is created by the stack; **who it pages is not** — subscribe once, out of band,
 and no later deploy can remove it:
@@ -495,14 +497,15 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 | `packages/receptionist/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/receptionist/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload. To add a tool: a zod args schema, a handler, a `tool({...})` entry, then its name in a tenant's `tools`. Tools that need durability publish an event and return; a workflow consumes it |
 | `packages/worker/` | The Temporal Worker: `workflows/` (deterministic: the shared loop, the SMS and Telegram turns, browser login, the four tenant automations, both canaries), `activities/` (the side effects, each taking its tenant id), `assistant/catalog.ts` (the tool catalog and prompts), `automations/catalog.ts` (the automations and their rules), `sms/` (inbound parsing and the Facebook ledger rules), `handler.ts` (Lambda), `starter.ts` (the front doors), `service.ts` (the Fargate fallback), `version.ts` (deployment name, build id, task queue) |
-| `packages/infrastructure/workflows/` | One file per Step Functions definition still on it: `receptionist/` (accept, call-ended): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair). `automation.ts` is the descriptor the four automations export |
+| `packages/infrastructure/workflows/` | The one Step Functions definition still on it: `receptionist/accept.ts`: a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair). `automation.ts` is the descriptor the four automations export |
 | `packages/media-link/` | The one Lambda on the assistant path: a texted photo's Twilio ids -> the signed link Twilio redirects to (about four hours, fetchable by anyone). Code because Step Functions fails an HTTP task on a 307 and keeps the Location header from the workflow. Takes ids, never a URL; refuses a photo not texted to the tenant's number it is given. Moves no bytes, stores nothing |
 | `packages/infrastructure/workflows/assistant/facebook-post.ts` | Facebook posts over SMS, and the pattern for every action that reaches a customer irreversibly: the model drafts into the Actions ledger (`ActionSchema` in `@wnk/shared`), the workflow texts the draft word for word from the row, the person's reply POST (matched before the model runs, on the revision they were shown) publishes. The model has no publish tool; the definitions test holds that |
 | `packages/telegram-mcp/` | A tenant's own Telegram account (a user login, not the assistant's bot) as a remote MCP server for their ChatGPT or Claude: the pinned chigwell/telegram-mcp engine in a container Lambda behind a secret URL. `server.py` only loads the tenant's secrets and removes the tools Lambda can't serve. Onboarding in its README |
 | `tenants/<id>.ts`, `tenants/index.ts` | What that tenant runs: its automations on the bus, and `telegramMcp` for the connector. The registry is one line per tenant. Tracked, unlike the rows |
-| `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant with automations, from its file |
+| `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant with automations, from its file: rules filtered on the tenant id, targeting the worker's automation starter |
+| `packages/infrastructure/stacks/worker-stack.ts` | The Temporal worker (a container Lambda Temporal Cloud invokes), its secret and invocation role, the three front doors (SMS, Telegram, automations), the platform's call.ended rule, the failure alarms, the Fargate fallback at zero |
 | `packages/infrastructure/stacks/telegram-mcp-stack.ts` | One stack per tenant with `telegramMcp`: the connector Lambda, its Function URL, a role that reads only that tenant's secret. Takes no platform handles |
-| `packages/infrastructure/stacks/runtime-stack.ts` | The platform workflows every tenant shares: Telegram and SMS (each running the assistant loop), browser login, call-ended, the two canaries, and the Telegram reply path |
+| `packages/infrastructure/stacks/runtime-stack.ts` | The Telegram, Twilio and Browserbase secrets and the media link resolver, exposed to the worker stack |
 | `packages/infrastructure/stacks/voice-stack.ts`, `memory-stack.ts` | The call path (API, two Lambdas, accept workflow, tables, bus, queues, the OpenAI and Composio Connections, alarm topic); caller memory |
 | `packages/infrastructure/bin/app.ts`, `infra_utils/` | Stack wiring; alarm and state-machine presets |
 | `packages/shared/src/` | `types.ts` (`TenantConfig` zod schema, records, events), `store.ts` (DynamoDB behind one `Store` interface plus an in-memory version; no leads table, the CRM holds the lead and the call row is the audit), `events.ts` (EventBridge publisher), `config.ts` (env, secrets, OpenAI client, logger), `composio.ts` (Composio SDK, scripts only) |

@@ -2,7 +2,7 @@
 import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CallEnded, LeadRecorded, OwnerNotify } from '../src/automations/catalog.js';
-import { crmCall, crmLead, leadEmail, ownerAlert } from '../src/workflows/index.js';
+import { callEnded, crmCall, crmLead, leadEmail, ownerAlert } from '../src/workflows/index.js';
 import { failure, fakes, run as runWorkflow, tenant, type Fakes } from './fakes.js';
 
 const crmTenant = { ...tenant, crm: { type: 'hubspot', via: 'composio' }, emailResponder: { enabled: true }, people: [{ name: 'Meg', role: 'owner' as const, telegramId: 777 }] };
@@ -150,5 +150,31 @@ describe('owner alert', () => {
     f.lookupTenant.mockResolvedValue({ ...crmTenant, people: [{ name: 'Sam', role: 'employee' }] });
     expect((await failure(runWorkflow(env, f, ownerAlert, [notify]))).type).toBe('NoOwnerChannel');
     expect(f.sendTelegram).not.toHaveBeenCalled();
+  }, 60_000);
+});
+
+describe('call ended', () => {
+  it('meters the minutes, writes the transcript to the caller\'s memory without the tool lines, and marks', async () => {
+    const f = fakes();
+    f.readCall.mockResolvedValue({ done: false, transcript: [{ role: 'user', text: 'Hi', at: 't' }, { role: 'tool', text: 'x', at: 't' }, { role: 'assistant', text: 'Hello', at: 't' }] });
+    expect(await runWorkflow(env, f, callEnded, [ended])).toBe('done');
+    expect(f.readCall).toHaveBeenCalledWith('call-1', 'done:call.ended', true);
+    expect(f.recordMeter).toHaveBeenCalledWith('deck', 'voice_minutes', 130 / 60, 'call-1');
+    expect(f.rememberCall).toHaveBeenCalledWith('deck_15555550155', 'call-1', [{ role: 'user', text: 'Hi' }, { role: 'assistant', text: 'Hello' }]);
+    expect(f.markDone).toHaveBeenCalledWith('call-1', 'done:call.ended');
+  }, 60_000);
+
+  it('skips a failed or zero-length call and one already handled; an unknown caller is metered but not remembered', async () => {
+    expect(await runWorkflow(env, fakes(), callEnded, [{ ...ended, status: 'failed' }])).toBe('skipped');
+    expect(await runWorkflow(env, fakes(), callEnded, [{ ...ended, durationSeconds: 0 }])).toBe('skipped');
+    const f = fakes();
+    f.readCall.mockResolvedValue({ done: true, transcript: [] });
+    expect(await runWorkflow(env, f, callEnded, [ended])).toBe('skipped');
+    expect(f.recordMeter).not.toHaveBeenCalled();
+    const g = fakes();
+    g.readCall.mockResolvedValue({ done: false, transcript: [{ role: 'user', text: 'Hi', at: 't' }] });
+    expect(await runWorkflow(env, g, callEnded, [{ ...ended, callerPhone: undefined }])).toBe('done');
+    expect(g.recordMeter).toHaveBeenCalled();
+    expect(g.rememberCall).not.toHaveBeenCalled();
   }, 60_000);
 });

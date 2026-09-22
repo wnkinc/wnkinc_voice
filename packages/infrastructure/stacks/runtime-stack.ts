@@ -1,41 +1,25 @@
 import * as cdk from 'aws-cdk-lib';
-import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
-import * as events from 'aws-cdk-lib/aws-events';
-import * as targets from 'aws-cdk-lib/aws-events-targets';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MEMORY_USE_ACTIONS } from './memory-stack.js';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type * as sns from 'aws-cdk-lib/aws-sns';
-import * as sqs from 'aws-cdk-lib/aws-sqs';
-import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
-import { dlqAlarm, errorAlarm, failedExecutionsAlarm } from '../infra_utils/alarms.js';
-import { expressNoData } from '../infra_utils/state-machine.js';
-import { callEndedDefinition } from '../workflows/receptionist/call-ended.js';
+import { errorAlarm } from '../infra_utils/alarms.js';
 import { Construct } from 'constructs';
 
 export interface RuntimeStackProps extends cdk.StackProps {
   readonly prefix: string;
-  readonly bus: events.IEventBus;
-  readonly usageTable: dynamodb.ITable;
-  /** The transcript and the once-marker the call-ended tail reads and writes. */
-  readonly callsTable: dynamodb.ITable;
   readonly alarmTopic: sns.ITopic;
-  /** Platform memory: the call-ended workflow writes transcripts. */
-  readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
 }
 
 /**
- * The platform workflow that still runs on Step Functions: the call-ended
- * tail (memory, usage). Everything else (the assistant, the tenant
- * automations, both canaries) runs in the Temporal worker
- * (stacks/worker-stack.ts). What stays here for it are the platform secrets
- * it reads (Telegram, Twilio, Browserbase) and the media link resolver its
- * activities invoke, exposed as fields.
+ * What the worker's channels read that predates the worker stack: the
+ * Telegram, Twilio and Browserbase secrets (their values were put in by
+ * hand and a new resource would generate new ones) and the media link
+ * resolver. Every workflow that once lived here runs in the Temporal worker
+ * (stacks/worker-stack.ts); this stack exposes these as fields for it.
  */
 export class RuntimeStack extends cdk.Stack {
   /** Twilio credentials and the generated webhook path; the worker stack's SMS route and replies use them. */
@@ -51,7 +35,6 @@ export class RuntimeStack extends cdk.Stack {
     super(scope, id, props);
     const { prefix } = props;
 
-    // ---- The secrets the worker's channels read ---------------------------------
     // Bot token (set by hand, see README) plus a generated secret path segment
     // for the webhook URL: Telegram's recommended way to authenticate posts.
     const telegramSecret = new secretsmanager.Secret(this, 'TelegramSecret', {
@@ -114,45 +97,6 @@ export class RuntimeStack extends cdk.Stack {
     twilioSecret.grantRead(mediaLinkFn);
     errorAlarm(this, 'MediaLinkErrors', mediaLinkFn, props.alarmTopic, 'Media link resolver');
 
-    // ---- The call-ended tail on the bus -------------------------------------------
-    // A start the rule could not deliver (after retries) parks in startDlq
-    // and alarms, and an execution that started and failed alarms through
-    // the workflow metric.
-    const startDlq = new sqs.Queue(this, 'LeadEmailDlq', { retentionPeriod: cdk.Duration.days(14) });
-    const route = (id: string, detailType: string, wf: sfn.StateMachine, description: string) => new events.Rule(this, id, {
-      eventBus: props.bus,
-      description,
-      eventPattern: { source: ['wnkinc.voice'], detailType: [detailType] },
-      targets: [new targets.SfnStateMachine(wf, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: startDlq })],
-    });
-    const memoryGrant = (wf: sfn.StateMachine) => {
-      if (!props.callerMemory) return;
-      wf.addToRolePolicy(new iam.PolicyStatement({
-        actions: MEMORY_USE_ACTIONS,
-        resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
-      }));
-    };
-    // Call ended (workflows/receptionist/call-ended.ts): transcript -> memory, minutes -> usage.
-    const endedWorkflow = new sfn.StateMachine(this, 'CallEndedWorkflow', {
-      stateMachineName: `${prefix}-call-ended`,
-      tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
-      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(callEndedDefinition({
-        callsTable: props.callsTable.tableName,
-        usageTable: props.usageTable.tableName,
-        memoryId: props.callerMemory?.memoryId,
-      }))),
-      timeout: cdk.Duration.minutes(2),
-      ...expressNoData(this, 'CallEndedWorkflowLogs'),
-    });
-    props.callsTable.grantReadWriteData(endedWorkflow);
-    props.usageTable.grantWriteData(endedWorkflow);
-    memoryGrant(endedWorkflow);
-    route('CallEndedRule', 'call.ended', endedWorkflow, 'Route call.ended to the call-ended workflow (memory, usage)');
-    failedExecutionsAlarm(this, 'CallEndedWorkflowFailed', endedWorkflow, props.alarmTopic, 'Call ended (memory, usage)');
-
-    dlqAlarm(this, 'LeadEmailDlqAlarm', startDlq, props.alarmTopic, 'Platform workflows: an event could not start the call-ended workflow');
-
-    new cdk.CfnOutput(this, 'callEndedWorkflowArn', { value: endedWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'twilioSecretArn', { value: twilioSecret.secretArn });
     new cdk.CfnOutput(this, 'browserbaseSecretArn', { value: browserbaseSecret.secretArn });

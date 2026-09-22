@@ -8,6 +8,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as events from 'aws-cdk-lib/aws-events';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sns from 'aws-cdk-lib/aws-sns';
@@ -25,7 +26,7 @@ const stack = new WorkerStack(app, 'wnk-worker-test', {
   openaiSecret: secret('OpenAI'), composioSecret: secret('Composio'), twilioSecret: secret('Twilio'), telegramSecret: secret('Telegram'), browserbaseSecret: secret('Browserbase'), browserbaseProjectId: 'proj',
   mediaLinkFunction: new lambda.Function(platform, 'MediaLink', { runtime: lambda.Runtime.NODEJS_22_X, handler: 'index.handler', code: lambda.Code.fromInline('exports.handler = async () => ({})') }),
   callerMemory: { memoryId: 'mem', memoryArn: 'arn:aws:bedrock-agentcore:us-west-2:123456789012:memory/mem' },
-  api: new apigwv2.HttpApi(platform, 'Api'),
+  api: new apigwv2.HttpApi(platform, 'Api'), bus: new events.EventBus(platform, 'Bus'),
 });
 const template = Template.fromStack(stack);
 
@@ -85,6 +86,9 @@ describe('worker stack', () => {
       expect(statements.flatMap(actions).filter((a) => a.startsWith('dynamodb:') || a.startsWith('bedrock-agentcore:'))).toEqual([]);
     }
     template.hasResourceProperties('AWS::Lambda::EventSourceMapping', { BatchSize: 1 });
+    const rule = Object.values(template.findResources('AWS::Events::Rule'))[0]!;
+    expect(rule.Properties.EventPattern).toEqual({ source: ['wnkinc.voice'], 'detail-type': ['call.ended'] });
+    expect(rule.Properties.Targets[0].InputTransformer.InputTemplate).toContain('"workflow":"callEnded"');
     const routes = Object.values(template.findResources('AWS::ApiGatewayV2::Route')).map((r) => JSON.stringify(r.Properties.RouteKey));
     expect(routes.some((r) => r.includes('/temporal/sms/'))).toBe(true);
     expect(routes.some((r) => r.includes('/temporal/telegram/'))).toBe(true);

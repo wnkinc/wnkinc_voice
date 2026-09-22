@@ -31,7 +31,7 @@ const platform = {
   callerMemory,
 };
 
-const runtime = new RuntimeStack(app, 'wnk-runtime-dev', { prefix, env, ...platform });
+const runtime = new RuntimeStack(app, 'wnk-runtime-dev', { prefix, env, alarmTopic: voice.alarmTopic });
 
 // The Temporal Worker: every workflow that moves here runs in it, with the
 // platform handles its activities reach (tables, secrets, memory, the media
@@ -39,7 +39,7 @@ const runtime = new RuntimeStack(app, 'wnk-runtime-dev', { prefix, env, ...platf
 const worker = new WorkerStack(app, 'wnk-worker-dev', {
   prefix, env,
   alarmTopic: voice.alarmTopic, tenantsTable: voice.tenantsTable, callsTable: voice.callsTable, usageTable: voice.usageTable, callerMemory,
-  peopleTable: voice.peopleTable, actionsTable: voice.actionsTable, api: voice.api,
+  peopleTable: voice.peopleTable, actionsTable: voice.actionsTable, api: voice.api, bus: voice.bus,
   openaiSecret: voice.openaiSecret, composioSecret: voice.composioSecret,
   twilioSecret: runtime.twilioSecret, mediaLinkFunction: runtime.mediaLinkFn,
   telegramSecret: runtime.telegramSecret, browserbaseSecret: runtime.browserbaseSecret,

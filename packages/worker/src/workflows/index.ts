@@ -11,7 +11,7 @@ export { telegramTurn } from './telegram-turn.js';
 export { browserLogin } from './browser-login.js';
 export { assistantHealth } from './assistant-health.js';
 export { composioHealth } from './composio-health.js';
-export { crmCall, crmLead, leadEmail, ownerAlert } from './automations.js';
+export { callEnded, crmCall, crmLead, leadEmail, ownerAlert } from './automations.js';
 
 const { echo } = proxyActivities<typeof activities>({ startToCloseTimeout: '10 seconds' });
 

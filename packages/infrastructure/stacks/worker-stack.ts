@@ -36,6 +36,8 @@ import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import type * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
 import { DockerImageAsset, Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -80,6 +82,8 @@ export interface WorkerStackProps extends cdk.StackProps {
   readonly mediaLinkFunction: lambda.IFunction;
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
   readonly api: apigwv2.IHttpApi;
+  /** The platform bus: the rule every tenant gets identically (call.ended) lives here. */
+  readonly bus: events.IEventBus;
 }
 
 export class WorkerStack extends cdk.Stack {
@@ -269,6 +273,21 @@ export class WorkerStack extends cdk.Stack {
     secret.grantRead(automationStart);
     errorAlarm(this, 'AutomationStartErrors', automationStart, props.alarmTopic, 'Automations (Temporal): starter');
     this.automationStart = automationStart;
+
+    // The platform's own rule: what every tenant gets identically and no tenant
+    // varies (the call-ended tail: memory, usage). Tenant automations are rules
+    // in each tenant's stack (stacks/tenant-stack.ts) with the same target.
+    const platformDlq = new sqs.Queue(this, 'PlatformStartDlq', { retentionPeriod: cdk.Duration.days(14) });
+    new events.Rule(this, 'CallEndedRule', {
+      eventBus: props.bus,
+      description: 'call.ended -> callEnded (memory, usage), every tenant',
+      eventPattern: { source: ['wnkinc.voice'], detailType: ['call.ended'] },
+      targets: [new targets.LambdaFunction(automationStart, {
+        event: events.RuleTargetInput.fromObject({ workflow: 'callEnded', options: {}, detail: events.EventField.fromPath('$.detail'), id: events.EventField.eventId }),
+        retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: platformDlq,
+      })],
+    });
+    dlqAlarm(this, 'PlatformStartDlqAlarm', platformDlq, props.alarmTopic, 'Platform automations: an event could not start the call-ended workflow');
 
     // ---- The fallback: the same Worker, long-running, at zero -----------------------
     // Public subnets and a public IP, no NAT: the worker only makes outbound

@@ -40,3 +40,13 @@ export async function recallPreferences(actorId: string): Promise<string[]> {
   const r = await client.send(new RetrieveMemoryRecordsCommand({ memoryId: id, namespacePath: `/callers/${actorId}/preferences`, searchCriteria: { searchQuery: 'how and when this caller prefers to be contacted', topK: 4 } }));
   return (r.memoryRecordSummaries ?? []).flatMap((m) => (m.content?.text ? [m.content.text] : []));
 }
+
+/** A call's transcript into the caller's memory as one event, the call id as the session; facts and preferences are extracted asynchronously. */
+export async function rememberCall(actorId: string, callId: string, lines: { role: 'user' | 'assistant'; text: string }[]): Promise<void> {
+  const id = memoryId();
+  if (!id || lines.length === 0) return;
+  await client.send(new CreateEventCommand({
+    memoryId: id, actorId, sessionId: callId, eventTimestamp: new Date(),
+    payload: lines.map((l) => ({ conversational: { role: l.role === 'user' ? 'USER' : 'ASSISTANT', content: { text: l.text } } })),
+  }));
+}

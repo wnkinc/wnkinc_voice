@@ -33,7 +33,7 @@ export function fakes(): Fakes {
     loadHistory: vi.fn(async () => []), recall: vi.fn(async () => []), saveTurn: vi.fn(async () => undefined), recordUsage: vi.fn(async () => undefined),
     claimLoginWindow: vi.fn(async () => true), clearLoginWindow: vi.fn(async () => undefined), saveBrowserContext: vi.fn(async () => undefined),
     createBrowserContext: vi.fn(async () => 'ctx-new'), startBrowserSession: vi.fn(async () => 'sess-1'), browserLiveView: vi.fn(async () => 'https://live/1'), releaseBrowserSession: vi.fn(async () => undefined),
-    readCall: vi.fn(async () => ({ done: false, transcript: [] })), markDone: vi.fn(async () => true),
+    readCall: vi.fn(async () => ({ done: false, transcript: [] })), markDone: vi.fn(async () => true), rememberCall: vi.fn(async () => undefined),
     composioAccounts: vi.fn(async () => []), composioProxy: vi.fn(async () => ({ successful: true, data: {} })), recallPreferences: vi.fn(async () => []), recordMeter: vi.fn(async () => undefined),
     echo: vi.fn(async (n: string) => `pong: ${n}`),
   };

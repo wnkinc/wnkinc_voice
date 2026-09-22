@@ -17,6 +17,8 @@ export const AUTOMATIONS = {
   crmCall: { on: 'call.ended' },
   /** owner.notify -> the owner's Telegram. */
   ownerAlert: { on: 'owner.notify' },
+  /** call.ended -> the transcript into the caller's memory, the minutes metered. Every tenant, identically: the platform's rule, not a tenant file's. */
+  callEnded: { on: 'call.ended' },
 } as const;
 export type AutomationName = keyof typeof AUTOMATIONS;
 export const AUTOMATION_NAMES = Object.keys(AUTOMATIONS) as AutomationName[];
