@@ -6,7 +6,7 @@ their Telegram. One container Lambda per tenant, deployed as
 `wnk-telegram-mcp-<id>-dev` when `tenants/<id>.ts` sets `telegramMcp: true`.
 It needs nothing else from the platform: no number, no row, no bus.
 
-Not to be confused with `workflows/assistant/telegram.ts`, the bot a tenant's
+Not to be confused with the assistant's Telegram turn (`packages/worker/src/workflows/telegram-turn.ts`), the bot a tenant's
 people message to reach the assistant.
 
 ## What it sits on

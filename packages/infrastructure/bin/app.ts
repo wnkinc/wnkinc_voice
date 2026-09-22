@@ -31,15 +31,7 @@ const platform = {
   callerMemory,
 };
 
-const runtime = new RuntimeStack(app, 'wnk-runtime-dev', {
-  prefix,
-  env,
-  ...platform,
-  openaiConnection: voice.openaiConnection,
-  peopleTable: voice.peopleTable,
-  actionsTable: voice.actionsTable,
-  api: voice.api,
-});
+const runtime = new RuntimeStack(app, 'wnk-runtime-dev', { prefix, env, ...platform });
 
 // The Temporal Worker: every workflow that moves here runs in it, with the
 // platform handles its activities reach (tables, secrets, memory, the media

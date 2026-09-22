@@ -3,7 +3,7 @@ import { z } from 'zod';
 /** E.164 phone number, e.g. +15555550100 */
 export const E164 = z.string().regex(/^\+[1-9]\d{6,14}$/, 'must be E.164 (+15555550100)');
 
-/** Assistant tool names; the catalog that runs them is `workflows/assistant/assistant-loop.ts` (kept in step by a test). */
+/** Assistant tool names; the catalog that runs them is `packages/worker/src/assistant/catalog.ts` (kept in step by a test). */
 export const ASSISTANT_TOOL_NAMES = ['search_contacts', 'add_note', 'draft_facebook_post', 'cancel_facebook_draft'] as const;
 
 // ---- Actions: the approval ledger ---------------------------------------------

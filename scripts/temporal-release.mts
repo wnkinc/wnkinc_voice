@@ -78,6 +78,6 @@ console.log(current.includes(`"currentVersionBuildID": "${BUILD_ID}"`) ? `curren
 for (const s of SCHEDULES) {
   const exists = (() => { try { temporal(['schedule', 'describe', '--schedule-id', s.id, '-o', 'json']); return true; } catch { return false; } })();
   if (exists) continue;
-  temporal(['schedule', 'create', '--schedule-id', s.id, '--cron', s.cron, '--workflow-type', s.type, '--task-queue', TASK_QUEUE, '--workflow-id', s.id, '--overlap-policy', 'Skip']);
+  temporal(['schedule', 'create', '--schedule-id', s.id, '--cron', s.cron, '--type', s.type, '--task-queue', TASK_QUEUE, '--workflow-id', s.id, '--overlap-policy', 'Skip']);
   console.log(`schedule created: ${s.id} (${s.cron} UTC -> ${s.type})`);
 }
