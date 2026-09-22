@@ -116,8 +116,7 @@ describe('synthesized state machine definitions', () => {
 
   it('synthesizes every workflow, platform ones in the platform stacks and tenant ones in the tenant stack', () => {
     expect(defs.map((d) => `${d.stack}/${d.id.replace(/[0-9A-F]{8}$/, '')}`).sort()).toEqual([
-      'wnk-runtime-dev/CallEndedWorkflow', 'wnk-runtime-dev/ComposioHealthWorkflow',
-      'wnk-tenant-wnk-dev/CrmCallWorkflow', 'wnk-tenant-wnk-dev/CrmLeadWorkflow', 'wnk-tenant-wnk-dev/LeadEmailWorkflow', 'wnk-tenant-wnk-dev/OwnerAlertWorkflow',
+      'wnk-runtime-dev/CallEndedWorkflow',
       'wnk-voice-dev/AcceptWorkflow',
     ]);
   });

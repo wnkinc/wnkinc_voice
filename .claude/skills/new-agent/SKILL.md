@@ -16,11 +16,12 @@ the option for a model that must write and run code (a filesystem and a shell pe
 platform has none.
 
 **Workflow second.** If the behavior is a fixed sequence of managed-service calls (read the
-tenant, check a once-marker, fetch, format, send, write usage) it is a Step Functions state
-machine on an EventBridge rule, with no package and no model. The lead email workflow in
-`workflows/automations/lead-email.ts` is the worked example (one definition per file under `workflows/`, wrapped in a state machine in `stacks/runtime-stack.ts`): JSONata states, Composio reached with HTTP tasks
-through an EventBridge Connection (the tenant id as `user_id` on every call), the email formatted
-in JSONata from the data already fetched, `failedExecutionsAlarm` + a DLQ on the rule target.
+tenant, check a once-marker, fetch, format, send, write usage) it is a Temporal workflow in the
+worker (`packages/worker/src/workflows/`) started by an EventBridge rule through the automation
+starter, with no model. The lead email workflow (`leadEmail` in `workflows/automations.ts`) is the
+worked example: deterministic workflow code over activities (each taking the tenant id; Composio
+named with the tenant as `user_id` on every call), the email formatted from the data already
+fetched, the send one attempt, the once-marker after it, the WorkflowFailed alarm behind it.
 Reach for the loop only when the step is open-ended (a person chatting); a fixed sequence
 never needs a model, and a model in the loop costs ~90k tokens per run.
 
@@ -43,11 +44,11 @@ An agent = a `packages/<name>/` folder (behavior) + wiring in `packages/infrastr
 3. **Hosting** in `stacks/runtime-stack.ts`: a `NodejsFunction` (ESM, node22, ARM, X-Ray active, a dead-letter queue, `dlqAlarm` + `errorAlarm`) with env vars for everything the agent needs. If it imports `@wnk/shared/composio`, add the `createRequire` banner the voice-stack `fn` helper uses.
 4. **Identity**: the agent acts for the tenant selected upstream — an automation takes `tenantId` from the event and passes it to every Composio adapter call; the assistant loop runs each tool through Composio naming the tenant from the row. No agent holds a credential or a Cognito identity.
 5. **Grants**: the execution role gets exactly what the agent touches — tables, secrets, memory actions (`MEMORY_USE_ACTIONS` on the memory ARN + `/*`), `cognito-idp:DescribeUserPoolClient` on the pool. Expect to discover one missing action from an AccessDenied message; the error names the exact action + resource — encode it, don't wildcard the service.
-6. **Trigger**: a bus event → `events.Rule` with the Lambda as target (`retryAttempts: 2`, the DLQ). A request/response surface → HTTP API route → Step Functions (`StepFunctions-StartExecution` integration, `Input: $request.body`), see the Telegram workflow. Prefer a state machine over a Lambda when the steps are all managed-service calls.
+6. **Trigger**: a bus event → `events.Rule` targeting the worker's automation starter with the workflow name (a tenant automation, below) or a Lambda (`retryAttempts: 2`, the DLQ). A request/response surface → HTTP API route → a starter handler in `packages/worker/src/starter.ts` that opens a workflow keyed by the request's own id, see the Telegram front door. Prefer a workflow over a Lambda when the steps are all managed-service calls.
 7. **Allow-list**: for the assistant, the catalog in `packages/worker/src/assistant/catalog.ts` and the row's `assistant.tools`; for a Lambda, the code is the policy. A platform tool for an open-ended model is the trigger for a Gateway + Cedar (new-tool skill).
-7b. **Tenant opt-in**: a bus-driven automation that tenants may run differently is a tenant automation: export an `Automation` descriptor from its workflow file (`workflows/automations/automation.ts`: event, Express or not, timeout, grants, definition) and list it in `tenants/<id>.ts` for each tenant that gets it; the tenant stack deploys it with a rule matching only that tenant's events. No row flag needed for that. A platform workflow every tenant gets identically (like call-ended) stays in the runtime stack; if it acts per tenant, its first states are the tenant lookup by the event's `tenantPhoneNumber` and a Choice on its service block's `enabled` (a new block in `TenantConfigSchema`, default `false`); a missing row or a false flag ends in Succeed without acting — no `?? 'wnk'` defaults, ever.
+7b. **Tenant opt-in**: a bus-driven automation that tenants may run differently is a tenant automation: a workflow in `packages/worker/src/workflows/automations.ts`, an entry in `packages/worker/src/automations/catalog.ts` (the event that starts it), and a line in `tenants/<id>.ts` for each tenant that gets it (with options, if that tenant runs it differently); the tenant stack deploys a rule matching only that tenant's events. No row flag needed for that. A platform workflow every tenant gets identically (like call-ended) is a rule in the runtime stack; if it acts per tenant, its first steps are the tenant lookup by the event's `tenantPhoneNumber` and a check of its service block's `enabled` (a new block in `TenantConfigSchema`, default `false`); a missing row or a false flag returns `skipped` without acting — no `?? 'wnk'` defaults, ever.
 8. **Prove it**: a `scripts/test-<name>.mts` that puts a real event on the bus (or invokes the function) and checks the side effect.
-9. `npx tsc --noEmit && npm test`, `npx cdk deploy wnk-runtime-dev` (plus auth/policy stacks if touched), run the test script, commit.
+9. `npx tsc --noEmit && npm test`, bump `BUILD_ID` in `packages/worker/src/version.ts`, `npm run deploy -- wnk-worker-dev` (plus the tenant stacks if their rules changed), `npm run release`, run the test script, commit.
 
 ## Logs
 

@@ -9,9 +9,10 @@ export { cancelDraft, createDraft, findPending, lockDraft, markCompleted, markFa
 export { sendText } from './twilio.js';
 export { mintLinks } from './media.js';
 export { callModel } from './model.js';
-export { executeTool } from './composio.js';
-export { loadHistory, recall, saveTurn } from './memory.js';
-export { recordUsage } from './usage.js';
+export { composioAccounts, composioProxy, executeTool } from './composio.js';
+export { loadHistory, recall, recallPreferences, saveTurn } from './memory.js';
+export { recordMeter, recordUsage } from './usage.js';
+export { markDone, readCall } from './calls.js';
 export { sendTelegram } from './telegram.js';
 export { browserLiveView, createBrowserContext, releaseBrowserSession, startBrowserSession } from './browser.js';
 export { claimLoginWindow, clearLoginWindow, listTenants, saveBrowserContext } from './tenants.js';

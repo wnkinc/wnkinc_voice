@@ -24,3 +24,30 @@ export async function executeTool(tenantId: string, slug: string, args: Record<s
   if (!res.ok) throw new Error(`Composio ${slug}: ${res.status} ${(await res.text()).slice(0, 300)}`);
   return await res.json() as ComposioResult;
 }
+
+export interface ComposioAccount { id: string; toolkit: string }
+
+/** The tenant's ACTIVE connected accounts, for one toolkit or all. */
+export async function composioAccounts(tenantId: string, toolkit?: string): Promise<ComposioAccount[]> {
+  if (!tenantId) throw new Error('composioAccounts: no tenant');
+  const key = (await secret(env('COMPOSIO_SECRET_ARN'))).COMPOSIO_API_KEY;
+  if (!key) throw new Error('the Composio secret is not filled in');
+  const q = new URLSearchParams({ user_ids: tenantId, statuses: 'ACTIVE', ...(toolkit ? { toolkit_slugs: toolkit } : {}) });
+  const res = await fetch(`${COMPOSIO_API}connected_accounts?${q}`, { headers: { 'x-api-key': key } });
+  if (!res.ok) throw new Error(`Composio connected_accounts: ${res.status} ${(await res.text()).slice(0, 300)}`);
+  const body = await res.json() as { items?: { id: string; toolkit?: { slug?: string } }[] };
+  return (body.items ?? []).map((i) => ({ id: i.id, toolkit: i.toolkit?.slug ?? '' }));
+}
+
+/** The toolkit's own REST API on one of the tenant's accounts (`accountId` from composioAccounts), for what no tool covers. */
+export async function composioProxy(tenantId: string, accountId: string, method: 'GET' | 'POST', endpoint: string, body?: Record<string, unknown>): Promise<ComposioResult> {
+  if (!tenantId || !accountId) throw new Error('composioProxy: no tenant or account');
+  const key = (await secret(env('COMPOSIO_SECRET_ARN'))).COMPOSIO_API_KEY;
+  if (!key) throw new Error('the Composio secret is not filled in');
+  const res = await fetch(`${COMPOSIO_API}tools/execute/proxy`, {
+    method: 'POST', headers: { 'x-api-key': key, 'content-type': 'application/json' },
+    body: JSON.stringify({ endpoint, method, connected_account_id: accountId, ...(body ? { body } : {}) }),
+  });
+  if (!res.ok) throw new Error(`Composio proxy ${endpoint}: ${res.status} ${(await res.text()).slice(0, 300)}`);
+  return await res.json() as ComposioResult;
+}

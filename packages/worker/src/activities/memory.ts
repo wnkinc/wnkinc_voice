@@ -32,3 +32,11 @@ export async function saveTurn(actorId: string, sessionId: string, text: string,
     payload: [{ conversational: { role: 'USER', content: { text } } }, { conversational: { role: 'ASSISTANT', content: { text: reply } } }],
   }));
 }
+
+/** A caller's preferences only: how and when they want to be reached, which the CRM has no field for. Facts and summaries are the assistant's. */
+export async function recallPreferences(actorId: string): Promise<string[]> {
+  const id = memoryId();
+  if (!id) return [];
+  const r = await client.send(new RetrieveMemoryRecordsCommand({ memoryId: id, namespacePath: `/callers/${actorId}/preferences`, searchCriteria: { searchQuery: 'how and when this caller prefers to be contacted', topK: 4 } }));
+  return (r.memoryRecordSummaries ?? []).flatMap((m) => (m.content?.text ? [m.content.text] : []));
+}

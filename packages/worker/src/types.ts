@@ -23,7 +23,13 @@ export interface TenantRow {
   assistant?: { enabled?: boolean; tools?: string[] };
   facebookPosts?: { enabled?: boolean; pageId?: string; pageName?: string };
   browser?: { enabled?: boolean; contextId?: string; loginUntil?: string };
+  emailResponder?: { enabled?: boolean };
+  crm?: { type?: string; via?: string };
+  people?: { name: string; role: 'owner' | 'employee'; telegramId?: number; phone?: string }[];
 }
+
+/** A transcript line on a call row. */
+export interface TranscriptEntry { role: 'user' | 'assistant' | 'tool'; text: string; at: string }
 
 /** A texted photo by its Twilio ids; links are minted when needed, never stored. */
 export interface Photo {

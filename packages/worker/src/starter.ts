@@ -7,10 +7,14 @@
  * MessageSid: a redelivered post is refused as a duplicate and nothing runs
  * twice. Telegram: API Gateway -> `telegram` -> a workflow, keyed by the
  * update id, answering 200 at once (Telegram retries anything slow, and a
- * retry is refused as the same id). Neither polls.
+ * retry is refused as the same id). Automations: a tenant stack's rule ->
+ * `automation` -> the named workflow with the event's detail, keyed by the
+ * lead or call it is about, so a redelivery reruns only a run that failed.
+ * None polls.
  */
 import type { APIGatewayProxyHandlerV2, SQSHandler } from 'aws-lambda';
 import { Client, Connection, WorkflowExecutionAlreadyStartedError } from '@temporalio/client';
+import { AUTOMATIONS, type AutomationName } from './automations/catalog.js';
 import { isRoutable, parseForm } from './sms/inbound.js';
 import { TASK_QUEUE } from './version.js';
 import { env, secret } from './activities/config.js';
@@ -50,4 +54,23 @@ export const telegram: APIGatewayProxyHandlerV2 = async (event) => {
     if (!(err instanceof WorkflowExecutionAlreadyStartedError)) throw err;
   }
   return { statusCode: 200, body: '' };
+};
+
+/** What a tenant stack's rule hands over: the automation to run and the event, plus that tenant's options. */
+interface AutomationStart { workflow: string; options?: Record<string, unknown>; detail: Record<string, unknown> & { tenantId?: string; callId?: string; lead?: { leadId?: string } }; id?: string }
+
+export const automation = async (event: AutomationStart): Promise<void> => {
+  const name = event.workflow as AutomationName;
+  if (!(name in AUTOMATIONS)) throw new Error(`not an automation: ${event.workflow}`);
+  const d = event.detail;
+  if (!d?.tenantId) throw new Error('the event names no tenant');
+  // Domain identity as the workflow id: a lead's automations by the lead, a call's by the call; an alert has none, so every delivery is its own.
+  const key = d.lead?.leadId ?? (name === 'ownerAlert' ? `${d.callId}-${event.id ?? Date.now()}` : d.callId);
+  client ??= connect().catch((err: unknown) => { client = undefined; throw err; });
+  const c = await client;
+  try {
+    await c.workflow.start(name, { taskQueue: TASK_QUEUE, workflowId: `${name}-${d.tenantId}-${key}`, args: [d, event.options ?? {}], workflowIdReusePolicy: 'ALLOW_DUPLICATE_FAILED_ONLY' });
+  } catch (err) {
+    if (!(err instanceof WorkflowExecutionAlreadyStartedError)) throw err;
+  }
 };

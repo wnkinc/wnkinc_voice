@@ -11,11 +11,10 @@
  * the secret generates here, so the guard never passes through a person.
  *
  * The front doors: SMS (Twilio -> API Gateway -> SQS -> the starter -> a
- * workflow per text) and Telegram (API Gateway -> the starter -> a workflow
- * per update), each starter the same image with a different handler. They
- * sit beside the Step Functions routes until the cutover; a tenant's number
- * and the bot are pointed at one or the other (scripts/twilio-webhook.mts,
- * scripts/telegram-webhook.mts).
+ * workflow per text), Telegram (API Gateway -> the starter -> a workflow
+ * per update), and the automations (a tenant stack's rule -> the starter ->
+ * the named workflow for the event), each starter the same image with a
+ * different handler.
  *
  * The fallback: the same image as a Fargate service at zero tasks
  * (packages/worker/src/service.ts). Serverless Workers are a preview; if the
@@ -63,6 +62,8 @@ export interface WorkerStackProps extends cdk.StackProps {
   readonly prefix: string;
   readonly alarmTopic: sns.ITopic;
   readonly tenantsTable: dynamodb.ITable;
+  /** Transcripts and once-markers, read and written by the automations. */
+  readonly callsTable: dynamodb.ITable;
   readonly peopleTable: dynamodb.ITable;
   readonly actionsTable: dynamodb.ITable;
   readonly usageTable: dynamodb.ITable;
@@ -82,6 +83,9 @@ export interface WorkerStackProps extends cdk.StackProps {
 }
 
 export class WorkerStack extends cdk.Stack {
+  /** Each tenant stack's rules target this: it opens the named automation workflow with the event. */
+  readonly automationStart: lambda.IFunction;
+
   constructor(scope: Construct, id: string, props: WorkerStackProps) {
     super(scope, id, props);
     const { prefix } = props;
@@ -110,6 +114,7 @@ export class WorkerStack extends cdk.Stack {
       PEOPLE_TABLE: props.peopleTable.tableName,
       TENANTS_TABLE: props.tenantsTable.tableName,
       ACTIONS_TABLE: props.actionsTable.tableName,
+      CALLS_TABLE: props.callsTable.tableName,
       USAGE_TABLE: props.usageTable.tableName,
       OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
       COMPOSIO_SECRET_ARN: props.composioSecret.secretArn,
@@ -133,6 +138,7 @@ export class WorkerStack extends cdk.Stack {
       // Read for every turn; written by the login handoff (its window and the saved browser's id).
       props.tenantsTable.grantReadWriteData(role);
       props.actionsTable.grantReadWriteData(role);
+      props.callsTable.grantReadWriteData(role);
       props.usageTable.grantWriteData(role);
       props.mediaLinkFunction.grantInvoke(role);
       if (props.callerMemory) {
@@ -244,6 +250,25 @@ export class WorkerStack extends cdk.Stack {
       integration: new HttpLambdaIntegration('TelegramWebhook', telegramStart),
     });
     errorAlarm(this, 'TelegramStartErrors', telegramStart, props.alarmTopic, 'Assistant (Telegram, Temporal): starter');
+
+    // ---- The automations' front door ------------------------------------------------
+    // Each tenant stack's rules (stacks/tenant-stack.ts) invoke this with the
+    // workflow name, the event, and the tenant's options; it opens the workflow
+    // keyed by the lead or call, so a redelivery reruns only a run that failed.
+    const automationStartName = `${prefix}-automation-start`;
+    const automationStart = new lambda.DockerImageFunction(this, 'AutomationStart', {
+      functionName: automationStartName,
+      description: 'A tenant rule hands over a bus event; this starts the named automation workflow for it',
+      code: image('lib/starter.automation'),
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(20),
+      environment: { TEMPORAL_SECRET_ARN: secret.secretArn, NODE_OPTIONS: '--enable-source-maps' },
+      logGroup: logGroup(automationStartName, 'AutomationStartLogs'),
+    });
+    secret.grantRead(automationStart);
+    errorAlarm(this, 'AutomationStartErrors', automationStart, props.alarmTopic, 'Automations (Temporal): starter');
+    this.automationStart = automationStart;
 
     // ---- The fallback: the same Worker, long-running, at zero -----------------------
     // Public subnets and a public IP, no NAT: the worker only makes outbound

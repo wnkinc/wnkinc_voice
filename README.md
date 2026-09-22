@@ -226,25 +226,28 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 
 ### The automations menu
 
-Each after-call automation is a file in `packages/infrastructure/workflows/` exporting an
-`Automation` descriptor (`workflows/automations/automation.ts`: the bus event that starts it, Express or not,
-timeout, grants, definition). A tenant file lists the ones it runs:
+Each after-call automation is a workflow in the worker (`packages/worker/src/workflows/automations.ts`),
+listed in the catalog (`packages/worker/src/automations/catalog.ts`) with the bus event that starts
+it. A tenant file lists the ones it runs:
 
-| Descriptor | On | What it does |
+| Workflow | On | What it does |
 |---|---|---|
 | `crmLead` | `lead.recorded` | HubSpot contact upserted by phone, note with the lead, follow-up task due the next business morning in the tenant's timezone, assigned to the account's first owner |
 | `crmCall` | `call.ended` | Transcript note on the HubSpot contact, if the caller is already a contact. The transcript is read from the call row, not the event |
 | `leadEmail` | `lead.recorded` | Email to the owner from the owner's own Gmail through Composio, carrying the CRM contact, its last note, and caller memory when they exist |
-| `ownerAlert` | `owner.notify` | The receptionist's urgent alert, delivered to the row's owner over the Telegram reply path |
+| `ownerAlert` | `owner.notify` | The receptionist's urgent alert, delivered to the row's owner on Telegram |
 
 `packages/infrastructure/stacks/tenant-stack.ts` turns the list into one stack per tenant
-(`wnk-tenant-<id>-dev`): for each descriptor a state machine named for the tenant, a rule matching
-only events carrying that tenant's id, the grants it declares, and an alarm. Deploying one touches
-no other tenant. The definitions test synthesizes every machine and asserts the rule filter.
+(`wnk-tenant-<id>-dev`): for each entry a rule matching only events carrying that tenant's id, which
+hands the worker's automation starter the workflow name, the event, and that tenant's options. The
+workflow runs on the shared worker for the tenant the event names, keyed by the lead or call it is
+about, so a redelivered event reruns only a run that failed. Deploying a tenant stack touches no other
+tenant. `test/tenant-stack.test.ts` renders a tenant file's rules as a table and asserts each names
+the tenant alone; `test/automations.test.ts` runs each workflow through a real Worker with fakes.
 
-A variation for one tenant is, in order of preference, a parameter on the definition, a
-recomposition, or a copied definition in that tenant's file. Never a Choice state inside a
-definition another tenant runs on. The `new-tenant` skill has the sizes with examples.
+A variation for one tenant is an option on its entry (`{ workflow: 'leadEmail', options: { ... } }`),
+read by the workflow as an argument with today's behavior as the default. Never a conditional on the
+tenant id inside a workflow every tenant runs on. The `new-tenant` skill has the sizes with examples.
 
 **CRM (HubSpot through Composio).** Opt-in via `crm: { type: "hubspot", via: "composio" }`. The owner
 approves Composio's HubSpot app once; no HubSpot token exists anywhere in the platform. Every CRM
@@ -491,8 +494,8 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 | `packages/receptionist/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
 | `packages/receptionist/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/receptionist/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload. To add a tool: a zod args schema, a handler, a `tool({...})` entry, then its name in a tenant's `tools`. Tools that need durability publish an event and return; a workflow consumes it |
-| `packages/worker/` | The Temporal Worker: `workflows/` (deterministic: the shared loop, the SMS and Telegram turns, browser login, the assistant canary), `activities/` (the side effects, each taking its tenant id), `assistant/catalog.ts` (the tool catalog and prompts), `sms/` (inbound parsing and the Facebook ledger rules), `handler.ts` (Lambda), `starter.ts` (the front doors), `service.ts` (the Fargate fallback), `version.ts` (deployment name, build id, task queue) |
-| `packages/infrastructure/workflows/` | One file per Step Functions definition, grouped by system: `receptionist/` (accept, call-ended), `automations/` (the descriptor and the four stock automations tenants pick from), `canaries/` (composio-health): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair). `automation.ts` is the descriptor the four automations export |
+| `packages/worker/` | The Temporal Worker: `workflows/` (deterministic: the shared loop, the SMS and Telegram turns, browser login, the four tenant automations, both canaries), `activities/` (the side effects, each taking its tenant id), `assistant/catalog.ts` (the tool catalog and prompts), `automations/catalog.ts` (the automations and their rules), `sms/` (inbound parsing and the Facebook ledger rules), `handler.ts` (Lambda), `starter.ts` (the front doors), `service.ts` (the Fargate fallback), `version.ts` (deployment name, build id, task queue) |
+| `packages/infrastructure/workflows/` | One file per Step Functions definition still on it: `receptionist/` (accept, call-ended): a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair). `automation.ts` is the descriptor the four automations export |
 | `packages/media-link/` | The one Lambda on the assistant path: a texted photo's Twilio ids -> the signed link Twilio redirects to (about four hours, fetchable by anyone). Code because Step Functions fails an HTTP task on a 307 and keeps the Location header from the workflow. Takes ids, never a URL; refuses a photo not texted to the tenant's number it is given. Moves no bytes, stores nothing |
 | `packages/infrastructure/workflows/assistant/facebook-post.ts` | Facebook posts over SMS, and the pattern for every action that reaches a customer irreversibly: the model drafts into the Actions ledger (`ActionSchema` in `@wnk/shared`), the workflow texts the draft word for word from the row, the person's reply POST (matched before the model runs, on the revision they were shown) publishes. The model has no publish tool; the definitions test holds that |
 | `packages/telegram-mcp/` | A tenant's own Telegram account (a user login, not the assistant's bot) as a remote MCP server for their ChatGPT or Claude: the pinned chigwell/telegram-mcp engine in a container Lambda behind a secret URL. `server.py` only loads the tenant's secrets and removes the tools Lambda can't serve. Onboarding in its README |

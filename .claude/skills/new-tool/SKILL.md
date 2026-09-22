@@ -12,7 +12,7 @@ Pick the shape by WHO chooses the tool.
 Composio brokers it; the model gets Composio's meta tools over the tenant's session. No code.
 
 1. Confirm Composio has the toolkit (`composio.dev/toolkits/<slug>`).
-2. Owner consent: `npx tsx scripts/connect-composio.mts <tenantId> <toolkit>`; add the toolkit to `expectedToolkitsExpr` in `workflows/canaries/composio-health.ts` (one line: the row flag that implies it) so the daily canary alarms when the connection lapses (the adapter's `connectLink` creates a managed auth config on first use).
+2. Owner consent: `npx tsx scripts/connect-composio.mts <tenantId> <toolkit>`; add the toolkit to `expectedToolkits` in `packages/worker/src/automations/catalog.ts` (one line: the row flag that implies it) so the daily canary alarms when the connection lapses (the adapter's `connectLink` creates a managed auth config on first use).
 3. Re-mint the tenant's session so it includes the new toolkit: delete `assistant.composioMcpUrl` from `tenants/<id>.json`, then re-run the seed with `COMPOSIO_SECRET_ARN` set. Commit the new URL.
 4. If the model needs guidance the toolkit's schemas do not give (formats, ids), add one sentence to the channel line in `packages/worker/src/assistant/catalog.ts` (`CHANNEL`, `systemPrompt`) — data, not code.
 5. Prove with `npx tsx scripts/test-assistant.mts "<a question that needs it>"`.

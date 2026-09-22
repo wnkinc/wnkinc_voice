@@ -22,31 +22,32 @@ A tenant is a config row keyed by their phone number, their credentials under te
 6b. **Assistant tools** (if `assistant.enabled`): list the tools in `assistant.tools`, by name from the catalog in `packages/worker/src/assistant/catalog.ts` (`search_contacts`, `add_note`; both need the HubSpot consent above). Nothing is minted and nothing deploys: the seed writes the row and the loop reads it.
 6c. **Facebook posts** (if they want to text photos and have the assistant post them to their Page): they need a Facebook Page and admin access to it (not a personal profile). `npx tsx scripts/connect-composio.mts <id> facebook`, ticking the Page on the consent screen; then in the tenant file `"facebookPosts": { "enabled": true, "pageId": "<numeric id>", "pageName": "<name>" }` (both from `FACEBOOK_GET_USER_PAGES` for that tenant) and `draft_facebook_post`, `cancel_facebook_draft` in `assistant.tools`; re-seed. SMS only. Nothing deploys. The person's reply POST publishes, never the model (`packages/worker/src/sms/facebook.ts`).
 7. **Memory**: nothing to do — actor ids are `<tenantId>_<phone>`, so the new tenant's caller memory is isolated by construction.
-7b. **Automations**: create `tenants/<id>.ts` (copy `tenants/wnk.ts`): the tenant id and the list of descriptors it runs (`leadEmail`, `crmLead`, `crmCall`, `ownerAlert` from `packages/infrastructure/workflows/`, or a variant: a descriptor with options, or a copied definition). Add it to `tenants/index.ts`, then `npx cdk deploy wnk-tenant-<id>-dev`. That stack's rules match only events carrying this tenant's id; the definitions test asserts it. Nothing else deploys.
+7b. **Automations**: create `tenants/<id>.ts` (copy `tenants/wnk.ts`): the tenant id and the list of automations it runs (`leadEmail`, `crmLead`, `crmCall`, `ownerAlert` from the worker's catalog, each with options if this tenant runs it differently). Add it to `tenants/index.ts`, then `npm run deploy -- wnk-tenant-<id>-dev`. That stack's rules match only events carrying this tenant's id; `test/tenant-stack.test.ts` and the definitions test assert it. Nothing else deploys: the workflows already run on the worker.
 7c. **Telegram connector** (if the tenant wants their Telegram account in their ChatGPT or Claude): `telegramMcp: true` in `tenants/<id>.ts`, then `npx cdk deploy wnk-telegram-mcp-<id>-dev` and fill the tenant-named secret it creates (`wnkinc-voice-dev/<id>/telegram-mcp`). The steps, with the QR login and the hidden-prompt secret entry, are in `packages/telegram-mcp/README.md`. A tenant who wants only the connector skips everything else here: no number, no row, no seed, `automations: []` (like `tenants/meg.ts`).
 8. **Verify**: call the new number; check the webhook log resolved the tenant (`"msg":"incoming call"` → correct `to`); confirm a lead lands with the right `tenantId` and, if enabled, the owner gets the email.
 
 ## Varying an automation for one tenant
 
-A tenant's stack runs only that tenant's machines, so a change for one tenant
-never edits a definition another tenant runs on. Pick the smallest size that is
-honest about the difference, in this order:
+A tenant's stack holds only that tenant's rules, and the workflows run on the
+shared worker, so a change for one tenant is never a branch on the tenant id in
+code every tenant runs. Pick the smallest size that is honest about the
+difference, in this order:
 
 1. **A value differs** (subject line, task delay, which fields the email shows).
-   Add an options argument to the definition function with today's behavior as
-   the default, and pass it from the tenant's file:
+   Give the workflow an options argument with today's behavior as the default,
+   and pass it from the tenant's file:
    ```ts
-   { ...leadEmail, definition: (refs) => leadEmailDefinition(refs, { subjectPrefix: 'Lead: ' }) }
+   { workflow: 'leadEmail', options: { subjectPrefix: 'Lead: ' } }
    ```
-   Other tenants keep listing `leadEmail` and get the default.
-2. **A step differs** (skip CRM enrichment, add a step). Same shape: the option
-   adds or removes states while the definition is built, in TypeScript. Model it
-   on `refs.memoryId` in `workflows/automations/lead-email.ts`, which decides whether the
-   RecallMemory state exists at all. A build-time branch, never a runtime
-   Choice on the tenant row.
-3. **The shape differs** (it is really a different automation). Copy the
-   workflow file, edit freely, export its own descriptor, list that in the
-   tenant's file. The copy owns its future; fixes to the original do not reach it.
+   Other tenants keep listing `leadEmail` and get the default. The starter hands
+   the options to the workflow as its second argument.
+2. **A step differs** (skip CRM enrichment, add a step). Same shape: an option
+   the workflow reads before the step, tested with the fakes both ways. An
+   option, never a check of the tenant id.
+3. **The shape differs** (it is really a different automation). Add a workflow
+   under its own name to `workflows/automations.ts` and the catalog, and list
+   that in the tenant's file. The copy owns its future; fixes to the original
+   do not reach it.
 
 Whichever size, deploy only that tenant's stack (`npm run deploy -- wnk-tenant-<id>-dev`).
 The definitions test synthesizes every machine and compares each to its snapshot

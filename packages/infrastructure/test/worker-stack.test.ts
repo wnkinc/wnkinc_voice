@@ -21,7 +21,7 @@ const table = (id: string) => new dynamodb.Table(platform, id, { partitionKey: {
 const secret = (id: string) => new secretsmanager.Secret(platform, id);
 const stack = new WorkerStack(app, 'wnk-worker-test', {
   prefix: 'p', env, alarmTopic: new sns.Topic(platform, 'Alarms'),
-  tenantsTable: table('Tenants'), peopleTable: table('People'), actionsTable: table('Actions'), usageTable: table('Usage'),
+  tenantsTable: table('Tenants'), callsTable: table('Calls'), peopleTable: table('People'), actionsTable: table('Actions'), usageTable: table('Usage'),
   openaiSecret: secret('OpenAI'), composioSecret: secret('Composio'), twilioSecret: secret('Twilio'), telegramSecret: secret('Telegram'), browserbaseSecret: secret('Browserbase'), browserbaseProjectId: 'proj',
   mediaLinkFunction: new lambda.Function(platform, 'MediaLink', { runtime: lambda.Runtime.NODEJS_22_X, handler: 'index.handler', code: lambda.Code.fromInline('exports.handler = async () => ({})') }),
   callerMemory: { memoryId: 'mem', memoryArn: 'arn:aws:bedrock-agentcore:us-west-2:123456789012:memory/mem' },
@@ -67,14 +67,14 @@ describe('worker stack', () => {
     expect(resources.some((r) => r.includes('"Ref":"' + Object.keys(template.findResources('AWS::SecretsManager::Secret'))[0]))).toBe(true);
     for (const imported of ['OpenAI', 'Composio', 'Twilio', 'Telegram', 'Browserbase']) expect(resources.some((r) => r.includes(imported))).toBe(true);
     const envVars = worker.Properties.Environment.Variables;
-    for (const key of ['PEOPLE_TABLE', 'TENANTS_TABLE', 'ACTIONS_TABLE', 'USAGE_TABLE', 'OPENAI_SECRET_ARN', 'COMPOSIO_SECRET_ARN', 'TWILIO_SECRET_ARN', 'TELEGRAM_SECRET_ARN', 'BROWSERBASE_SECRET_ARN', 'BROWSERBASE_PROJECT_ID', 'MEDIA_LINK_FUNCTION_ARN', 'MEMORY_ID', 'TEMPORAL_SECRET_ARN']) expect(envVars[key]).toBeDefined();
+    for (const key of ['PEOPLE_TABLE', 'TENANTS_TABLE', 'ACTIONS_TABLE', 'CALLS_TABLE', 'USAGE_TABLE', 'OPENAI_SECRET_ARN', 'COMPOSIO_SECRET_ARN', 'TWILIO_SECRET_ARN', 'TELEGRAM_SECRET_ARN', 'BROWSERBASE_SECRET_ARN', 'BROWSERBASE_PROJECT_ID', 'MEDIA_LINK_FUNCTION_ARN', 'MEMORY_ID', 'TEMPORAL_SECRET_ARN']) expect(envVars[key]).toBeDefined();
     expect(envVars.TEMPORAL_API_KEY).toBeUndefined();
   });
 
   it('the starters are the same image with different handlers, and reach only the Temporal secret', () => {
     const worker = fnByName('p-worker')!;
     expect(worker.Properties.ImageConfig.Command).toEqual(['lib/handler.handler']);
-    for (const [name, cmd] of [['p-sms-start', 'lib/starter.handler'], ['p-telegram-start', 'lib/starter.telegram']] as const) {
+    for (const [name, cmd] of [['p-sms-start', 'lib/starter.handler'], ['p-telegram-start', 'lib/starter.telegram'], ['p-automation-start', 'lib/starter.automation']] as const) {
       const starter = fnByName(name)!;
       expect(starter.Properties.Code.ImageUri).toEqual(worker.Properties.Code.ImageUri);
       expect(starter.Properties.ImageConfig.Command).toEqual([cmd]);

@@ -23,8 +23,11 @@ import { BUILD_ID, DEPLOYMENT_NAME, TASK_QUEUE } from '../packages/worker/src/ve
 import { REGION, temporalSecret } from './lib/temporal-env.mts';
 
 const STACK = 'wnk-worker-dev';
-/** Every morning, 15:10 UTC: ten minutes after the connection check, so a failure is about the loop, not Composio. */
-const SCHEDULES = [{ id: 'assistant-health', cron: '10 15 * * *', type: 'assistantHealth' }];
+/** Every morning: the connection check at 15:00 UTC, the assistant probe ten minutes after it, so a failure there is about the loop, not Composio. */
+const SCHEDULES = [
+  { id: 'composio-health', cron: '0 15 * * *', type: 'composioHealth' },
+  { id: 'assistant-health', cron: '10 15 * * *', type: 'assistantHealth' },
+];
 
 const sh = (cmd: string, args: string[], env: NodeJS.ProcessEnv = {}) =>
   execFileSync(cmd, args, { encoding: 'utf8', env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'inherit'] }).trim();
@@ -76,7 +79,7 @@ console.log(current.includes(`"currentVersionBuildID": "${BUILD_ID}"`) ? `curren
 //    the task queue at a cron time (UTC); one running at a time, a missed run
 //    skipped rather than piled up.
 for (const s of SCHEDULES) {
-  const exists = (() => { try { temporal(['schedule', 'describe', '--schedule-id', s.id, '-o', 'json']); return true; } catch { return false; } })();
+  const exists = (() => { try { execFileSync('temporal', ['schedule', 'describe', '--schedule-id', s.id, '-o', 'json'], { env: { ...process.env, ...temporalEnv }, stdio: 'ignore' }); return true; } catch { return false; } })();
   if (exists) continue;
   temporal(['schedule', 'create', '--schedule-id', s.id, '--cron', s.cron, '--type', s.type, '--task-queue', TASK_QUEUE, '--workflow-id', s.id, '--overlap-policy', 'Skip']);
   console.log(`schedule created: ${s.id} (${s.cron} UTC -> ${s.type})`);

@@ -1,8 +1,6 @@
 import jsonata from 'jsonata';
 import { describe, expect, it } from 'vitest';
 import { htmlToTextExpr, sipNumberExpr, SIP_CALLED_HEADERS, SIP_CALLER_HEADERS } from '../workflows/receptionist/accept.js';
-import { expectedToolkitsExpr, missingToolkitsExpr } from '../workflows/canaries/composio-health.js';
-import { nextBusinessMorningExpr } from '../workflows/automations/crm-lead.js';
 
 const evalExpr = (expr: string, input: unknown, bindings: Record<string, unknown> = {}) => {
   const e = jsonata(expr);
@@ -39,44 +37,9 @@ describe('sipNumberExpr', () => {
   });
 });
 
-describe('nextBusinessMorningExpr', () => {
-  // Pacific in September: zoneOffset -420 -> seed offset 600.
-  const at = (iso: string) => evalExpr(nextBusinessMorningExpr('600', String(Date.parse(iso))), {});
-  it('Friday afternoon -> Monday 09:00 PDT (16:00Z)', async () => { expect(await at('2026-09-04T22:00:00Z')).toBe('2026-09-07T16:00:00.000Z'); });
-  it('Monday 08:59 local -> same day 09:00', async () => { expect(await at('2026-09-07T15:59:00Z')).toBe('2026-09-07T16:00:00.000Z'); });
-  it('Monday 09:00 local -> Tuesday', async () => { expect(await at('2026-09-07T16:00:00Z')).toBe('2026-09-08T16:00:00.000Z'); });
-  it('Saturday -> Monday', async () => { expect(await at('2026-09-05T18:00:00Z')).toBe('2026-09-07T16:00:00.000Z'); });
-  it('Eastern (seed offset 420): Friday evening -> Monday 09:00 EDT (13:00Z)', async () => {
-    expect(await evalExpr(nextBusinessMorningExpr('420', String(Date.parse('2026-09-04T23:00:00Z'))), {})).toBe('2026-09-07T13:00:00.000Z');
-  });
-});
-
 describe('htmlToTextExpr', () => {
   it('strips tags and collapses whitespace', async () => {
     expect(await evalExpr(htmlToTextExpr('b'), { b: 'Call to <b>WNK</b> line<br><br>Agent: hi<br>Caller:  yo' })).toBe('Call to WNK line Agent: hi Caller: yo');
-  });
-});
-
-describe('composio health expressions', () => {
-  // `Bool`, as the aws-sdk scan integration this workflow reads with returns
-  // it — not the optimized integration's `BOOL`. The fixture spelled it the
-  // API way while the expression did too, so both were wrong and this test
-  // stayed green while gmail went unchecked in production.
-  const row = (crm: boolean, email: boolean, facebook = false) => ({ crm: crm ? { M: { type: { S: 'hubspot' }, via: { S: 'composio' } } } : undefined, emailResponder: { M: { enabled: { Bool: email } } }, facebookPosts: { M: { enabled: { Bool: facebook } } } });
-  it('expects hubspot for crm via composio and gmail for the email responder', async () => {
-    expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(true, true) })).toEqual(['hubspot', 'gmail']);
-    expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(true, false) })).toEqual(['hubspot']);
-    expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(false, false) })).toEqual([]);
-  });
-  it('expects facebook for Facebook posts, and nothing for a row written before the service existed', async () => {
-    expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(true, true, true) })).toEqual(['hubspot', 'gmail', 'facebook']);
-    expect(await evalExpr(expectedToolkitsExpr('row'), { row: row(false, false, true) })).toEqual(['facebook']);
-    expect(await evalExpr(expectedToolkitsExpr('row'), { row: { emailResponder: { M: { enabled: { Bool: true } } } } })).toEqual(['gmail']);
-  });
-  it('reports the expected toolkits Composio does not list as active', async () => {
-    expect(await evalExpr(missingToolkitsExpr('expected', 'active'), { expected: ['hubspot', 'gmail'], active: ['gmail'] })).toEqual(['hubspot']);
-    expect(await evalExpr(missingToolkitsExpr('expected', 'active'), { expected: ['hubspot'], active: ['hubspot', 'gmail'] })).toEqual([]);
-    expect(await evalExpr(missingToolkitsExpr('expected', 'active'), { expected: ['hubspot'], active: [] })).toEqual(['hubspot']);
   });
 });
 

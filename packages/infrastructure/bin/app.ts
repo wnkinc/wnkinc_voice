@@ -36,9 +36,9 @@ const runtime = new RuntimeStack(app, 'wnk-runtime-dev', { prefix, env, ...platf
 // The Temporal Worker: every workflow that moves here runs in it, with the
 // platform handles its activities reach (tables, secrets, memory, the media
 // link resolver) and the SMS front door on the platform API.
-new WorkerStack(app, 'wnk-worker-dev', {
+const worker = new WorkerStack(app, 'wnk-worker-dev', {
   prefix, env,
-  alarmTopic: voice.alarmTopic, tenantsTable: voice.tenantsTable, usageTable: voice.usageTable, callerMemory,
+  alarmTopic: voice.alarmTopic, tenantsTable: voice.tenantsTable, callsTable: voice.callsTable, usageTable: voice.usageTable, callerMemory,
   peopleTable: voice.peopleTable, actionsTable: voice.actionsTable, api: voice.api,
   openaiSecret: voice.openaiSecret, composioSecret: voice.composioSecret,
   twilioSecret: runtime.twilioSecret, mediaLinkFunction: runtime.mediaLinkFn,
@@ -46,10 +46,11 @@ new WorkerStack(app, 'wnk-worker-dev', {
   browserbaseProjectId: app.node.tryGetContext('browserbaseProjectId') as string,
 });
 
-// Per tenant (tenants/<id>.ts), the stacks its file asks for: its automations,
-// rules filtered on its id; its Telegram connector, which takes no platform
-// handles. Deploying one touches no other tenant and nothing above.
+// Per tenant (tenants/<id>.ts), the stacks its file asks for: its automations
+// as rules filtered on its id, run on the shared worker; its Telegram
+// connector, which takes no platform handles. Deploying one touches no other
+// tenant and nothing above.
 for (const t of tenants) {
-  if (t.automations.length) new TenantStack(app, `wnk-tenant-${t.tenantId}-dev`, { ...t, prefix, env, ...platform });
+  if (t.automations.length) new TenantStack(app, `wnk-tenant-${t.tenantId}-dev`, { ...t, prefix, env, bus: voice.bus, alarmTopic: voice.alarmTopic, automationStarter: worker.automationStart });
   if (t.telegramMcp) new TelegramMcpStack(app, `wnk-telegram-mcp-${t.tenantId}-dev`, { tenantId: t.tenantId, prefix, env });
 }

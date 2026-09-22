@@ -14,21 +14,15 @@ import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { dlqAlarm, errorAlarm, failedExecutionsAlarm } from '../infra_utils/alarms.js';
-import { COMPOSIO_API } from '../workflows/asl.js';
-import { expressNoData, grantHttp } from '../infra_utils/state-machine.js';
+import { expressNoData } from '../infra_utils/state-machine.js';
 import { callEndedDefinition } from '../workflows/receptionist/call-ended.js';
-import { composioHealthDefinition } from '../workflows/canaries/composio-health.js';
 import { Construct } from 'constructs';
 
 export interface RuntimeStackProps extends cdk.StackProps {
   readonly prefix: string;
-  /** EventBridge Connection carrying the Composio API key (voice stack owns it); every Composio HTTP task here authenticates through it. */
-  readonly composioConnection: events.IConnection;
   readonly bus: events.IEventBus;
   readonly usageTable: dynamodb.ITable;
-  /** Agents read their tenant's row to check the service is enabled and how it is configured. */
-  readonly tenantsTable: dynamodb.ITable;
-  /** Once-markers for "already emailed this lead" live on the call row. */
+  /** The transcript and the once-marker the call-ended tail reads and writes. */
   readonly callsTable: dynamodb.ITable;
   readonly alarmTopic: sns.ITopic;
   /** Platform memory: the call-ended workflow writes transcripts. */
@@ -36,16 +30,12 @@ export interface RuntimeStackProps extends cdk.StackProps {
 }
 
 /**
- * The platform workflows every tenant shares that still run on Step
- * Functions: the call-ended tail (memory, usage) and the Composio health
- * canary. Per-tenant automations are in TenantStack. Each definition lives in
- * workflows/; this stack wraps it in a state machine, routes its event to it,
- * and grants what it touches.
- *
- * The assistant (Telegram, SMS, the login handoff, the assistant canary) runs
- * in the Temporal worker (stacks/worker-stack.ts). What stays here for it are
- * the platform secrets it reads (Telegram, Twilio, Browserbase) and the media
- * link resolver its activities invoke, exposed as fields.
+ * The platform workflow that still runs on Step Functions: the call-ended
+ * tail (memory, usage). Everything else (the assistant, the tenant
+ * automations, both canaries) runs in the Temporal worker
+ * (stacks/worker-stack.ts). What stays here for it are the platform secrets
+ * it reads (Telegram, Twilio, Browserbase) and the media link resolver its
+ * activities invoke, exposed as fields.
  */
 export class RuntimeStack extends cdk.Stack {
   /** Twilio credentials and the generated webhook path; the worker stack's SMS route and replies use them. */
@@ -124,14 +114,10 @@ export class RuntimeStack extends cdk.Stack {
     twilioSecret.grantRead(mediaLinkFn);
     errorAlarm(this, 'MediaLinkErrors', mediaLinkFn, props.alarmTopic, 'Media link resolver');
 
-    // ---- Platform workflows on the bus -------------------------------------------
-    //
-    // Only what every tenant gets identically and no tenant varies: the
-    // call-ended tail (memory, usage) and the connection canary. Tenant
-    // automations (lead email, CRM sync, owner alert) live in each tenant's
-    // own stack (stacks/tenant-stack.ts, tenants/<id>.ts). A start the rule
-    // could not deliver (after retries) parks in startDlq and alarms, and an
-    // execution that started and failed alarms through the workflow metric.
+    // ---- The call-ended tail on the bus -------------------------------------------
+    // A start the rule could not deliver (after retries) parks in startDlq
+    // and alarms, and an execution that started and failed alarms through
+    // the workflow metric.
     const startDlq = new sqs.Queue(this, 'LeadEmailDlq', { retentionPeriod: cdk.Duration.days(14) });
     const route = (id: string, detailType: string, wf: sfn.StateMachine, description: string) => new events.Rule(this, id, {
       eventBus: props.bus,
@@ -146,8 +132,6 @@ export class RuntimeStack extends cdk.Stack {
         resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
       }));
     };
-    const composioConnectionArn = props.composioConnection.connectionArn;
-
     // Call ended (workflows/receptionist/call-ended.ts): transcript -> memory, minutes -> usage.
     const endedWorkflow = new sfn.StateMachine(this, 'CallEndedWorkflow', {
       stateMachineName: `${prefix}-call-ended`,
@@ -166,34 +150,11 @@ export class RuntimeStack extends cdk.Stack {
     route('CallEndedRule', 'call.ended', endedWorkflow, 'Route call.ended to the call-ended workflow (memory, usage)');
     failedExecutionsAlarm(this, 'CallEndedWorkflowFailed', endedWorkflow, props.alarmTopic, 'Call ended (memory, usage)');
 
-    dlqAlarm(this, 'LeadEmailDlqAlarm', startDlq, props.alarmTopic, 'Platform workflows: an event could not start the call-ended workflow or the health canary');
-
-    // Composio health canary (workflows/canaries/composio-health.ts): every morning,
-    // prove each tenant's connections are still ACTIVE. A revoked connection
-    // fails nothing on its own (every CRM and Gmail state catches and carries
-    // on), so this turns the silence into a failed execution, which alarms.
-    const healthWorkflow = new sfn.StateMachine(this, 'ComposioHealthWorkflow', {
-      stateMachineName: `${prefix}-composio-health`,
-      tracingEnabled: true,
-      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(composioHealthDefinition({
-        tenantsTable: props.tenantsTable.tableName,
-        composioConnectionArn,
-      }))),
-      timeout: cdk.Duration.minutes(5),
-    });
-    props.tenantsTable.grantReadData(healthWorkflow);
-    grantHttp(healthWorkflow, [props.composioConnection], [`${COMPOSIO_API}*`]);
-    new events.Rule(this, 'ComposioHealthSchedule', {
-      description: 'Daily Composio connection check for every tenant (15:00 UTC = morning in the US)',
-      schedule: events.Schedule.cron({ minute: '0', hour: '15' }),
-      targets: [new targets.SfnStateMachine(healthWorkflow, { retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: startDlq })],
-    });
-    failedExecutionsAlarm(this, 'ComposioHealthFailed', healthWorkflow, props.alarmTopic, 'Composio health: a tenant has lost a connection');
+    dlqAlarm(this, 'LeadEmailDlqAlarm', startDlq, props.alarmTopic, 'Platform workflows: an event could not start the call-ended workflow');
 
     new cdk.CfnOutput(this, 'callEndedWorkflowArn', { value: endedWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
     new cdk.CfnOutput(this, 'twilioSecretArn', { value: twilioSecret.secretArn });
-    new cdk.CfnOutput(this, 'composioHealthWorkflowArn', { value: healthWorkflow.stateMachineArn });
     new cdk.CfnOutput(this, 'browserbaseSecretArn', { value: browserbaseSecret.secretArn });
     this.twilioSecret = twilioSecret;
     this.mediaLinkFn = mediaLinkFn;
