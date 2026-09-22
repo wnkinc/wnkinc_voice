@@ -58,7 +58,7 @@ export function nextMedia(choice: string, existing: Photo[], media: Photo[]): Ph
 export function draftMessage(pageName: string, row: DraftRow): string {
   const n = row.payload.media.length;
   const photos = n === 0 ? 'No photos. ' : n === 1 ? 'With the 1 photo you sent. ' : `With the ${n} photos you sent. `;
-  return `Draft for the Facebook Page ${pageName}:\n\n${row.payload.caption}\n\n${photos}Reply ${APPROVAL_WORD} to publish it, or tell me what to change. Nothing is posted until you reply ${APPROVAL_WORD}. This draft expires in ${APPROVAL_HOURS} hours.`;
+  return `Draft for the Facebook Page ${pageName}:\n\n${row.payload.caption}\n\n${photos}Reply ${APPROVAL_WORD} to publish it, or tell me what to change. Nothing is posted until you reply with just the one word ${APPROVAL_WORD}. This draft expires in ${APPROVAL_HOURS} hours.`;
 }
 
 /** What the model is told about drafting, and about the draft and photos in front of it. */
