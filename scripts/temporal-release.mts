@@ -20,9 +20,9 @@
  */
 import { execFileSync } from 'node:child_process';
 import { BUILD_ID, DEPLOYMENT_NAME, TASK_QUEUE } from '../packages/worker/src/version.js';
+import { REGION, temporalSecret } from './lib/temporal-env.mts';
 
 const STACK = 'wnk-worker-dev';
-const REGION = 'us-west-2';
 
 const sh = (cmd: string, args: string[], env: NodeJS.ProcessEnv = {}) =>
   execFileSync(cmd, args, { encoding: 'utf8', env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'inherit'] }).trim();
@@ -31,12 +31,9 @@ const output = (key: string) =>
 
 const functionArn = output('functionArn');
 const invokeRoleArn = output('invokeRoleArn');
-const secretName = output('secretName');
-const secret = JSON.parse(sh('aws', ['secretsmanager', 'get-secret-value', '--secret-id', secretName, '--region', REGION, '--query', 'SecretString', '--output', 'text'])) as Record<string, string>;
-for (const key of ['TEMPORAL_ADDRESS', 'TEMPORAL_NAMESPACE', 'TEMPORAL_API_KEY', 'EXTERNAL_ID']) {
-  if (!secret[key]) throw new Error(`${key} is empty in ${secretName}: put the namespace connection in first`);
-}
-const temporalEnv = { TEMPORAL_ADDRESS: secret.TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE: secret.TEMPORAL_NAMESPACE, TEMPORAL_API_KEY: secret.TEMPORAL_API_KEY };
+const secret = await temporalSecret();
+// The browser login's token, when present, is tried first and may have expired: point the CLI past it.
+const temporalEnv = { TEMPORAL_ADDRESS: secret.TEMPORAL_ADDRESS!, TEMPORAL_NAMESPACE: secret.TEMPORAL_NAMESPACE!, TEMPORAL_API_KEY: secret.TEMPORAL_API_KEY!, TEMPORAL_CONFIG_FILE: '/dev/null' };
 const temporal = (args: string[]) => sh('temporal', args, temporalEnv);
 
 // 1. An immutable Lambda version of the deployed code, one per build id. If this
@@ -51,7 +48,7 @@ if (!deployments.includes(`"name": "${DEPLOYMENT_NAME}"`)) temporal(['worker', '
 const existing = temporal(['worker', 'deployment', 'describe', '--name', DEPLOYMENT_NAME, '-o', 'json']);
 if (!existing.includes(`"BuildID": "${BUILD_ID}"`)) {
   temporal(['worker', 'deployment', 'create-version', '--deployment-name', DEPLOYMENT_NAME, '--build-id', BUILD_ID,
-    '--aws-lambda-function-arn', qualifiedArn, '--aws-lambda-assume-role-arn', invokeRoleArn, '--aws-lambda-assume-role-external-id', secret.EXTERNAL_ID]);
+    '--aws-lambda-function-arn', qualifiedArn, '--aws-lambda-assume-role-arn', invokeRoleArn, '--aws-lambda-assume-role-external-id', secret.EXTERNAL_ID!]);
 }
 console.log(`registered: ${DEPLOYMENT_NAME} / ${BUILD_ID}`);
 

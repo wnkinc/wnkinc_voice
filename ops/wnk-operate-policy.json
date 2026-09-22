@@ -224,6 +224,15 @@
         "lambda:PublishVersion"
       ],
       "Resource": "arn:aws:lambda:us-west-2:539247450358:function:wnkinc-voice-dev-worker"
+    },
+    {
+      "Sid": "WorkerFallback",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:UpdateService",
+        "ecs:DescribeServices"
+      ],
+      "Resource": "arn:aws:ecs:us-west-2:539247450358:service/wnkinc-voice-dev-worker/wnkinc-voice-dev-worker-fallback"
     }
   ]
 }

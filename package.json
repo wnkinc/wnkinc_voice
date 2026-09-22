@@ -19,7 +19,9 @@
     "deploy": "cdk deploy",
     "diff": "cdk diff",
     "test:update": "vitest run -u",
-    "predeploy": "vitest run"
+    "predeploy": "vitest run",
+    "release": "tsx scripts/temporal-release.mts",
+    "temporal": "tsx scripts/temporal.mts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-agentcore": "^3.1117.0",

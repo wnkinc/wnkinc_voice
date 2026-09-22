@@ -462,9 +462,17 @@ tenant's number at it with `npx tsx scripts/twilio-webhook.mts set <tenantId> te
 **Releasing.** Every change that should reach the worker, code or configuration, is a new build
 id in `packages/worker/src/version.ts`: a published Lambda version is immutable, so nothing
 changes under a running workflow, and rollback is one Temporal command. After
-`npm run deploy -- wnk-worker-dev`, `npx tsx scripts/temporal-release.mts` publishes the Lambda
-version, registers the build id against it, confirms Temporal's validation invocation bound the
-task queue, and sets it current.
+`npm run deploy -- wnk-worker-dev`, `npm run release` publishes the Lambda version, registers the
+build id against it, confirms Temporal's validation invocation bound the task queue, and sets it
+current. `npm run temporal -- workflow list` runs the CLI against the namespace with the worker's
+key (the browser login expires; this does not).
+
+**When it breaks.** Two alarms from the SDK's own log lines: a failed workflow (an activity
+exhausted its retries, or the workflow threw; what a failed execution was on Step Functions) and
+five failed activities in an hour. Serverless Workers are a preview: the same image runs as a
+Fargate service at zero tasks (`packages/worker/src/service.ts`, announcing the same build id),
+and the stack output `fallbackService` is the one command that brings it up; the queue drains
+with no release. Set it back to zero when the Lambda path is healthy again.
 
 ## Where things live
 

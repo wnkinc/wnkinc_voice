@@ -15,17 +15,28 @@
  * Step Functions route until the cutover; a tenant's number is pointed at
  * one or the other (scripts/twilio-webhook.mts).
  *
+ * The fallback: the same image as a Fargate service at zero tasks
+ * (packages/worker/src/service.ts). Serverless Workers are a preview; if the
+ * Lambda path misbehaves, set the desired count to one and the queue drains,
+ * no release needed. Both write the same log group, where two metric filters
+ * on the SDK's own lines raise the alarms: a failed workflow (what a failed
+ * execution was on Step Functions) and a run of failed activities.
+ *
  * After a deploy the version is registered with Temporal (deployment name and
  * build id from packages/worker/src/version.ts) and set current; see
- * scripts/temporal-release.mts.
+ * scripts/temporal-release.mts (npm run release).
  */
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpSqsIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import type * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
-import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import { DockerImageAsset, Platform } from 'aws-cdk-lib/aws-ecr-assets';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
@@ -81,10 +92,43 @@ export class WorkerStack extends cdk.Stack {
         excludePunctuation: true,
       },
     });
-    const image = (cmd: string) => lambda.DockerImageCode.fromImageAsset(PACKAGE_DIR, { platform: Platform.LINUX_ARM64, exclude: ['node_modules', 'lib', 'test', '*.md'], cmd: [cmd] });
+    // One image for the worker, the starter and the fallback: the handler differs.
+    const asset = new DockerImageAsset(this, 'Image', { directory: PACKAGE_DIR, platform: Platform.LINUX_ARM64, exclude: ['node_modules', 'lib', 'test', '*.md'] });
+    const image = (cmd: string) => lambda.DockerImageCode.fromEcr(asset.repository, { tagOrDigest: asset.imageTag, cmd: [cmd] });
     const logGroup = (name: string, cid: string) => new logs.LogGroup(this, cid, { logGroupName: `/aws/lambda/${name}`, retention: logs.RetentionDays.ONE_MONTH, removalPolicy: cdk.RemovalPolicy.DESTROY });
+    // What the activities reach, by name. Tenant config stays in the tenant row.
+    const workerEnv = {
+      TEMPORAL_SECRET_ARN: secret.secretArn,
+      NODE_OPTIONS: '--enable-source-maps',
+      PEOPLE_TABLE: props.peopleTable.tableName,
+      TENANTS_TABLE: props.tenantsTable.tableName,
+      ACTIONS_TABLE: props.actionsTable.tableName,
+      USAGE_TABLE: props.usageTable.tableName,
+      OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
+      COMPOSIO_SECRET_ARN: props.composioSecret.secretArn,
+      TWILIO_SECRET_ARN: props.twilioSecret.secretArn,
+      MEDIA_LINK_FUNCTION_ARN: props.mediaLinkFunction.functionArn,
+      ASSISTANT_MODEL: process.env.ASSISTANT_MODEL ?? 'gpt-5.5',
+      ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
+    };
+    // What a worker may touch, whichever compute runs it.
+    const grantWorker = (role: iam.IGrantable) => {
+      secret.grantRead(role);
+      props.openaiSecret.grantRead(role);
+      props.composioSecret.grantRead(role);
+      props.twilioSecret.grantRead(role);
+      props.peopleTable.grantReadData(role);
+      props.tenantsTable.grantReadData(role);
+      props.actionsTable.grantReadWriteData(role);
+      props.usageTable.grantWriteData(role);
+      props.mediaLinkFunction.grantInvoke(role);
+      if (props.callerMemory) {
+        role.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({ actions: MEMORY_USE_ACTIONS, resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`] }));
+      }
+    };
 
     // ---- The Worker --------------------------------------------------------------
+    const workerLogs = logGroup(fnName, 'Logs');
     const fn = new lambda.DockerImageFunction(this, 'Worker', {
       functionName: fnName,
       description: 'Temporal Worker: invoked by Temporal Cloud when the task queue has work',
@@ -96,36 +140,30 @@ export class WorkerStack extends cdk.Stack {
       // The invocation deadline: the Worker works until this minus its shutdown buffer.
       // Longer means fewer cold starts; an activity can never outlive it.
       timeout: cdk.Duration.minutes(10),
-      environment: {
-        TEMPORAL_SECRET_ARN: secret.secretArn,
-        NODE_OPTIONS: '--enable-source-maps',
-        // What the activities reach, by name. Tenant config stays in the tenant row.
-        PEOPLE_TABLE: props.peopleTable.tableName,
-        TENANTS_TABLE: props.tenantsTable.tableName,
-        ACTIONS_TABLE: props.actionsTable.tableName,
-        USAGE_TABLE: props.usageTable.tableName,
-        OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
-        COMPOSIO_SECRET_ARN: props.composioSecret.secretArn,
-        TWILIO_SECRET_ARN: props.twilioSecret.secretArn,
-        MEDIA_LINK_FUNCTION_ARN: props.mediaLinkFunction.functionArn,
-        ASSISTANT_MODEL: process.env.ASSISTANT_MODEL ?? 'gpt-5.5',
-        ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
-      },
-      logGroup: logGroup(fnName, 'Logs'),
+      environment: workerEnv,
+      logGroup: workerLogs,
     });
-    secret.grantRead(fn);
-    props.openaiSecret.grantRead(fn);
-    props.composioSecret.grantRead(fn);
-    props.twilioSecret.grantRead(fn);
-    props.peopleTable.grantReadData(fn);
-    props.tenantsTable.grantReadData(fn);
-    props.actionsTable.grantReadWriteData(fn);
-    props.usageTable.grantWriteData(fn);
-    props.mediaLinkFunction.grantInvoke(fn);
-    if (props.callerMemory) {
-      fn.addToRolePolicy(new iam.PolicyStatement({ actions: MEMORY_USE_ACTIONS, resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`] }));
-    }
+    grantWorker(fn);
     errorAlarm(this, 'WorkerErrors', fn, props.alarmTopic, 'Temporal worker');
+
+    // ---- The alarms, from the SDK's own log lines (JSON: the Powertools logger) --------
+    // A failed workflow is what a failed execution was: one is a page. An
+    // activity fails on every attempt it fails, so a run of them within an
+    // hour is the signal, one is a retry.
+    const failures = (id: string, message: string, name: string) => new logs.MetricFilter(this, id, {
+      logGroup: workerLogs,
+      filterPattern: logs.FilterPattern.all(logs.FilterPattern.stringValue('$.level', '=', 'WARN'), logs.FilterPattern.stringValue('$.message', '=', message)),
+      metricNamespace: `${prefix}/temporal`, metricName: name, metricValue: '1', unit: cloudwatch.Unit.COUNT,
+    }).metric({ statistic: 'Sum' });
+    const alarm = (id: string, metric: cloudwatch.Metric, threshold: number, period: cdk.Duration, what: string) => {
+      const a = new cloudwatch.Alarm(this, id, {
+        alarmDescription: what, metric: metric.with({ period }), threshold, evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD, treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      a.addAlarmAction(new cwActions.SnsAction(props.alarmTopic));
+    };
+    alarm('WorkflowFailed', failures('WorkflowFailedFilter', 'Workflow failed', 'WorkflowFailed'), 1, cdk.Duration.minutes(5), 'Temporal: a workflow failed (an activity exhausted its retries, or the workflow threw)');
+    alarm('ActivityFailures', failures('ActivityFailedFilter', 'Activity failed', 'ActivityFailed'), 5, cdk.Duration.hours(1), 'Temporal: five activity failures in an hour (a dependency is down, or a bug)');
 
     // ---- What Temporal may do -----------------------------------------------------
     const invoke = new iam.Role(this, 'Invoke', {
@@ -171,7 +209,28 @@ export class WorkerStack extends cdk.Stack {
     errorAlarm(this, 'SmsStartErrors', starter, props.alarmTopic, 'Assistant (SMS, Temporal): starter');
     dlqAlarm(this, 'SmsDlqAlarm', smsDlq, props.alarmTopic, 'Assistant (SMS, Temporal): a text could not start the workflow');
 
+    // ---- The fallback: the same Worker, long-running, at zero -----------------------
+    // Public subnets and a public IP, no NAT: the worker only makes outbound
+    // calls, and a NAT gateway would cost more than the whole stack.
+    const vpc = new ec2.Vpc(this, 'Vpc', { maxAzs: 2, natGateways: 0, subnetConfiguration: [{ name: 'public', subnetType: ec2.SubnetType.PUBLIC }] });
+    const cluster = new ecs.Cluster(this, 'Cluster', { vpc, clusterName: `${prefix}-worker` });
+    const task = new ecs.FargateTaskDefinition(this, 'FallbackTask', { cpu: 1024, memoryLimitMiB: 2048, runtimePlatform: { cpuArchitecture: ecs.CpuArchitecture.ARM64, operatingSystemFamily: ecs.OperatingSystemFamily.LINUX } });
+    task.addContainer('worker', {
+      image: ecs.ContainerImage.fromDockerImageAsset(asset),
+      // The Lambda base image's entrypoint is the Lambda runtime client; run node directly.
+      entryPoint: ['/var/lang/bin/node', '/var/task/lib/service.js'],
+      environment: workerEnv,
+      logging: ecs.LogDrivers.awsLogs({ logGroup: workerLogs, streamPrefix: 'fallback' }),
+    });
+    grantWorker(task.taskRole);
+    const fallback = new ecs.FargateService(this, 'Fallback', {
+      cluster, taskDefinition: task, serviceName: `${prefix}-worker-fallback`,
+      desiredCount: 0, assignPublicIp: true, vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      minHealthyPercent: 0, maxHealthyPercent: 200,
+    });
+
     new cdk.CfnOutput(this, 'functionArn', { value: fn.functionArn });
+    new cdk.CfnOutput(this, 'fallbackService', { value: `aws ecs update-service --cluster ${cluster.clusterName} --service ${fallback.serviceName} --desired-count 1`, description: 'Brings up the fallback worker' });
     new cdk.CfnOutput(this, 'invokeRoleArn', { value: invoke.roleArn, description: 'The --aws-lambda-assume-role-arn when registering a version' });
     new cdk.CfnOutput(this, 'secretName', { value: secret.secretName });
     new cdk.CfnOutput(this, 'smsWebhookPath', { value: '/temporal/sms/<WEBHOOK_PATH from the Twilio secret>' });

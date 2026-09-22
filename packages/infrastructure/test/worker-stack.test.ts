@@ -84,4 +84,30 @@ describe('worker stack', () => {
     expect(statements.flatMap(actions).filter((a) => a.startsWith('dynamodb:') || a.startsWith('bedrock-agentcore:'))).toEqual([]);
     template.hasResourceProperties('AWS::Lambda::EventSourceMapping', { BatchSize: 1 });
   });
+
+  it('the fallback is the same image as a long-running process at zero tasks, writing the same log group, with the worker\'s grants', () => {
+    template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: 0, LaunchType: 'FARGATE' });
+    const task = Object.values(template.findResources('AWS::ECS::TaskDefinition'))[0]!;
+    const container = task.Properties.ContainerDefinitions[0];
+    expect(container.EntryPoint).toEqual(['/var/lang/bin/node', '/var/task/lib/service.js']);
+    expect(container.LogConfiguration.Options['awslogs-group']).toEqual(fnByName('p-worker')!.Properties.LoggingConfig.LogGroup);
+    const taskRole = task.Properties.TaskRoleArn['Fn::GetAtt'][0];
+    const workerRole = fnByName('p-worker')!.Properties.Role['Fn::GetAtt'][0];
+    const strip = (ref: string) => JSON.stringify(statementsOf(ref).map((st) => [st.Action, st.Resource])).replaceAll(ref, 'ROLE');
+    expect(strip(taskRole)).toEqual(strip(workerRole));
+    // No NAT gateway: the worker only calls out, and a gateway would cost more than the stack.
+    expect(Object.keys(template.findResources('AWS::EC2::NatGateway'))).toHaveLength(0);
+  });
+
+  it('alarms on the SDK\'s own failure lines: one failed workflow pages, a run of failed activities pages', () => {
+    const filters = Object.values(template.findResources('AWS::Logs::MetricFilter'));
+    expect(filters.map((f) => f.Properties.FilterPattern).sort()).toEqual([
+      '{ ($.level = "WARN") && ($.message = "Activity failed") }',
+      '{ ($.level = "WARN") && ($.message = "Workflow failed") }',
+    ]);
+    for (const f of filters) expect(f.Properties.LogGroupName).toEqual(fnByName('p-worker')!.Properties.LoggingConfig.LogGroup);
+    const alarms = Object.values(template.findResources('AWS::CloudWatch::Alarm')).filter((a) => a.Properties.Namespace === 'p/temporal');
+    expect(alarms.map((a) => [a.Properties.MetricName, a.Properties.Threshold, a.Properties.Period]).sort()).toEqual([['ActivityFailed', 5, 3600], ['WorkflowFailed', 1, 300]]);
+    for (const a of alarms) expect(a.Properties.AlarmActions).toHaveLength(1);
+  });
 });
