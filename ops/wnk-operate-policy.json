@@ -45,15 +45,6 @@
       "Resource": "*"
     },
     {
-      "Sid": "Connections",
-      "Effect": "Allow",
-      "Action": [
-        "events:DescribeConnection",
-        "events:UpdateConnection"
-      ],
-      "Resource": "arn:aws:events:us-west-2:539247450358:connection/*"
-    },
-    {
       "Sid": "Bus",
       "Effect": "Allow",
       "Action": [
@@ -65,55 +56,13 @@
       "Sid": "EventsRead",
       "Effect": "Allow",
       "Action": [
-        "events:ListConnections",
         "events:DescribeEventBus",
         "events:ListRules",
         "events:DescribeRule",
         "events:ListTargetsByRule",
-        "events:ListEventBuses",
-        "events:ListApiDestinations",
-        "events:DescribeApiDestination"
+        "events:ListEventBuses"
       ],
       "Resource": "*"
-    },
-    {
-      "Sid": "Workflows",
-      "Effect": "Allow",
-      "Action": [
-        "states:StartExecution",
-        "states:DescribeExecution",
-        "states:GetExecutionHistory",
-        "states:ListExecutions",
-        "states:DescribeStateMachine",
-        "states:StopExecution"
-      ],
-      "Resource": [
-        "arn:aws:states:us-west-2:539247450358:stateMachine:wnkinc-voice-dev-*",
-        "arn:aws:states:us-west-2:539247450358:execution:wnkinc-voice-dev-*:*"
-      ]
-    },
-    {
-      "Sid": "WorkflowsRead",
-      "Effect": "Allow",
-      "Action": [
-        "states:ListStateMachines",
-        "states:ValidateStateMachineDefinition",
-        "states:TestState"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "TestStateAsWorkflowRole",
-      "Effect": "Allow",
-      "Action": [
-        "iam:PassRole"
-      ],
-      "Resource": "arn:aws:iam::539247450358:role/wnk-*",
-      "Condition": {
-        "StringEquals": {
-          "iam:PassedToService": "states.amazonaws.com"
-        }
-      }
     },
     {
       "Sid": "StacksRead",

@@ -7,11 +7,10 @@
  * Tenancy: every call names the tenant (Composio `userId` = our tenantId), so
  * the credential is chosen per call.
  *
- * At runtime nothing imports this file: the workflows call Composio's HTTP API
- * directly (Step Functions HTTP tasks, the tenant id as user_id, the key in an
- * EventBridge Connection), and the assistant loop runs each tool the model asks
- * for the same way. What remains here is for the consent scripts: connect
- * links and the owner's Gmail address.
+ * At runtime nothing imports this file: the worker's activities call Composio's
+ * HTTP API directly (packages/worker/src/activities/composio.ts, the tenant id
+ * as user_id), and accept does the same under a deadline. What remains here is
+ * for the consent scripts: connect links and the owner's Gmail address.
  *
  * Deliberately NOT re-exported from the shared index: import from
  * '@wnk/shared/composio' (scripts only) so no Lambda bundle carries the SDK.

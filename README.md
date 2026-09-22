@@ -254,8 +254,8 @@ tenant id inside a workflow every tenant runs on. The `new-tenant` skill has the
 approves Composio's HubSpot app once; no HubSpot token exists anywhere in the platform. Every CRM
 call names the tenant (Composio `userId` = our tenant id), so the credential is chosen per call. CRM
 upgrades the other capabilities rather than standing alone: caller recognition in accept, the history
-section of the lead email, and the assistant's tools. A second CRM is another set of HTTP-task states
-in the definitions, selected by the row's `crm.type`. Prove a tenant's connection with
+section of the lead email, and the assistant's tools. A second CRM is another branch of activities,
+selected by the row's `crm.type`. Prove a tenant's connection with
 `npx tsx scripts/test-crm-workflows.mts <id> <phone>`.
 
 ## 3. Operating: traces, alarms, dead letters
@@ -282,7 +282,7 @@ starts), and each queue has an alarm. A workflow that fails alarms from the work
 
 Delivery is at-least-once everywhere (EventBridge, Lambda async retries, SDK retries), so every
 event consumer with an external side effect checks a once-marker on the call row before acting
-and sets it after success (`checkDone` / `markDone` states from `workflows/asl.ts`, keys like
+and sets it after success (`readCall` / `markDone` activities in `packages/worker/src/activities/calls.ts`, keys like
 `done:crm:lead:<leadId>`, `done:crm:call`, `done:email:lead:<leadId>`). That narrows a duplicate to
 a crash between the send and the mark; it is not exactly-once. Anything that costs money or reaches
 a customer irreversibly should get a pending → completed ledger with reconciliation instead.
@@ -318,8 +318,8 @@ config drift between file and row, secrets, services, owner alert channel, Gmail
 
 - Node 22+, AWS CLI configured (CDK bootstrap runs once per account/region: `npx cdk bootstrap`)
 - Two AWS profiles. `wnk-ops` is the operator: an IAM user with the `WnkOperate` policy, which can
-  write tenant rows, platform secrets, and Connections, start and read executions, read logs and
-  metrics, and run `cdk diff`, but cannot touch CloudFormation or IAM. It is the laptop's default
+  write tenant rows and platform secrets, start and read workflows on Temporal Cloud, release the
+  worker, read logs and metrics, and run `cdk diff`, but cannot touch CloudFormation or IAM. It is the laptop's default
   profile and the one this repo pins for its coding agent (`.claude/settings.json`). Admin is a
   named profile (`wnk-admin`) used by hand for deploys and account changes. The policy is
   `ops/wnk-operate-policy.json`; a script that hits an AccessDenied names the exact action, and the
@@ -427,20 +427,17 @@ aws secretsmanager put-secret-value --secret-id <twilioSecretArn> --secret-strin
 ```
 
 Then, per tenant, point the number's messaging webhook at the platform:
-`npx tsx scripts/twilio-webhook.mts set <tenantId> temporal` (`info` shows what the number has). Per person:
+`npx tsx scripts/twilio-webhook.mts set <tenantId>` (`info` shows what the number has). Per person:
 add their mobile as `phone` in the tenant file's `people` and re-seed.
 
 ### 7. Browserbase
 
 Create a Browserbase project. Its id goes in `cdk.json` context as `browserbaseProjectId` (not a
-secret; a literal in the definition). The key goes in the secret and, because CloudFormation resolves
-a secret reference only when the resource itself changes, into the EventBridge Connection directly
-(the same applies to every Connection here after a rotation):
+secret; the worker reads it from its environment). The key goes in the secret; the worker reads it
+on its next cold start:
 
 ```bash
 aws secretsmanager put-secret-value --secret-id <browserbaseSecretArn> --secret-string '{"BROWSERBASE_API_KEY":"bb_live_..."}'
-aws events update-connection --name <BrowserbaseConnection name> \
-  --auth-parameters '{"ApiKeyAuthParameters":{"ApiKeyName":"X-BB-API-Key","ApiKeyValue":"bb_live_..."}}'
 ```
 
 The first `/login` for a tenant creates its context and the reply names the id; paste it into the
@@ -467,8 +464,8 @@ redelivered webhook starts nothing twice. Facebook drafts and the POST approval 
 unchanged (`packages/worker/src/sms/facebook.ts`, the ledger rules as pure functions;
 `test/sms-turn.test.ts` runs the workflow through a real Worker with recorded fakes and holds the
 split: POST publishes once, only on the shown revision, never through the model). Point traffic
-with `npx tsx scripts/twilio-webhook.mts set <tenantId> temporal` and
-`npx tsx scripts/telegram-webhook.mts set temporal`.
+with `npx tsx scripts/twilio-webhook.mts set <tenantId>` and
+`npx tsx scripts/telegram-webhook.mts set`.
 
 **Releasing.** Every change that should reach the worker, code or configuration, is a new build
 id in `packages/worker/src/version.ts`: a published Lambda version is immutable, so nothing

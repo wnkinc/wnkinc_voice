@@ -6,14 +6,15 @@ description: Add a new agent (a new surface/system) — a harness on AgentCore R
 # Add a new agent
 
 **The loop in a workflow first.** If the behavior is "a model with a prompt, tools, memory, and limits"
-that a person drives by chatting, it is the assistant loop in `packages/worker/src/workflows/loop.ts`, run by
-a Step Functions workflow: the model through the OpenAI Connection, each tool the model asks for gated
-against the tenant row's `assistant.tools` and run through the Composio Connection naming the tenant,
-history and recall from the platform Memory, rounds capped. A new tool is a catalog entry there (slim
-schema the model sees, Composio slug and argument mapping that runs) plus its name in
-`ASSISTANT_TOOL_NAMES`. Zero agent code, no runtime, no cold start. An AgentCore harness or Runtime is
-the option for a model that must write and run code (a filesystem and a shell per session); this
-platform has none.
+that a person drives by chatting, it is the assistant loop in `packages/worker/src/workflows/loop.ts`,
+run by a channel's workflow on the worker: the model as an activity, each tool the model asks for gated
+against the tenant row's `assistant.tools` and run through Composio naming the tenant, history and
+recall from the platform Memory, rounds capped. A new channel is a workflow that resolves the person
+and calls the loop (the SMS and Telegram turns are the two examples) plus a starter handler for its
+front door. A new tool is a catalog entry in `packages/worker/src/assistant/catalog.ts` (slim schema the
+model sees, Composio slug and argument mapping that runs) plus its name in `ASSISTANT_TOOL_NAMES`. No
+agent runtime. An AgentCore harness or Runtime is the option for a model that must write and run code
+(a filesystem and a shell per session); this platform has none.
 
 **Workflow second.** If the behavior is a fixed sequence of managed-service calls (read the
 tenant, check a once-marker, fetch, format, send, write usage) it is a Temporal workflow in the
@@ -41,7 +42,7 @@ An agent = a `packages/<name>/` folder (behavior) + wiring in `packages/infrastr
 
 1. **Package**: create `packages/<name>/package.json` (`@wnk/<name>`, private, type module) and `src/<name>.ts` exporting `handler`. Keep behavior in a function that takes a channel-neutral payload so a test can drive it without the event envelope; channel-specific delivery stays in its own file.
 2. **Shared code**: anything another deployable also needs goes in `packages/shared` (imported as `@wnk/shared`). Deployables never import each other.
-3. **Hosting** in `stacks/runtime-stack.ts`: a `NodejsFunction` (ESM, node22, ARM, X-Ray active, a dead-letter queue, `dlqAlarm` + `errorAlarm`) with env vars for everything the agent needs. If it imports `@wnk/shared/composio`, add the `createRequire` banner the voice-stack `fn` helper uses.
+3. **Hosting**: a workflow needs none (it is in the worker's image; grant the worker what its activities touch in `stacks/worker-stack.ts` `grantWorker`). A Lambda goes in the stack of the system it serves (`voice-stack.ts` for the call path): a `NodejsFunction` (ESM, node22, ARM, X-Ray active, a dead-letter queue, `dlqAlarm` + `errorAlarm`) with env vars for everything it needs. If it imports `@wnk/shared/composio`, add the `createRequire` banner the voice-stack `fn` helper uses.
 4. **Identity**: the agent acts for the tenant selected upstream — an automation takes `tenantId` from the event and passes it to every Composio adapter call; the assistant loop runs each tool through Composio naming the tenant from the row. No agent holds a credential or a Cognito identity.
 5. **Grants**: the execution role gets exactly what the agent touches — tables, secrets, memory actions (`MEMORY_USE_ACTIONS` on the memory ARN + `/*`), `cognito-idp:DescribeUserPoolClient` on the pool. Expect to discover one missing action from an AccessDenied message; the error names the exact action + resource — encode it, don't wildcard the service.
 6. **Trigger**: a bus event → `events.Rule` targeting the worker's automation starter with the workflow name (a tenant automation, below) or a Lambda (`retryAttempts: 2`, the DLQ). A request/response surface → HTTP API route → a starter handler in `packages/worker/src/starter.ts` that opens a workflow keyed by the request's own id, see the Telegram front door. Prefer a workflow over a Lambda when the steps are all managed-service calls.
@@ -52,4 +53,4 @@ An agent = a `packages/<name>/` folder (behavior) + wiring in `packages/infrastr
 
 ## Logs
 
-Lambda agents: `/aws/lambda/<function name>`. Workflows: the execution history, and the Express log group for the ones that do not keep it.
+Lambdas: `/aws/lambda/<function name>`. Workflows: the history (`npm run temporal -- workflow show --workflow-id <id>`: every activity with its input and result) and the worker's log group, `/aws/lambda/wnkinc-voice-dev-worker`, where the failure alarms read from.

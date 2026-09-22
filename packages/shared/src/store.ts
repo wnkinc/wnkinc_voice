@@ -7,7 +7,7 @@ import { personChannelKeys, TenantConfigSchema, type CallRecord, type CallStatus
 /**
  * The persistence the CODE still does: the session Lambda's call row and the
  * seed's writes. Claiming a call, the once-markers, and
- * the People lookup are Step Functions states now (workflows/).
+ * the People lookup are activities on the worker now (packages/worker/src/activities/).
  * DynamoDB in AWS, in-memory in tests.
  */
 export interface Store {

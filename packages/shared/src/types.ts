@@ -295,7 +295,7 @@ export interface SessionJob {
   extras?: CallExtras;
 }
 
-/** Domain events on the EventBridge bus; rules route each to a Step Functions workflow in the runtime stack. */
+/** Domain events on the EventBridge bus; rules route each to a workflow on the worker (the platform's, or a tenant's). */
 export type VoiceEvent =
   | { type: 'lead.recorded'; tenantId: string; tenantPhoneNumber: string; callId: string; lead: Lead }
   | { type: 'owner.notify'; tenantId: string; tenantPhoneNumber: string; callId: string; summary: string; urgency: 'normal' | 'urgent'; callerPhone?: string }
