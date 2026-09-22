@@ -215,6 +215,15 @@
         "sns:GetTopicAttributes"
       ],
       "Resource": "arn:aws:sns:us-west-2:539247450358:wnkinc-voice-dev-alarms"
+    },
+    {
+      "Sid": "WorkerRelease",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:ListVersionsByFunction",
+        "lambda:PublishVersion"
+      ],
+      "Resource": "arn:aws:lambda:us-west-2:539247450358:function:wnkinc-voice-dev-worker"
     }
   ]
 }

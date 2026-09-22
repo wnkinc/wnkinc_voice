@@ -1,0 +1,22 @@
+{
+  "name": "@wnk/worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Temporal Worker: workflows and activities, run on Lambda when Temporal Cloud has work for it",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.1116.0",
+    "@temporalio/activity": "1.24.0",
+    "@temporalio/client": "1.24.0",
+    "@temporalio/lambda-worker": "1.24.0",
+    "@temporalio/worker": "1.24.0",
+    "@temporalio/workflow": "1.24.0"
+  },
+  "devDependencies": {
+    "@temporalio/testing": "1.24.0",
+    "@types/aws-lambda": "^8.10.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

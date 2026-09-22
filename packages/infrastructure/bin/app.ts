@@ -4,6 +4,7 @@ import { RuntimeStack } from '../stacks/runtime-stack.js';
 import { TelegramMcpStack } from '../stacks/telegram-mcp-stack.js';
 import { TenantStack } from '../stacks/tenant-stack.js';
 import { VoiceStack } from '../stacks/voice-stack.js';
+import { WorkerStack } from '../stacks/worker-stack.js';
 import { tenants } from '../../../tenants/index.js';
 
 const app = new cdk.App();
@@ -39,6 +40,10 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   actionsTable: voice.actionsTable,
   api: voice.api,
 });
+
+// The Temporal Worker: every workflow that moves here runs in it. Takes no
+// platform handles yet; activities get tables as they are ported.
+new WorkerStack(app, 'wnk-worker-dev', { prefix, env, alarmTopic: voice.alarmTopic });
 
 // Per tenant (tenants/<id>.ts), the stacks its file asks for: its automations,
 // rules filtered on its id; its Telegram connector, which takes no platform
