@@ -61,6 +61,11 @@ export interface RuntimeStackProps extends cdk.StackProps {
  * (packages/media-link), for the one thing a workflow cannot read.
  */
 export class RuntimeStack extends cdk.Stack {
+  /** Twilio credentials and the generated webhook path; the worker stack's SMS route and replies use them too. */
+  readonly twilioSecret: secretsmanager.Secret;
+  /** The media link resolver; the worker's activities invoke it. */
+  readonly mediaLinkFn: lambda.IFunction;
+
   constructor(scope: Construct, id: string, props: RuntimeStackProps) {
     super(scope, id, props);
     const { prefix } = props;
@@ -264,6 +269,8 @@ export class RuntimeStack extends cdk.Stack {
       bundling: { format: OutputFormat.ESM, target: 'node22', mainFields: ['module', 'main'], sourceMap: true },
     });
     twilioSecret.grantRead(mediaLinkFn);
+    this.twilioSecret = twilioSecret;
+    this.mediaLinkFn = mediaLinkFn;
     errorAlarm(this, 'MediaLinkErrors', mediaLinkFn, props.alarmTopic, 'Media link resolver');
 
     const smsWorkflow = new sfn.StateMachine(this, 'SmsWorkflow', {

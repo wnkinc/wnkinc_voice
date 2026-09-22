@@ -4,6 +4,14 @@
  * decides. Each activity that acts for a tenant takes the tenant id as an
  * argument; none reads it from anywhere else.
  */
+export { lookupPerson, lookupTenant } from './identity.js';
+export { cancelDraft, createDraft, findPending, lockDraft, markCompleted, markFailed, markShown, markUnconfirmed, recentMedia, rememberMedia, reviseDraft } from './ledger.js';
+export { sendText } from './twilio.js';
+export { mintLinks } from './media.js';
+export { callModel } from './model.js';
+export { executeTool } from './composio.js';
+export { loadHistory, recall, saveTurn } from './memory.js';
+export { recordUsage } from './usage.js';
 
 /** Proves the pipe end to end without touching anything. */
 export async function echo(name: string): Promise<string> {

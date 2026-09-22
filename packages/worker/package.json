@@ -5,7 +5,11 @@
   "description": "The Temporal Worker: workflows and activities, run on Lambda when Temporal Cloud has work for it",
   "type": "module",
   "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.1117.0",
+    "@aws-sdk/client-dynamodb": "^3.1116.0",
+    "@aws-sdk/client-lambda": "^3.1116.0",
     "@aws-sdk/client-secrets-manager": "^3.1116.0",
+    "@aws-sdk/lib-dynamodb": "^3.1116.0",
     "@temporalio/activity": "1.24.0",
     "@temporalio/client": "1.24.0",
     "@temporalio/lambda-worker": "1.24.0",

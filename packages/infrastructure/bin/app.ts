@@ -31,7 +31,7 @@ const platform = {
   callerMemory,
 };
 
-new RuntimeStack(app, 'wnk-runtime-dev', {
+const runtime = new RuntimeStack(app, 'wnk-runtime-dev', {
   prefix,
   env,
   ...platform,
@@ -41,9 +41,16 @@ new RuntimeStack(app, 'wnk-runtime-dev', {
   api: voice.api,
 });
 
-// The Temporal Worker: every workflow that moves here runs in it. Takes no
-// platform handles yet; activities get tables as they are ported.
-new WorkerStack(app, 'wnk-worker-dev', { prefix, env, alarmTopic: voice.alarmTopic });
+// The Temporal Worker: every workflow that moves here runs in it, with the
+// platform handles its activities reach (tables, secrets, memory, the media
+// link resolver) and the SMS front door on the platform API.
+new WorkerStack(app, 'wnk-worker-dev', {
+  prefix, env,
+  alarmTopic: voice.alarmTopic, tenantsTable: voice.tenantsTable, usageTable: voice.usageTable, callerMemory,
+  peopleTable: voice.peopleTable, actionsTable: voice.actionsTable, api: voice.api,
+  openaiSecret: voice.openaiSecret, composioSecret: voice.composioSecret,
+  twilioSecret: runtime.twilioSecret, mediaLinkFunction: runtime.mediaLinkFn,
+});
 
 // Per tenant (tenants/<id>.ts), the stacks its file asks for: its automations,
 // rules filtered on its id; its Telegram connector, which takes no platform

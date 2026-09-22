@@ -440,6 +440,32 @@ aws events update-connection --name <BrowserbaseConnection name> \
 The first `/login` for a tenant creates its context and the reply names the id; paste it into the
 tenant file as `browser.contextId` so a re-seed keeps it.
 
+## The Temporal worker
+
+The orchestration engine the platform is moving to. `packages/worker` is a Temporal Worker:
+workflows (deterministic, replayed from history) and activities (the side effects, each taking
+its tenant id as an argument). It runs as a container Lambda that Temporal Cloud invokes when
+the task queue has work (Serverless Workers, public preview) and exits when the invocation
+deadline nears: idle costs nothing, no fleet. The stack (`stacks/worker-stack.ts`) declares the
+function, the invocation role only Temporal's accounts may assume (gated by a generated external
+id), the platform secret holding the namespace connection, and the SMS front door.
+
+**SMS on Temporal.** The same flow as the Step Functions route, side by side with it until the
+cutover: Twilio posts to `/temporal/sms/<WEBHOOK_PATH>`, the starter (the same image, a different
+handler) begins one `smsTurn` workflow per text with Twilio's MessageSid as the workflow id, so a
+redelivered post runs nothing twice. Facebook drafts and the POST approval carry over unchanged
+(`packages/worker/src/sms/facebook.ts`, the ledger rules as pure functions;
+`test/sms-turn.test.ts` runs the workflow through a real Worker with recorded fakes and holds the
+split: POST publishes once, only on the shown revision, never through the model). Point a
+tenant's number at it with `npx tsx scripts/twilio-webhook.mts set <tenantId> temporal`.
+
+**Releasing.** Every change that should reach the worker, code or configuration, is a new build
+id in `packages/worker/src/version.ts`: a published Lambda version is immutable, so nothing
+changes under a running workflow, and rollback is one Temporal command. After
+`npm run deploy -- wnk-worker-dev`, `npx tsx scripts/temporal-release.mts` publishes the Lambda
+version, registers the build id against it, confirms Temporal's validation invocation bound the
+task queue, and sets it current.
+
 ## Where things live
 
 Each package has its own README: what rented service it sits on, what its code is allowed to

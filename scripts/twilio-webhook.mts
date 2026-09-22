@@ -1,8 +1,9 @@
 /**
  * Point a tenant's Twilio number at the platform for SMS (or show what it has).
  *
- *   npx tsx scripts/twilio-webhook.mts set <tenantId>    # SmsUrl = <apiEndpoint>/sms/<WEBHOOK_PATH>, POST
- *   npx tsx scripts/twilio-webhook.mts info <tenantId>   # what the number has now
+ *   npx tsx scripts/twilio-webhook.mts set <tenantId>           # SmsUrl = <apiEndpoint>/sms/<WEBHOOK_PATH>, POST (Step Functions)
+ *   npx tsx scripts/twilio-webhook.mts set <tenantId> temporal  # SmsUrl = <apiEndpoint>/temporal/sms/<WEBHOOK_PATH> (the Temporal worker)
+ *   npx tsx scripts/twilio-webhook.mts info <tenantId>          # what the number has now
  *
  * Reads the account SID, auth token and the generated path from the Twilio
  * secret, the API endpoint from the voice stack, and the number from
@@ -22,7 +23,8 @@ import { readFileSync } from 'node:fs';
 
 const action = process.argv[2] ?? 'info';
 const tenantId = process.argv[3];
-if (!tenantId) { console.error('usage: npx tsx scripts/twilio-webhook.mts set|info <tenantId>'); process.exit(2); }
+const engine = process.argv[4] ?? 'sfn';
+if (!tenantId || !['sfn', 'temporal'].includes(engine)) { console.error('usage: npx tsx scripts/twilio-webhook.mts set|info <tenantId> [temporal]'); process.exit(2); }
 const output = (stack: string, key: string) =>
   execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', 'us-west-2'], { encoding: 'utf8' }).trim();
 
@@ -54,7 +56,7 @@ if (!number) throw new Error(`no incoming phone number ${phoneNumber} in account
 if (!number.capabilities.sms) throw new Error(`${phoneNumber} is not SMS-capable`);
 
 if (action === 'set') {
-  const url = `${apiEndpoint}/sms/${secret.WEBHOOK_PATH}`;
+  const url = `${apiEndpoint}/${engine === 'temporal' ? 'temporal/sms' : 'sms'}/${secret.WEBHOOK_PATH}`;
   const updated = await api(`/IncomingPhoneNumbers/${number.sid}.json`, { SmsUrl: url, SmsMethod: 'POST' }) as { sms_url: string; sms_method: string };
   console.log({ phoneNumber, sid: number.sid, smsMethod: updated.sms_method, smsUrl: updated.sms_url.replace(secret.WEBHOOK_PATH, '<WEBHOOK_PATH>') });
 } else {

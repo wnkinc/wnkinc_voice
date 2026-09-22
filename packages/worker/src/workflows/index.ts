@@ -1,10 +1,12 @@
 /**
  * Workflows: deterministic code Temporal replays from history. No I/O, no
- * clocks, no randomness here; those go through activities. Every export is a
- * workflow type a client can start.
+ * clocks beyond the workflow's own, no randomness here; those go through
+ * activities. Every export is a workflow type a client can start.
  */
 import { proxyActivities } from '@temporalio/workflow';
 import type * as activities from '../activities/index.js';
+
+export { smsTurn } from './sms-turn.js';
 
 const { echo } = proxyActivities<typeof activities>({ startToCloseTimeout: '10 seconds' });
 
