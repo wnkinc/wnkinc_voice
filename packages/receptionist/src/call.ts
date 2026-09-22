@@ -192,7 +192,7 @@ export async function runCall(job: SessionJob, deps: CallDeps, opts: { deadlineM
   } catch (err) {
     log.error('failed to finalize call', { err });
   }
-  // Memory and usage are the call-ended workflow's (runtime stack), from the row.
+  // Memory and usage are the callEnded workflow's (the worker), from the row.
   log.info('call finished', { status, durationSeconds, turns: transcript.length });
   return { status, durationSeconds, transcript, error };
 }

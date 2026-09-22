@@ -1,6 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
 import { MemoryStack } from '../stacks/memory-stack.js';
-import { RuntimeStack } from '../stacks/runtime-stack.js';
 import { TelegramMcpStack } from '../stacks/telegram-mcp-stack.js';
 import { TenantStack } from '../stacks/tenant-stack.js';
 import { VoiceStack } from '../stacks/voice-stack.js';
@@ -19,8 +18,7 @@ const voice = new VoiceStack(app, 'wnk-voice-dev', {
   env,
   callerMemory,
 });
-// The platform handles every bus-driven stack takes: the runtime stack and
-// each tenant stack. Built once so the two cannot drift.
+// The platform handles the worker takes. Built once, so nothing can drift from it.
 const platform = {
   bus: voice.bus,
   tenantsTable: voice.tenantsTable,
@@ -30,18 +28,14 @@ const platform = {
   callerMemory,
 };
 
-const runtime = new RuntimeStack(app, 'wnk-runtime-dev', { prefix, env, alarmTopic: voice.alarmTopic });
-
-// The Temporal Worker: every workflow that moves here runs in it, with the
-// platform handles its activities reach (tables, secrets, memory, the media
-// link resolver) and the SMS front door on the platform API.
+// The Temporal Worker: every workflow runs in it, with the platform handles
+// its activities reach (tables, secrets, memory), the channels' own secrets
+// and the media link resolver, and the front doors on the platform API.
 const worker = new WorkerStack(app, 'wnk-worker-dev', {
   prefix, env,
   alarmTopic: voice.alarmTopic, tenantsTable: voice.tenantsTable, callsTable: voice.callsTable, usageTable: voice.usageTable, callerMemory,
   peopleTable: voice.peopleTable, actionsTable: voice.actionsTable, api: voice.api, bus: voice.bus,
   openaiSecret: voice.openaiSecret, composioSecret: voice.composioSecret,
-  twilioSecret: runtime.twilioSecret, mediaLinkFunction: runtime.mediaLinkFn,
-  telegramSecret: runtime.telegramSecret, browserbaseSecret: runtime.browserbaseSecret,
   browserbaseProjectId: app.node.tryGetContext('browserbaseProjectId') as string,
 });
 

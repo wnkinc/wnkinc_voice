@@ -16,9 +16,9 @@ fails closed.
 | Step Functions accept workflow (Express, no execution data) | Called number → tenant, claim, accept, caller recognition, job to SQS. All managed tasks; SIP parsing is a unit-tested JSONata expression. | `infrastructure/workflows/receptionist/accept.ts` |
 | SQS (batch size 1, partial batch failure) | Hands one call to one session invocation; a failed attach dead-letters at once (a retry after the 16-minute visibility timeout would find a dead call). | https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html |
 | DynamoDB Tenants / Calls | Tenant row keyed by called number; call row is the audit (transcript, tool calls, once-markers). | |
-| EventBridge bus `wnkinc.voice` | `lead.recorded`, `owner.notify`, `call.ended` fan out to the CRM sync here and the runtime stack's workflows, each with retries and a DLQ. | https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-dlq.html |
-| Composio (HubSpot) | Caller recognition, from the accept workflow, under the tenant id. | |
-| AgentCore Memory | Caller facts recalled by the accept workflow; the transcript is written by the call-ended workflow (runtime stack), not here. | |
+| EventBridge bus `wnkinc.voice` | `lead.recorded`, `owner.notify`, `call.ended` fan out to the workflows on the worker (a rule per tenant stack, one platform rule), each with retries and a DLQ. | https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-dlq.html |
+| Composio (HubSpot) | Caller recognition, from accept, under the tenant id and a deadline. | |
+| AgentCore Memory | Caller facts recalled by accept; the transcript is written by the `callEnded` workflow on the worker, not here. | |
 
 ## What the code is allowed to do, per file
 
@@ -26,7 +26,7 @@ fails closed.
 - `session.ts` / `call.ts` — hold the WebSocket for one call, log transcripts and tool calls to the call row, enforce the time limit, hang up cleanly, publish `call.ended` (ids and outcome). Nothing else: memory and usage are the call-ended workflow's. A Lambda holds it because nothing managed holds a WebSocket for fifteen minutes and runs tools.
 - `prompt.ts` — tenant row (`business`, `receptionist.instructions`, `receptionist.greeting`) → the receptionist's system prompt and greeting.
 - `agent.ts` — tenant row (`receptionist.session`, passed under OpenAI's own keys) plus the platform defaults below → session config sent on attach, and the three tools. Each tool is one publish. The tenant comes from the call context; the model never names it.
-- Event consumers: none here. Every consumer of `lead.recorded`, `owner.notify`, and `call.ended` is a Step Functions workflow in the runtime stack (CRM sync, lead email, owner alert). The `call.ended` event carries ids and the outcome only; the transcript stays on the call row.
+- Event consumers: none here. Every consumer of `lead.recorded`, `owner.notify`, and `call.ended` is a workflow on the worker (CRM sync, lead email, owner alert, call-ended). The `call.ended` event carries ids and the outcome only; the transcript stays on the call row.
 
 Tenant id enters exactly once, from the signed webhook's called number, and is carried on every record and event from there.
 

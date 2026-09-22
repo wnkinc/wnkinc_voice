@@ -23,8 +23,7 @@ const secret = (id: string) => new secretsmanager.Secret(platform, id);
 const stack = new WorkerStack(app, 'wnk-worker-test', {
   prefix: 'p', env, alarmTopic: new sns.Topic(platform, 'Alarms'),
   tenantsTable: table('Tenants'), callsTable: table('Calls'), peopleTable: table('People'), actionsTable: table('Actions'), usageTable: table('Usage'),
-  openaiSecret: secret('OpenAI'), composioSecret: secret('Composio'), twilioSecret: secret('Twilio'), telegramSecret: secret('Telegram'), browserbaseSecret: secret('Browserbase'), browserbaseProjectId: 'proj',
-  mediaLinkFunction: new lambda.Function(platform, 'MediaLink', { runtime: lambda.Runtime.NODEJS_22_X, handler: 'index.handler', code: lambda.Code.fromInline('exports.handler = async () => ({})') }),
+  openaiSecret: secret('OpenAI'), composioSecret: secret('Composio'), browserbaseProjectId: 'proj',
   callerMemory: { memoryId: 'mem', memoryArn: 'arn:aws:bedrock-agentcore:us-west-2:123456789012:memory/mem' },
   api: new apigwv2.HttpApi(platform, 'Api'), bus: new events.EventBus(platform, 'Bus'),
 });
@@ -58,15 +57,16 @@ describe('worker stack', () => {
     expect(JSON.stringify(statements[0]?.Resource)).toContain(':*');
   });
 
-  it('the worker reads the Temporal secret and the five platform secrets its activities need, and no other', () => {
+  it('the worker reads the Temporal secret, the three channel secrets, and the two platform secrets its activities need, and no other', () => {
     const secrets = Object.values(template.findResources('AWS::SecretsManager::Secret'));
-    expect(secrets.map((s) => s.Properties.Name)).toEqual([temporalSecretName('p')]);
+    expect(secrets.map((s) => s.Properties.Name).filter(Boolean)).toEqual([temporalSecretName('p')]);
+    expect(secrets).toHaveLength(4);
     const worker = fnByName('p-worker')!;
     const reads = statementsOf(worker.Properties.Role['Fn::GetAtt'][0]).filter((s) => actions(s).includes('secretsmanager:GetSecretValue'));
     const resources = reads.flatMap((s) => [s.Resource].flat()).map((r) => JSON.stringify(r));
     expect(resources).toHaveLength(6);
-    expect(resources.some((r) => r.includes('"Ref":"' + Object.keys(template.findResources('AWS::SecretsManager::Secret'))[0]))).toBe(true);
-    for (const imported of ['OpenAI', 'Composio', 'Twilio', 'Telegram', 'Browserbase']) expect(resources.some((r) => r.includes(imported))).toBe(true);
+    for (const own of Object.keys(template.findResources('AWS::SecretsManager::Secret'))) expect(resources.some((r) => r.includes('"Ref":"' + own))).toBe(true);
+    for (const imported of ['OpenAI', 'Composio']) expect(resources.some((r) => r.includes(imported))).toBe(true);
     const envVars = worker.Properties.Environment.Variables;
     for (const key of ['PEOPLE_TABLE', 'TENANTS_TABLE', 'ACTIONS_TABLE', 'CALLS_TABLE', 'USAGE_TABLE', 'OPENAI_SECRET_ARN', 'COMPOSIO_SECRET_ARN', 'TWILIO_SECRET_ARN', 'TELEGRAM_SECRET_ARN', 'BROWSERBASE_SECRET_ARN', 'BROWSERBASE_PROJECT_ID', 'MEDIA_LINK_FUNCTION_ARN', 'MEMORY_ID', 'TEMPORAL_SECRET_ARN']) expect(envVars[key]).toBeDefined();
     expect(envVars.TEMPORAL_API_KEY).toBeUndefined();
@@ -82,7 +82,7 @@ describe('worker stack', () => {
       const statements = statementsOf(starter.Properties.Role['Fn::GetAtt'][0]);
       const secretReads = statements.filter((s) => actions(s).includes('secretsmanager:GetSecretValue'));
       expect(secretReads).toHaveLength(1);
-      expect(secretReads[0]?.Resource).toEqual({ Ref: Object.keys(template.findResources('AWS::SecretsManager::Secret'))[0] });
+      expect(secretReads[0]?.Resource).toEqual({ Ref: Object.entries(template.findResources('AWS::SecretsManager::Secret')).find(([, s]) => s.Properties.Name)![0] });
       expect(statements.flatMap(actions).filter((a) => a.startsWith('dynamodb:') || a.startsWith('bedrock-agentcore:'))).toEqual([]);
     }
     template.hasResourceProperties('AWS::Lambda::EventSourceMapping', { BatchSize: 1 });

@@ -37,7 +37,7 @@ export interface VoiceStackProps extends cdk.StackProps {
  * -> accept workflow (tenant, claim, accept, recognize) -> SQS -> session Lambda
  * (WebSocket to OpenAI). DynamoDB: tenants (by called
  * number), calls. EventBridge bus: lead.recorded / owner.notify /
- * call.ended -> the runtime stack's workflows.
+ * call.ended -> the workflows on the worker.
  */
 export class VoiceStack extends cdk.Stack {
   readonly tenantsTable: dynamodb.Table;
@@ -243,8 +243,8 @@ export class VoiceStack extends cdk.Stack {
 
     // ---- Event routing --------------------------------------------------------
 
-    // Every consumer of lead.recorded / owner.notify / call.ended is a Step
-    // Functions workflow in the runtime stack; the rules live there.
+    // Every consumer of lead.recorded / owner.notify / call.ended is a workflow
+    // on the worker; the rules live in the worker stack and each tenant's stack.
     //
     // Except this one: every event from both sources lands in one log group
     // as the platform's activity record. Nothing else retains bus events. It
@@ -275,7 +275,7 @@ export class VoiceStack extends cdk.Stack {
 
     const api = new apigwv2.HttpApi(this, 'Api', {
       apiName: `${prefix}-api`,
-      description: 'Platform webhooks: OpenAI Realtime (here), Telegram (runtime stack)',
+      description: 'Platform webhooks: OpenAI Realtime (here), Telegram and Twilio (worker stack)',
     });
     this.api = api;
     api.addRoutes({

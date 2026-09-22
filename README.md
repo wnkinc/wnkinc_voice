@@ -337,8 +337,7 @@ npm run deploy
 ```
 
 IaC is AWS CDK (TypeScript, `packages/infrastructure/`); Lambdas are bundled by `NodejsFunction`
-(esbuild) at deploy time. Stacks: memory, voice, runtime (the assistant's secrets and the media
-link resolver), worker, then one per tenant (`bin/app.ts` builds one platform object and feeds it to
+(esbuild) at deploy time. Stacks: memory, voice, worker, then one per tenant (`bin/app.ts` builds one platform object and feeds it to
 the worker; a tenant stack takes only the bus, the alarm topic, and the worker's automation starter).
 
 The alarm topic is created by the stack; **who it pages is not** — subscribe once, out of band,
@@ -358,8 +357,8 @@ a Connection), deploy the consumer alone first, then the producer: CloudFormatio
 an export a deployed stack still imports, and rolls the producer back.
 
 ```bash
-npm run deploy -- wnk-runtime-dev --exclusively   # the consumer, alone
-npm run deploy -- wnk-voice-dev                   # then the producer may drop the export
+npm run deploy -- wnk-worker-dev --exclusively   # the consumer, alone
+npm run deploy -- wnk-voice-dev                  # then the producer may drop the export
 ```
 
 ### 1. Configure secrets
@@ -503,7 +502,6 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 | `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant with automations, from its file: rules filtered on the tenant id, targeting the worker's automation starter |
 | `packages/infrastructure/stacks/worker-stack.ts` | The Temporal worker (a container Lambda Temporal Cloud invokes), its secret and invocation role, the three front doors (SMS, Telegram, automations), the platform's call.ended rule, the failure alarms, the Fargate fallback at zero |
 | `packages/infrastructure/stacks/telegram-mcp-stack.ts` | One stack per tenant with `telegramMcp`: the connector Lambda, its Function URL, a role that reads only that tenant's secret. Takes no platform handles |
-| `packages/infrastructure/stacks/runtime-stack.ts` | The Telegram, Twilio and Browserbase secrets and the media link resolver, exposed to the worker stack |
 | `packages/infrastructure/stacks/voice-stack.ts`, `memory-stack.ts` | The call path (API, the verifier, accept and session Lambdas, tables, bus, queues, the OpenAI and Composio secrets, alarm topic); caller memory |
 | `packages/infrastructure/bin/app.ts`, `infra_utils/` | Stack wiring; alarm presets |
 | `packages/shared/src/` | `types.ts` (`TenantConfig` zod schema, records, events), `store.ts` (DynamoDB behind one `Store` interface plus an in-memory version; no leads table, the CRM holds the lead and the call row is the audit), `events.ts` (EventBridge publisher), `config.ts` (env, secrets, OpenAI client, logger), `composio.ts` (Composio SDK, scripts only) |

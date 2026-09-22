@@ -7,7 +7,7 @@ export interface EventPublisher {
   publish(event: VoiceEvent): Promise<void>;
 }
 
-/** Publishes domain events to the EventBridge bus; rules route them to the runtime stack's workflows. */
+/** Publishes domain events to the EventBridge bus; rules route them to workflows on the worker. */
 export function eventBridgePublisher(): EventPublisher {
   if (!env.eventBusName) throw new Error('EVENT_BUS_NAME not set');
   const client = new EventBridgeClient({});

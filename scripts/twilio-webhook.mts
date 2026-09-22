@@ -5,7 +5,7 @@
  *   npx tsx scripts/twilio-webhook.mts info <tenantId>   # what the number has now
  *
  * Reads the account SID, auth token and the generated path from the Twilio
- * secret, the API endpoint from the voice stack, and the number from
+ * secret (worker stack), the API endpoint from the voice stack, and the number from
  * tenants/<tenantId>.json, so the secret path never passes through a
  * terminal or a file. Set the credentials first (see README):
  *   aws secretsmanager put-secret-value --secret-id <twilioSecretArn> \
@@ -26,7 +26,7 @@ const output = (stack: string, key: string) =>
   execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', 'us-west-2'], { encoding: 'utf8' }).trim();
 
 const { phoneNumber } = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { phoneNumber: string };
-const secretArn = output('wnk-runtime-dev', 'twilioSecretArn');
+const secretArn = output('wnk-worker-dev', 'twilioSecretArn');
 const apiEndpoint = output('wnk-voice-dev', 'apiEndpoint');
 const sm = new SecretsManagerClient({ region: 'us-west-2' });
 const secret = JSON.parse((await sm.send(new GetSecretValueCommand({ SecretId: secretArn }))).SecretString ?? '{}') as { TWILIO_ACCOUNT_SID?: string; TWILIO_AUTH_TOKEN?: string; WEBHOOK_PATH?: string };

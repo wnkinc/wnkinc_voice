@@ -5,7 +5,7 @@
  *
  *   npx tsx scripts/connect-composio.mts <tenantId> [gmail|hubspot|facebook]
  *
- * Reads the API key from the runtime stack's Composio secret (or
+ * Reads the API key from the voice stack's Composio secret (or
  * COMPOSIO_API_KEY env). Prints the connect link, waits for consent, then
  * proves it: Gmail profile, or a HubSpot owners lookup, through the adapter.
  */

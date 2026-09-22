@@ -43,6 +43,7 @@ import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
+import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type * as sns from 'aws-cdk-lib/aws-sns';
@@ -71,15 +72,8 @@ export interface WorkerStackProps extends cdk.StackProps {
   readonly usageTable: dynamodb.ITable;
   readonly openaiSecret: secretsmanager.ISecret;
   readonly composioSecret: secretsmanager.ISecret;
-  /** Twilio credentials and the generated webhook path segment. */
-  readonly twilioSecret: secretsmanager.ISecret;
-  /** The Telegram bot token and the generated webhook path segment. */
-  readonly telegramSecret: secretsmanager.ISecret;
-  /** The Browserbase project API key; the project id is cdk.json context, not a secret. */
-  readonly browserbaseSecret: secretsmanager.ISecret;
+  /** The Browserbase project id: cdk.json context, not a secret. */
   readonly browserbaseProjectId: string;
-  /** The media link resolver (packages/media-link). */
-  readonly mediaLinkFunction: lambda.IFunction;
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
   readonly api: apigwv2.IHttpApi;
   /** The platform bus: the rule every tenant gets identically (call.ended) lives here. */
@@ -107,6 +101,45 @@ export class WorkerStack extends cdk.Stack {
         excludePunctuation: true,
       },
     });
+    // ---- The channels' secrets, and the one resolver they need -------------------
+    // Values are put in by hand after the first deploy (see README); the
+    // WEBHOOK_PATH segments are generated here and are what the routes below
+    // and the webhook-pointing scripts read.
+    const telegramSecret = new secretsmanager.Secret(this, 'TelegramSecret', {
+      description: 'Telegram bot: {"TELEGRAM_BOT_TOKEN": <from BotFather>, "WEBHOOK_PATH": <generated>}',
+      generateSecretString: { secretStringTemplate: JSON.stringify({ TELEGRAM_BOT_TOKEN: 'set-me' }), generateStringKey: 'WEBHOOK_PATH', excludePunctuation: true, passwordLength: 40 },
+    });
+    const twilioSecret = new secretsmanager.Secret(this, 'TwilioSecret', {
+      description: 'Twilio: {"TWILIO_ACCOUNT_SID": <AC...>, "TWILIO_AUTH_TOKEN": <token>, "WEBHOOK_PATH": <generated>}',
+      generateSecretString: { secretStringTemplate: JSON.stringify({ TWILIO_ACCOUNT_SID: 'set-me', TWILIO_AUTH_TOKEN: 'set-me' }), generateStringKey: 'WEBHOOK_PATH', excludePunctuation: true, passwordLength: 40 },
+    });
+    // The project id is cdk.json context; only the key is secret.
+    const browserbaseSecret = new secretsmanager.Secret(this, 'BrowserbaseSecret', {
+      description: 'Browserbase: {"BROWSERBASE_API_KEY": <project API key>}',
+      generateSecretString: { secretStringTemplate: JSON.stringify({}), generateStringKey: 'BROWSERBASE_API_KEY', excludePunctuation: true },
+    });
+    // The media link resolver (packages/media-link): a texted photo's Twilio ids
+    // -> the signed link Twilio redirects to. Code because the redirect's
+    // Location header is the answer and nothing managed hands it back. Invoked
+    // synchronously by an activity, so its failures surface in the workflow.
+    const mediaLinkName = `${prefix}-media-link-resolver`;
+    const mediaLink = new NodejsFunction(this, 'MediaLink', {
+      functionName: mediaLinkName,
+      description: 'Texted photo ids -> the signed link Twilio redirects to (nothing fetched, nothing stored)',
+      entry: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../media-link/src/media-link.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(10),
+      environment: { TWILIO_SECRET_ARN: twilioSecret.secretArn, NODE_OPTIONS: '--enable-source-maps' },
+      logGroup: new logs.LogGroup(this, 'MediaLinkLogs', { logGroupName: `/aws/lambda/${mediaLinkName}`, retention: logs.RetentionDays.ONE_MONTH, removalPolicy: cdk.RemovalPolicy.DESTROY }),
+      tracing: lambda.Tracing.ACTIVE,
+      bundling: { format: OutputFormat.ESM, target: 'node22', mainFields: ['module', 'main'], sourceMap: true },
+    });
+    twilioSecret.grantRead(mediaLink);
+    errorAlarm(this, 'MediaLinkErrors', mediaLink, props.alarmTopic, 'Media link resolver');
+
     // One image for the worker, the starter and the fallback: the handler differs.
     const asset = new DockerImageAsset(this, 'Image', { directory: PACKAGE_DIR, platform: Platform.LINUX_ARM64, exclude: ['node_modules', 'lib', 'test', '*.md'] });
     const image = (cmd: string) => lambda.DockerImageCode.fromEcr(asset.repository, { tagOrDigest: asset.imageTag, cmd: [cmd] });
@@ -122,11 +155,11 @@ export class WorkerStack extends cdk.Stack {
       USAGE_TABLE: props.usageTable.tableName,
       OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
       COMPOSIO_SECRET_ARN: props.composioSecret.secretArn,
-      TWILIO_SECRET_ARN: props.twilioSecret.secretArn,
-      TELEGRAM_SECRET_ARN: props.telegramSecret.secretArn,
-      BROWSERBASE_SECRET_ARN: props.browserbaseSecret.secretArn,
+      TWILIO_SECRET_ARN: twilioSecret.secretArn,
+      TELEGRAM_SECRET_ARN: telegramSecret.secretArn,
+      BROWSERBASE_SECRET_ARN: browserbaseSecret.secretArn,
       BROWSERBASE_PROJECT_ID: props.browserbaseProjectId,
-      MEDIA_LINK_FUNCTION_ARN: props.mediaLinkFunction.functionArn,
+      MEDIA_LINK_FUNCTION_ARN: mediaLink.functionArn,
       ASSISTANT_MODEL: process.env.ASSISTANT_MODEL ?? 'gpt-5.5',
       ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
     };
@@ -135,16 +168,16 @@ export class WorkerStack extends cdk.Stack {
       secret.grantRead(role);
       props.openaiSecret.grantRead(role);
       props.composioSecret.grantRead(role);
-      props.twilioSecret.grantRead(role);
-      props.telegramSecret.grantRead(role);
-      props.browserbaseSecret.grantRead(role);
+      twilioSecret.grantRead(role);
+      telegramSecret.grantRead(role);
+      browserbaseSecret.grantRead(role);
       props.peopleTable.grantReadData(role);
       // Read for every turn; written by the login handoff (its window and the saved browser's id).
       props.tenantsTable.grantReadWriteData(role);
       props.actionsTable.grantReadWriteData(role);
       props.callsTable.grantReadWriteData(role);
       props.usageTable.grantWriteData(role);
-      props.mediaLinkFunction.grantInvoke(role);
+      mediaLink.grantInvoke(role);
       if (props.callerMemory) {
         role.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({ actions: MEMORY_USE_ACTIONS, resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`] }));
       }
@@ -209,7 +242,7 @@ export class WorkerStack extends cdk.Stack {
     });
     new apigwv2.HttpRoute(this, 'SmsRoute', {
       httpApi: props.api,
-      routeKey: apigwv2.HttpRouteKey.with(`/temporal/sms/${props.twilioSecret.secretValueFromJson('WEBHOOK_PATH').unsafeUnwrap()}`, apigwv2.HttpMethod.POST),
+      routeKey: apigwv2.HttpRouteKey.with(`/temporal/sms/${twilioSecret.secretValueFromJson('WEBHOOK_PATH').unsafeUnwrap()}`, apigwv2.HttpMethod.POST),
       integration: new HttpSqsIntegration('SmsWebhook', {
         queue: smsQueue,
         subtype: apigwv2.HttpIntegrationSubtype.SQS_SEND_MESSAGE,
@@ -250,7 +283,7 @@ export class WorkerStack extends cdk.Stack {
     secret.grantRead(telegramStart);
     new apigwv2.HttpRoute(this, 'TelegramRoute', {
       httpApi: props.api,
-      routeKey: apigwv2.HttpRouteKey.with(`/temporal/telegram/${props.telegramSecret.secretValueFromJson('WEBHOOK_PATH').unsafeUnwrap()}`, apigwv2.HttpMethod.POST),
+      routeKey: apigwv2.HttpRouteKey.with(`/temporal/telegram/${telegramSecret.secretValueFromJson('WEBHOOK_PATH').unsafeUnwrap()}`, apigwv2.HttpMethod.POST),
       integration: new HttpLambdaIntegration('TelegramWebhook', telegramStart),
     });
     errorAlarm(this, 'TelegramStartErrors', telegramStart, props.alarmTopic, 'Assistant (Telegram, Temporal): starter');
@@ -313,6 +346,9 @@ export class WorkerStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'fallbackService', { value: `aws ecs update-service --cluster ${cluster.clusterName} --service ${fallback.serviceName} --desired-count 1`, description: 'Brings up the fallback worker' });
     new cdk.CfnOutput(this, 'invokeRoleArn', { value: invoke.roleArn, description: 'The --aws-lambda-assume-role-arn when registering a version' });
     new cdk.CfnOutput(this, 'secretName', { value: secret.secretName });
+    new cdk.CfnOutput(this, 'telegramSecretArn', { value: telegramSecret.secretArn });
+    new cdk.CfnOutput(this, 'twilioSecretArn', { value: twilioSecret.secretArn });
+    new cdk.CfnOutput(this, 'browserbaseSecretArn', { value: browserbaseSecret.secretArn });
     new cdk.CfnOutput(this, 'smsWebhookPath', { value: '/temporal/sms/<WEBHOOK_PATH from the Twilio secret>' });
     new cdk.CfnOutput(this, 'telegramWebhookPath', { value: '/temporal/telegram/<WEBHOOK_PATH from the Telegram secret>' });
   }
