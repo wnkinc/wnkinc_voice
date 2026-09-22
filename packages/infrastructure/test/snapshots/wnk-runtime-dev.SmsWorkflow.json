@@ -94,6 +94,7 @@
         "approver": "{% 'sms:' & $sms.From %}",
         "inboundText": "{% $sms.Body %}",
         "media": "{% [($n := $exists($sms.NumMedia) ? $number($sms.NumMedia) : 0; $n > 0 ? [0..$n - 1].($i := $string($); $substring($lookup($sms, 'MediaContentType' & $i), 0, 6) = 'image/' ? { 'M': { 'messageSid': { 'S': $sms.MessageSid }, 'mediaSid': { 'S': $split($lookup($sms, 'MediaUrl' & $i), '/')[-1] } } }) : [])] %}",
+        "mediaIsRecent": false,
         "imageLinks": [],
         "draft": {},
         "facebookOn": "{% $tenant.facebookPosts.M.enabled.BOOL = true and 'draft_facebook_post' in [$tenant.assistant.M.tools.L.S] %}"
@@ -152,10 +153,45 @@
         },
         {
           "Condition": "{% $count($media) > 0 %}",
+          "Next": "RememberMedia"
+        }
+      ],
+      "Default": "RecentMedia"
+    },
+    "RememberMedia": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Arguments": {
+        "TableName": "placeholder",
+        "Item": {
+          "tenantId": {
+            "S": "{% $tenant.tenantId.S %}"
+          },
+          "sk": {
+            "S": "{% $approver & '#media' %}"
+          },
+          "media": {
+            "L": "{% $media %}"
+          },
+          "updatedAt": {
+            "S": "{% $now() %}"
+          },
+          "expiresAt": {
+            "N": "{% $string($floor($millis() / 1000) + 6 * 3600) %}"
+          }
+        }
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Output": "{% $states.input %}",
           "Next": "ModelLinks"
         }
       ],
-      "Default": "Prepare"
+      "Output": "{% $states.input %}",
+      "Next": "ModelLinks"
     },
     "ModelLinks": {
       "Type": "Map",
@@ -198,6 +234,36 @@
       },
       "Assign": {
         "imageLinks": "{% $states.result %}"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Output": "{% $states.input %}",
+          "Next": "Prepare"
+        }
+      ],
+      "Output": "{% $states.input %}",
+      "Next": "Prepare"
+    },
+    "RecentMedia": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Arguments": {
+        "TableName": "placeholder",
+        "Key": {
+          "tenantId": {
+            "S": "{% $tenant.tenantId.S %}"
+          },
+          "sk": {
+            "S": "{% $approver & '#media' %}"
+          }
+        }
+      },
+      "Assign": {
+        "media": "{% $exists($states.result.Item) and $number($states.result.Item.expiresAt.N) > $floor($millis() / 1000) ? [$states.result.Item.media.L] : [] %}",
+        "mediaIsRecent": "{% $exists($states.result.Item) and $number($states.result.Item.expiresAt.N) > $floor($millis() / 1000) %}"
       },
       "Catch": [
         {
@@ -719,7 +785,7 @@
                     "add_new",
                     "none"
                   ],
-                  "description": "keep: the photos already on the draft. use_new: only the photos sent with this message. add_new: the photos on the draft plus the ones sent with this message. none: a post with no photos."
+                  "description": "keep: the photos already on the draft. use_new: only the photos the person sent, with this message or a recent one. add_new: the photos on the draft plus the ones they sent. none: a post with no photos. The result says how many photos the draft has; tell the person if it is zero."
                 }
               },
               "required": [
@@ -748,7 +814,7 @@
         "history": [],
         "memories": [],
         "text": "{% $trim($sms.Body) != '' ? $sms.Body : 'Sent ' & $sms.NumMedia & ' photos with no text.' %}",
-        "systemPrompt": "{% 'You are My Assistant for ' & $tenant.business.M.name.S & ', texting with ' & $person.name.S & ' (' & $person.role.S & ') who works there. ' & ($exists($tenant.business.M.description.S) ? 'About the business: ' & $tenant.business.M.description.S & ' ' : '') & ($exists($tenant.business.M.services.L) and $count($tenant.business.M.services.L) > 0 ? 'Services: ' & $join($tenant.business.M.services.L.S, ', ') & '. ' : '') & ($exists($tenant.business.M.hours.S) ? 'Hours: ' & $tenant.business.M.hours.S & '. ' : '') & ($count($tenant.assistant.M.tools.L) > 0 ? 'Your tools reach the business systems the owner connected. Use them to look things up or record things; say what you did and what you found. Never invent records. ' : 'You have no tools connected for this business. ') & 'This is a text message conversation (SMS): be brief and plain, no markdown, no lists. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 1000 characters.' & ($facebookOn ? ' You can draft posts for the business Facebook Page with draft_facebook_post. You never publish: after you draft, the system texts the exact draft to the person, and only their reply POST publishes it. After drafting, answer in one short sentence and do not repeat the caption. Never say a post was published.' & ($exists($draft.sk) ? ' There is a pending draft: ' & $draft.payload.M.caption.S & ' (' & $string($count([$draft.payload.M.media.L])) & ' photos). Change it with draft_facebook_post, or discard it with cancel_facebook_draft if they no longer want it.' : '') & ($count($media) > 0 ? ' This message came with ' & $string($count($media)) & ' photos.' : '') : '') %}",
+        "systemPrompt": "{% 'You are My Assistant for ' & $tenant.business.M.name.S & ', texting with ' & $person.name.S & ' (' & $person.role.S & ') who works there. ' & ($exists($tenant.business.M.description.S) ? 'About the business: ' & $tenant.business.M.description.S & ' ' : '') & ($exists($tenant.business.M.services.L) and $count($tenant.business.M.services.L) > 0 ? 'Services: ' & $join($tenant.business.M.services.L.S, ', ') & '. ' : '') & ($exists($tenant.business.M.hours.S) ? 'Hours: ' & $tenant.business.M.hours.S & '. ' : '') & ($count($tenant.assistant.M.tools.L) > 0 ? 'Your tools reach the business systems the owner connected. Use them to look things up or record things; say what you did and what you found. Never invent records. ' : 'You have no tools connected for this business. ') & 'This is a text message conversation (SMS): be brief and plain, no markdown, no lists. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 1000 characters.' & ($facebookOn ? ' You can draft posts for the business Facebook Page with draft_facebook_post. You never publish: after you draft, the system texts the exact draft to the person, and only their reply POST publishes it. After drafting, answer in one short sentence and do not repeat the caption. Never say a post was published.' & ($exists($draft.sk) ? ' There is a pending draft: ' & $draft.payload.M.caption.S & ' (' & $string($count([$draft.payload.M.media.L])) & ' photos). Change it with draft_facebook_post, or discard it with cancel_facebook_draft if they no longer want it.' : '') & ($count($media) > 0 ? ($mediaIsRecent ? ' They sent ' & $string($count($media)) & ' photos in a recent message; those are the photos available for the draft.' : ' This message came with ' & $string($count($media)) & ' photos.') : ' No photos are available for a draft.') : '') %}",
         "actorId": "{% $tenant.tenantId.S & '_sms_' & $replace($sms.From, /[^0-9]/, '') %}",
         "sessionId": "{% 'sms-chat-' & $replace($sms.From, /[^0-9]/, '') & '-' & $fromMillis($millis() - ($exists($tenant.sessionDayOffsetMinutes.N) ? $number($tenant.sessionDayOffsetMinutes.N) : 600) * 60000, '[Y0001][M01][D01]') %}",
         "allowedTools": "{% [$tenant.assistant.M.tools.L.S[$facebookOn or $not($ in ['draft_facebook_post', 'cancel_facebook_draft'])]] %}"
@@ -1148,7 +1214,7 @@
                 "Next": "Failed"
               }
             ],
-            "Output": "{% { 'call_id': $callId, 'output': $string({ 'ok': true, 'photos_on_draft': $count($next), 'note': 'The system now texts the exact draft to the person. Do not repeat the caption. Do not say it was posted.' }) } %}",
+            "Output": "{% { 'call_id': $callId, 'output': $string({ 'ok': true, 'photos_on_draft': $count($next), 'note': ($count($next) = 0 ? 'The draft has NO photos. Tell the person that, and that they can text a photo to add. ' : 'The draft has ' & $string($count($next)) & ' photos. ') & 'The system now texts the exact draft to the person. Do not repeat the caption. Do not say it was posted.' }) } %}",
             "End": true
           },
           "Draft_Revise": {
@@ -1205,7 +1271,7 @@
                 "Next": "Failed"
               }
             ],
-            "Output": "{% { 'call_id': $callId, 'output': $string({ 'ok': true, 'photos_on_draft': $count($next), 'note': 'The system now texts the exact draft to the person. Do not repeat the caption. Do not say it was posted.' }) } %}",
+            "Output": "{% { 'call_id': $callId, 'output': $string({ 'ok': true, 'photos_on_draft': $count($next), 'note': ($count($next) = 0 ? 'The draft has NO photos. Tell the person that, and that they can text a photo to add. ' : 'The draft has ' & $string($count($next)) & ' photos. ') & 'The system now texts the exact draft to the person. Do not repeat the caption. Do not say it was posted.' }) } %}",
             "End": true
           },
           "Run_cancel_facebook_draft": {

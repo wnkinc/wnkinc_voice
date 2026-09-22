@@ -142,7 +142,7 @@ export function smsDefinition(refs: SmsRefs) {
         // straight to the model, which then has no Facebook tools either.
         Inbound: {
           Type: 'Pass',
-          Assign: { approver: q("'sms:' & $sms.From"), inboundText: q('$sms.Body'), media: q(mediaExpr('$sms')), imageLinks: [], draft: {}, facebookOn: q(facebookOnExpr) },
+          Assign: { approver: q("'sms:' & $sms.From"), inboundText: q('$sms.Body'), media: q(mediaExpr('$sms')), mediaIsRecent: false, imageLinks: [], draft: {}, facebookOn: q(facebookOnExpr) },
           Output: q('$states.input'), Next: 'FacebookOn',
         },
         FacebookOn: { Type: 'Choice', Choices: [{ Condition: q('$facebookOn'), Next: 'FindDraft' }], Default: 'Prepare' },

@@ -5,7 +5,7 @@ import { loginSiteExpr } from '../workflows/assistant/browser-login.js';
 import { expectedToolkitsExpr, missingToolkitsExpr } from '../workflows/canaries/composio-health.js';
 import { nextBusinessMorningExpr } from '../workflows/automations/crm-lead.js';
 import { allowedToolsExpr, mediaExpr, parseFormExpr, textOrPhotosExpr } from '../workflows/assistant/sms.js';
-import { APPROVAL_WORD, contentExpr, draftMessageExpr, FACEBOOK_TOOLS, isApprovalExpr, nextMediaExpr, pendingExpr, postIdExpr } from '../workflows/assistant/facebook-post.js';
+import { APPROVAL_WORD, contentExpr, draftMessageExpr, FACEBOOK_TOOLS, facebookPromptExpr, isApprovalExpr, nextMediaExpr, pendingExpr, postIdExpr } from '../workflows/assistant/facebook-post.js';
 import { ASSISTANT_TOOLS, callsExpr, historyExpr, outputsExpr, textExpr, toolResultExpr } from '../workflows/assistant/assistant-loop.js';
 import { ACTION_APPROVAL_WORDS, ASSISTANT_TOOL_NAMES } from '../../shared/src/types.js';
 
@@ -213,6 +213,12 @@ describe('facebook posts', () => {
     expect(text).toContain('With the 2 photos you sent. Reply POST to publish it');
     expect(await evalExpr(draftMessageExpr('$shown'), {}, { tenant, shown: row([photo('a')]) })).toContain('With the 1 photo you sent.');
     expect(await evalExpr(draftMessageExpr('$shown'), {}, { tenant, shown: row([]) })).toContain('No photos.');
+  });
+  it('tells the model where the photos came from, or that there are none', async () => {
+    const prompt = (media: unknown[], mediaIsRecent: boolean) => evalExpr(facebookPromptExpr, {}, { media, mediaIsRecent, draft: {} }) as Promise<string>;
+    expect(await prompt([photo('a')], false)).toContain('This message came with 1 photos.');
+    expect(await prompt([photo('a'), photo('b')], true)).toContain('They sent 2 photos in a recent message');
+    expect(await prompt([], false)).toContain('No photos are available for a draft.');
   });
   it('reads the post id from either tool shape', async () => {
     expect(await evalExpr(postIdExpr('b'), { b: { data: { id: 'photo1', post_id: 'page_post1' } } })).toBe('page_post1');

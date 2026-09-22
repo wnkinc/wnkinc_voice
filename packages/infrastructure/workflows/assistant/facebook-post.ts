@@ -4,7 +4,13 @@
  * the first. A channel supplies how to text the person and, before any of
  * these run, assigns: $tenant, $approver (the person's channel id), $media
  * (this message's photos, DynamoDB-typed), $inboundText (their message as
- * received), $draft ({}).
+ * received), $draft ({}), $mediaIsRecent (false).
+ *
+ * Phones send the photo first and the words after, as separate texts. So a
+ * message's photos are remembered (one row per person, RECENT_MEDIA_HOURS,
+ * the table's TTL) and a later text without photos gets them as $media, with
+ * $mediaIsRecent set: the draft tool can attach them, the model is told they
+ * are from a recent message, and their links are not minted again.
  *
  * The split that makes the approval real:
  *   - The model proposes. Its two tools write and discard `pending` rows and
@@ -34,6 +40,8 @@ export const APPROVAL_HOURS = 48;
 export const LOG_DAYS = 400;
 /** A draft is texted whole; Twilio refuses a body over 1600 characters. */
 export const MAX_CAPTION_CHARS = 1200;
+/** How long a person's texted photos stay available to a later text. */
+export const RECENT_MEDIA_HOURS = 6;
 export const FACEBOOK_TOOLS = ['draft_facebook_post', 'cancel_facebook_draft'] as const;
 
 export interface FacebookPostRefs {
@@ -70,7 +78,7 @@ export const postIdExpr = (body: string) => `$exists(${body}.data.post_id) ? ${b
 export const facebookPromptExpr = [
   `' You can draft posts for the business Facebook Page with ${FACEBOOK_TOOLS[0]}. You never publish: after you draft, the system texts the exact draft to the person, and only their reply ${APPROVAL_WORD} publishes it. After drafting, answer in one short sentence and do not repeat the caption. Never say a post was published.'`,
   `($exists($draft.sk) ? ' There is a pending draft: ' & $draft.payload.M.caption.S & ' (' & $string($count([$draft.payload.M.media.L])) & ' photos). Change it with ${FACEBOOK_TOOLS[0]}, or discard it with ${FACEBOOK_TOOLS[1]} if they no longer want it.' : '')`,
-  `($count($media) > 0 ? ' This message came with ' & $string($count($media)) & ' photos.' : '')`,
+  `($count($media) > 0 ? ($mediaIsRecent ? ' They sent ' & $string($count($media)) & ' photos in a recent message; those are the photos available for the draft.' : ' This message came with ' & $string($count($media)) & ' photos.') : ' No photos are available for a draft.')`,
 ].join(' & ');
 /** The user message for the model: the text, plus the photos when their links were minted. */
 export const contentExpr = "($count($imageLinks) > 0 ? [$append([{ 'type': 'input_text', 'text': $text }], [$imageLinks.{ 'type': 'input_image', 'image_url': $ }])] : $text)";
@@ -78,6 +86,8 @@ export const contentExpr = "($count($imageLinks) > 0 ? [$append([{ 'type': 'inpu
 // ---- Shared pieces -----------------------------------------------------------
 
 const rowKey = (row: string) => ({ tenantId: { S: q(`${row}.tenantId.S`) }, sk: { S: q(`${row}.sk.S`) } });
+/** The person's remembered photos: one row, overwritten, not an action. */
+const recentKey = { tenantId: { S: q('$tenant.tenantId.S') }, sk: { S: q("$approver & '#media'") } };
 
 /** The person's pending, unexpired draft, newest first. Generic integration: the optimized one has no Query. */
 const findPending = (refs: FacebookPostRefs) => ({
@@ -145,9 +155,24 @@ export function facebookApprovalStates(refs: FacebookPostRefs, send: Send, toMod
 
   return {
     FindDraft: { ...findPending(refs), Assign: { draft: q(pendingExpr('$states.result')) }, Output: q('$states.input'), Next: 'IsApproval' },
-    IsApproval: { Type: 'Choice', Choices: [{ Condition: q(isApprovalExpr), Next: 'Lock' }, { Condition: q('$count($media) > 0'), Next: 'ModelLinks' }], Default: toModel },
+    IsApproval: { Type: 'Choice', Choices: [{ Condition: q(isApprovalExpr), Next: 'Lock' }, { Condition: q('$count($media) > 0'), Next: 'RememberMedia' }], Default: 'RecentMedia' },
+    // This message's photos, kept for the texts that follow. A failure here costs only that.
+    RememberMedia: {
+      Type: 'Task', Resource: 'arn:aws:states:::dynamodb:putItem',
+      Arguments: { TableName: refs.actionsTable, Item: { ...recentKey, media: { L: q('$media') }, updatedAt: { S: q('$now()') }, expiresAt: { N: q(`$string(${epoch} + ${RECENT_MEDIA_HOURS} * 3600)`) } } },
+      Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: 'ModelLinks' }],
+      Output: q('$states.input'), Next: 'ModelLinks',
+    },
     // The model sees the photos it is asked to caption. Without the links the turn still runs, on the text alone.
     ModelLinks: { ...mintLinks(refs, '$media', 'ModelLink'), Assign: { imageLinks: q('$states.result') }, Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: toModel }], Output: q('$states.input'), Next: toModel },
+    // No photos on this text: the ones from a recent text, if any (the TTL deletes the row late; check the time).
+    RecentMedia: {
+      Type: 'Task', Resource: 'arn:aws:states:::dynamodb:getItem',
+      Arguments: { TableName: refs.actionsTable, Key: recentKey },
+      Assign: { media: q(`$exists($states.result.Item) and $number($states.result.Item.expiresAt.N) > ${epoch} ? [$states.result.Item.media.L] : []`), mediaIsRecent: q(`$exists($states.result.Item) and $number($states.result.Item.expiresAt.N) > ${epoch}`) },
+      Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: toModel }],
+      Output: q('$states.input'), Next: toModel,
+    },
 
     // pending -> executing, only on the revision they were shown and only
     // once: a second POST, or one that crossed a revision, finds no pending
@@ -193,7 +218,7 @@ export function facebookApprovalStates(refs: FacebookPostRefs, send: Send, toMod
 export function facebookToolRunners(refs: FacebookPostRefs) {
   const out = (value: string) => q(`{ 'call_id': $callId, 'output': $string(${value}) }`);
   const failed = [{ ErrorEquals: ['States.ALL'], Next: 'Failed' }];
-  const drafted = "{ 'ok': true, 'photos_on_draft': $count($next), 'note': 'The system now texts the exact draft to the person. Do not repeat the caption. Do not say it was posted.' }";
+  const drafted = "{ 'ok': true, 'photos_on_draft': $count($next), 'note': ($count($next) = 0 ? 'The draft has NO photos. Tell the person that, and that they can text a photo to add. ' : 'The draft has ' & $string($count($next)) & ' photos. ') & 'The system now texts the exact draft to the person. Do not repeat the caption. Do not say it was posted.' }";
   // Assigned in its own state: a state's Output cannot read what the same state assigns.
   const payload = { M: { caption: { S: q('$a.caption') }, media: { L: q('$next') } } };
 

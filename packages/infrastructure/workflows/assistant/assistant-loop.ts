@@ -90,7 +90,7 @@ export const ASSISTANT_TOOLS = {
       type: 'object',
       properties: {
         caption: { type: 'string', description: 'The full text of the post, as it should appear on the Page' },
-        photos: { type: 'string', enum: ['keep', 'use_new', 'add_new', 'none'], description: 'keep: the photos already on the draft. use_new: only the photos sent with this message. add_new: the photos on the draft plus the ones sent with this message. none: a post with no photos.' },
+        photos: { type: 'string', enum: ['keep', 'use_new', 'add_new', 'none'], description: 'keep: the photos already on the draft. use_new: only the photos the person sent, with this message or a recent one. add_new: the photos on the draft plus the ones they sent. none: a post with no photos. The result says how many photos the draft has; tell the person if it is zero.' },
       },
       required: ['caption', 'photos'], additionalProperties: false,
     },
