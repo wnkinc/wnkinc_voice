@@ -2,7 +2,7 @@
 import { ACTION_APPROVAL_WORDS, ASSISTANT_TOOL_NAMES } from '@wnk/shared';
 import { describe, expect, it } from 'vitest';
 import { TOOL_NAMES } from '../src/assistant/catalog.js';
-import { APPROVAL_WORD, FACEBOOK_TOOLS, allowedTools, draftMessage, facebookOn, facebookPrompt, isApproval, modelContent, nextMedia, postId } from '../src/sms/facebook.js';
+import { APPROVAL_WORD, FACEBOOK_TOOLS, allowedTools, draftMessage, facebookOn, facebookPrompt, isApproval, modelContent, nextMedia, postId, postLink } from '../src/sms/facebook.js';
 import { mediaFromSms, parseForm, textOrPhotos } from '../src/sms/inbound.js';
 import type { DraftRow } from '../src/types.js';
 
@@ -82,6 +82,10 @@ describe('the draft', () => {
   it('reads the post id from either tool shape', () => {
     expect(postId({ data: { id: 'photo1', post_id: 'page_post1' } })).toBe('page_post1');
     expect(postId({ data: { id: 'page_post2' } })).toBe('page_post2');
+  });
+  it('texts the /posts/ permalink shape the Facebook app opens, not the bare page_post id', () => {
+    expect(postLink('42', '42_777')).toBe('https://www.facebook.com/42/posts/777');
+    expect(postLink('42', '777')).toBe('https://www.facebook.com/42/posts/777');
   });
   it('gives the model the photos when their links were minted, the text alone otherwise', () => {
     expect(modelContent('post this', [])).toBe('post this');

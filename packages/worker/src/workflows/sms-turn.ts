@@ -18,7 +18,7 @@
 import { proxyActivities } from '@temporalio/workflow';
 import type * as activities from '../activities/index.js';
 import { systemPrompt } from '../assistant/catalog.js';
-import { APPROVAL_WORD, FACEBOOK_VERSION, allowedTools, draftMessage, facebookOn, facebookPrompt, isApproval, modelContent, postId } from '../sms/facebook.js';
+import { APPROVAL_WORD, FACEBOOK_VERSION, allowedTools, draftMessage, facebookOn, facebookPrompt, isApproval, modelContent, postId, postLink } from '../sms/facebook.js';
 import { mediaFromSms, textOrPhotos, type Sms } from '../sms/inbound.js';
 import type { Photo } from '../types.js';
 import { orElse, runAssistantLoop, sessionDay } from './loop.js';
@@ -128,7 +128,7 @@ async function publishDraft(tenantId: string, tenantPhone: string, pageId: strin
   if (posted.successful === true) {
     const id = postId(posted) ?? '';
     await ledger.markCompleted(tenantId, draft.sk, id);
-    await send(`Posted to ${pageName}: https://www.facebook.com/${id}`);
+    await send(`Posted to ${pageName}: ${postLink(pageId, id)}`);
     return 'posted';
   }
   await ledger.markFailed(tenantId, draft.sk, String(posted.error ?? 'rejected'));

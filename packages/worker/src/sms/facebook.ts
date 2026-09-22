@@ -76,6 +76,15 @@ export function postId(body: { data?: { post_id?: string; id?: string } }): stri
   return body.data?.post_id ?? body.data?.id;
 }
 
+/**
+ * The link texted after a post. Facebook answers `<pageId>_<postId>`; the bare `facebook.com/<that>` form
+ * redirects on the web but the Facebook app cannot resolve it ("This content isn't available"), so the
+ * link is the `/posts/` permalink shape the app opens.
+ */
+export function postLink(pageId: string, id: string): string {
+  return `https://www.facebook.com/${pageId}/posts/${id.split('_').pop()}`;
+}
+
 /** The user message for the model: the text, plus the photos when their links were minted. */
 export function modelContent(text: string, imageLinks: string[]): string | { type: string; text?: string; image_url?: string }[] {
   if (imageLinks.length === 0) return text;
