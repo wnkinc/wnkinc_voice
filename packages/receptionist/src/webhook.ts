@@ -2,8 +2,9 @@
  * The verifier: the one piece of the call path that must be code. OpenAI signs
  * each webhook with an HMAC over the raw body; no managed integration computes
  * an HMAC and no API Gateway authorizer can see the body. This function checks
- * the signature and starts the accept workflow (voice stack) with the body.
- * Nothing else: no tenant logic, no SDKs beyond the runtime's AWS SDK.
+ * the signature and hands the body to the accept function (accept.ts),
+ * invoked asynchronously so OpenAI gets its 200 at once. Nothing else: no
+ * tenant logic, no SDKs beyond the runtime's AWS SDK.
  *
  * Standard Webhooks scheme: `webhook-signature: v1,<base64 HMAC-SHA256 of
  * "<id>.<timestamp>.<body>">` (several space-separated during rotation), key =
@@ -11,7 +12,7 @@
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
+import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 
 const TOLERANCE_S = 300;
@@ -34,7 +35,7 @@ export function verifySignature(secret: string, body: string, headers: Record<st
 
 export interface VerifierDeps {
   secret: () => Promise<string>;
-  /** Start the accept workflow with the verified body. */
+  /** Hand the verified body to accept. */
   start: (body: string) => Promise<void>;
   now?: () => number;
 }
@@ -61,7 +62,7 @@ const env = (name: string): string => {
   return v;
 };
 let secretPromise: Promise<string> | undefined;
-const sfn = new SFNClient({});
+const lambda = new LambdaClient({});
 export const handler = createVerifier({
   secret: () => (secretPromise ??= new SecretsManagerClient({}).send(new GetSecretValueCommand({ SecretId: env('OPENAI_SECRET_ARN') }))
     .then((r) => {
@@ -70,5 +71,5 @@ export const handler = createVerifier({
       return s;
     })
     .catch((err) => { secretPromise = undefined; throw err; })),
-  start: async (body) => { await sfn.send(new StartExecutionCommand({ stateMachineArn: env('ACCEPT_WORKFLOW_ARN'), input: body })); },
+  start: async (body) => { await lambda.send(new InvokeCommand({ FunctionName: env('ACCEPT_FUNCTION_NAME'), InvocationType: 'Event', Payload: Buffer.from(body) })); },
 });

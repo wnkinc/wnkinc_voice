@@ -34,10 +34,10 @@ goals that decide how to change it.
                                   realtime.call.incoming webhook
                                                     ▼
                      API Gateway (HTTP) ──▶ verifier Lambda (signature only)
-                                                    │ StartExecution
-                     accept workflow (Step Functions, no code): SIP headers → called number →
-                       tenant row · claim call_id · POST /v1/realtime/calls/{id}/accept {model, voice}
-                       · caller recognition (CRM note, memory) · job to SQS
+                                                    │ async invoke
+                     accept Lambda (plain code): SIP headers → called number →
+                       tenant row · claim call_id · caller recognition while it rings (CRM note, memory)
+                       · POST /v1/realtime/calls/{id}/accept {model, voice} · job to SQS
                                                     │ SQS
                                                     ▼
                               Session Lambda (SQS · one call per invocation)
@@ -60,8 +60,8 @@ Three phases: get the call in safely (verify, accept), run the receptionist (ses
 the after-call work (memory and usage always; the rest per tenant, see section 2).
 
 1. **Verify** — the verifier Lambda checks the Standard-Webhooks HMAC over the raw body
-   (bad → 400) and starts the accept workflow with the body; it answers 200 at once.
-2. **Route** — the accept workflow parses `To`/`Diversion`/`From` from the SIP headers; the
+   (bad → 400) and hands the body to the accept Lambda asynchronously; it answers 200 at once.
+2. **Route** — accept (`packages/receptionist/src/accept.ts`) parses `To`/`Diversion`/`From` from the SIP headers; the
    Tenants table is keyed by called number. Unknown number: reject 404 and fail (alarm);
    inactive tenant: reject 603. There is no default tenant.
 3. **Claim** — a conditional `PutItem` on the Calls table makes webhook retries idempotent
@@ -184,11 +184,11 @@ input, and that selection picks the credential:
 - **Receptionist**: the webhook resolves the tenant from the signed called number; the two
   tools (`record_lead`, `notify_owner`) run in-process with that call context and are one write or
   one publish each. Everything multi-step is a consumer of the events they publish.
-- **Tenant automations** (CRM sync, lead email, owner alert): no code, no model. Each is that
-  tenant's own state machine in that tenant's stack, started by a rule that matches only events
+- **Tenant automations** (CRM sync, lead email, owner alert): no model. Each is a workflow on the
+  worker, started for that tenant by a rule in that tenant's stack that matches only events
   carrying the tenant's id (published by our own session Lambda). It reads the tenant row by the
-  event's phone number; every Composio HTTP call names that tenant as Composio's user, and the
-  owner alert delivers to the owner listed on the row.
+  event's phone number; every Composio call names that tenant as Composio's user, and the owner
+  alert delivers to the owner listed on the row.
 - **Assistant**: the People table maps the Telegram sender id, or the texting phone number, to a
   tenant; the loop runs each tool the model asks for through Composio naming that tenant, and only
   tools on the tenant row's list. The model's tools cannot reach another tenant's SaaS because no
@@ -262,8 +262,9 @@ in the definitions, selected by the row's `crm.type`. Prove a tenant's connectio
 
 Every Lambda runs with X-Ray active, and the trace is carried by hand across the seams X-Ray
 doesn't cross on its own: the SQS message to the session Lambda (`AWSTraceHeader`) and the
-EventBridge event (`TraceHeader`). Every state machine runs with tracing on, so a trace started at
-the webhook continues through accept, the session Lambda, the bus event, and the workflow it starts.
+EventBridge event (`TraceHeader`), so a trace started at the webhook continues through accept, the
+session Lambda, and the bus event. A workflow on the worker is its own record: every activity, its
+input and its result, in the workflow history (`npm run temporal -- workflow show --workflow-id <id>`).
 Every log line carries `traceId`, `tenantId`, and `callId` where known, so one Logs Insights query
 across the log groups reconstructs a call:
 
@@ -274,10 +275,10 @@ fields @timestamp, @log, msg, tenantId, callId
 ```
 
 Every stack's alarms page one SNS topic (`<prefix>-alarms`): dead-letter queues holding anything,
-workflow executions that failed, and Lambda errors. Who it pages is operator data, subscribed once
-out of band (see Setup). Failures after retries land in a dead-letter queue (session jobs, workflow
-starts), and each queue has an alarm. A workflow execution that fails alarms on the state machine's
-failed-executions metric.
+workflows that failed, and Lambda errors. Who it pages is operator data, subscribed once out of
+band (see Setup). Failures after retries land in a dead-letter queue (session jobs, accept, workflow
+starts), and each queue has an alarm. A workflow that fails alarms from the worker's own log line
+(see The Temporal worker, below).
 
 Delivery is at-least-once everywhere (EventBridge, Lambda async retries, SDK retries), so every
 event consumer with an external side effect checks a once-marker on the call row before acting
@@ -300,7 +301,7 @@ config drift between file and row, secrets, services, owner alert channel, Gmail
 
 **Cost and scale.**
 
-- Everything (HTTP API, two Lambdas, Step Functions, DynamoDB, SQS, EventBridge) is on-demand and ~$0 idle;
+- Everything (HTTP API, the Lambdas, the worker, DynamoDB, SQS, EventBridge, Temporal Cloud) is on-demand and ~$0 idle;
   per call you pay OpenAI Realtime usage plus Lambda duration for the call's length
   (a 10-minute call at 512 MB is well under a cent).
 - Each call is its own invocation with its own 512 MB — the session Lambda holds a socket and
@@ -400,8 +401,8 @@ Then create `tenants/<tenantId>.ts` (copy `tenants/wnk.ts`), add it to `tenants/
 the `new-tenant` skill.
 
 Call the number. With Twilio Elastic SIP Trunking the `To` header carries the OpenAI
-project id and the dialed number arrives in `Diversion`; the accept workflow's SIP parsing
-(`SIP_CALLED_HEADERS` in `packages/infrastructure/workflows/receptionist/accept.ts`) handles that. If another
+project id and the dialed number arrives in `Diversion`; accept's SIP parsing
+(`SIP_CALLED_HEADERS` in `packages/receptionist/src/accept.ts`) handles that. If another
 carrier puts it elsewhere, add the header name there.
 
 ### 5. Telegram bot
@@ -492,27 +493,27 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 
 | Path | What |
 |---|---|
-| `packages/receptionist/src/webhook.ts` | Lambda (~40 lines, stdlib): verifies the OpenAI webhook signature and starts the accept workflow. The one piece of the call path that must be code |
+| `packages/receptionist/src/webhook.ts` | Lambda (~40 lines, stdlib): verifies the OpenAI webhook signature and hands the body to accept |
+| `packages/receptionist/src/accept.ts` | Lambda: called number -> tenant (the only place the tenant is chosen), the claim, caller recognition under a ringing budget, the accept, the session job. Plain code, since it answers while the caller hears ringing |
 | `packages/receptionist/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
 | `packages/receptionist/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/receptionist/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload. To add a tool: a zod args schema, a handler, a `tool({...})` entry, then its name in a tenant's `tools`. Tools that need durability publish an event and return; a workflow consumes it |
 | `packages/worker/` | The Temporal Worker: `workflows/` (deterministic: the shared loop, the SMS and Telegram turns, browser login, the four tenant automations, both canaries), `activities/` (the side effects, each taking its tenant id), `assistant/catalog.ts` (the tool catalog and prompts), `automations/catalog.ts` (the automations and their rules), `sms/` (inbound parsing and the Facebook ledger rules), `handler.ts` (Lambda), `starter.ts` (the front doors), `service.ts` (the Fargate fallback), `version.ts` (deployment name, build id, task queue) |
-| `packages/infrastructure/workflows/` | The one Step Functions definition still on it: `receptionist/accept.ts`: a function from resource names to the JSONata definition object, no CDK imports, its expressions exported for unit tests. `asl.ts` is the grammar they share (`q`, `httpTask`, `composio` whose every call names the tenant, the once-marker pair). `automation.ts` is the descriptor the four automations export |
-| `packages/media-link/` | The one Lambda on the assistant path: a texted photo's Twilio ids -> the signed link Twilio redirects to (about four hours, fetchable by anyone). Code because Step Functions fails an HTTP task on a 307 and keeps the Location header from the workflow. Takes ids, never a URL; refuses a photo not texted to the tenant's number it is given. Moves no bytes, stores nothing |
-| `packages/infrastructure/workflows/assistant/facebook-post.ts` | Facebook posts over SMS, and the pattern for every action that reaches a customer irreversibly: the model drafts into the Actions ledger (`ActionSchema` in `@wnk/shared`), the workflow texts the draft word for word from the row, the person's reply POST (matched before the model runs, on the revision they were shown) publishes. The model has no publish tool; the definitions test holds that |
+| `packages/media-link/` | The one Lambda on the assistant path: a texted photo's Twilio ids -> the signed link Twilio redirects to (about four hours, fetchable by anyone). Code because fails an HTTP task on a 307 and keeps the Location header from the workflow. Takes ids, never a URL; refuses a photo not texted to the tenant's number it is given. Moves no bytes, stores nothing |
+| `packages/worker/src/sms/facebook.ts` | Facebook posts over SMS, and the pattern for every action that reaches a customer irreversibly: the model drafts into the Actions ledger, the workflow shows the draft from the row, the person's exact word approves, the workflow executes once. `packages/worker/test/sms-turn.test.ts` holds the split |
 | `packages/telegram-mcp/` | A tenant's own Telegram account (a user login, not the assistant's bot) as a remote MCP server for their ChatGPT or Claude: the pinned chigwell/telegram-mcp engine in a container Lambda behind a secret URL. `server.py` only loads the tenant's secrets and removes the tools Lambda can't serve. Onboarding in its README |
 | `tenants/<id>.ts`, `tenants/index.ts` | What that tenant runs: its automations on the bus, and `telegramMcp` for the connector. The registry is one line per tenant. Tracked, unlike the rows |
 | `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant with automations, from its file: rules filtered on the tenant id, targeting the worker's automation starter |
 | `packages/infrastructure/stacks/worker-stack.ts` | The Temporal worker (a container Lambda Temporal Cloud invokes), its secret and invocation role, the three front doors (SMS, Telegram, automations), the platform's call.ended rule, the failure alarms, the Fargate fallback at zero |
 | `packages/infrastructure/stacks/telegram-mcp-stack.ts` | One stack per tenant with `telegramMcp`: the connector Lambda, its Function URL, a role that reads only that tenant's secret. Takes no platform handles |
 | `packages/infrastructure/stacks/runtime-stack.ts` | The Telegram, Twilio and Browserbase secrets and the media link resolver, exposed to the worker stack |
-| `packages/infrastructure/stacks/voice-stack.ts`, `memory-stack.ts` | The call path (API, two Lambdas, accept workflow, tables, bus, queues, the OpenAI and Composio Connections, alarm topic); caller memory |
-| `packages/infrastructure/bin/app.ts`, `infra_utils/` | Stack wiring; alarm and state-machine presets |
+| `packages/infrastructure/stacks/voice-stack.ts`, `memory-stack.ts` | The call path (API, the verifier, accept and session Lambdas, tables, bus, queues, the OpenAI and Composio secrets, alarm topic); caller memory |
+| `packages/infrastructure/bin/app.ts`, `infra_utils/` | Stack wiring; alarm presets |
 | `packages/shared/src/` | `types.ts` (`TenantConfig` zod schema, records, events), `store.ts` (DynamoDB behind one `Store` interface plus an in-memory version; no leads table, the CRM holds the lead and the call row is the audit), `events.ts` (EventBridge publisher), `config.ts` (env, secrets, OpenAI client, logger), `composio.ts` (Composio SDK, scripts only) |
 | `scripts/` | `seed-tenant.ts` (row upsert), `check-tenant.ts` (pre-flight), `connect-composio.mts` (consent links), `telegram-webhook.mts` and `twilio-webhook.mts` (point each channel at the platform), and the `test-*.mts` provers |
 | `tenants/example.json` | Example tenant config |
 | `ops/` | Operator data applied by hand from the admin profile: the `WnkOperate` policy the coding agent runs under |
-| `packages/*/test/` | vitest suites. The infrastructure one synthesizes every state machine, checks the platform invariants, validates each with the service, and compares each to its file under `test/snapshots/`: a change to a shared definition shows as a diff on every tenant machine it alters. `npm run deploy` runs the tests first; `npm run test:update` records intended changes |
+| `packages/*/test/` | vitest suites. The worker's run each workflow through a real Worker on Temporal's test server with recorded fakes; the infrastructure ones hold the stacks' tenancy guarantees (a tenant's rules name it alone, the worker's grants and the invocation role's trust) |
 
 ## Roadmap
 

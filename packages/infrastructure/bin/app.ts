@@ -26,7 +26,6 @@ const platform = {
   tenantsTable: voice.tenantsTable,
   callsTable: voice.callsTable,
   usageTable: voice.usageTable,
-  composioConnection: voice.composioConnection,
   alarmTopic: voice.alarmTopic,
   callerMemory,
 };

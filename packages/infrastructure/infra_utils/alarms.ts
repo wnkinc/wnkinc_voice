@@ -4,7 +4,6 @@ import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import type * as lambda from 'aws-cdk-lib/aws-lambda';
 import type * as sns from 'aws-cdk-lib/aws-sns';
 import type * as sqs from 'aws-cdk-lib/aws-sqs';
-import type * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import type { Construct } from 'constructs';
 
 /**
@@ -42,15 +41,3 @@ export function errorAlarm(scope: Construct, id: string, fn: lambda.IFunction, t
 }
 
 /** Pages when a workflow execution fails (its input is in the execution history for replay). */
-export function failedExecutionsAlarm(scope: Construct, id: string, machine: sfn.IStateMachine, topic: sns.ITopic, what: string): cloudwatch.Alarm {
-  const alarm = new cloudwatch.Alarm(scope, id, {
-    alarmDescription: `${what}: workflow executions failed`,
-    metric: machine.metricFailed({ period: cdk.Duration.minutes(5), statistic: 'Sum' }),
-    threshold: 1,
-    comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-    evaluationPeriods: 1,
-    treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-  });
-  alarm.addAlarmAction(new cwActions.SnsAction(topic));
-  return alarm;
-}

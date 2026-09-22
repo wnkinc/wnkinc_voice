@@ -13,11 +13,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
-import { dlqAlarm, errorAlarm, failedExecutionsAlarm } from '../infra_utils/alarms.js';
-import { COMPOSIO_API, OPENAI_API } from '../workflows/asl.js';
-import { expressNoData, grantHttp } from '../infra_utils/state-machine.js';
-import { acceptDefinition } from '../workflows/receptionist/accept.js';
+import { dlqAlarm, errorAlarm } from '../infra_utils/alarms.js';
 import { Construct } from 'constructs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,10 +48,6 @@ export class VoiceStack extends cdk.Stack {
   readonly openaiSecret: secretsmanager.Secret;
   /** Composio project API key ({"COMPOSIO_API_KEY": ...}): the SaaS credential broker every tenant's Gmail/HubSpot goes through. */
   readonly composioSecret: secretsmanager.Secret;
-  /** EventBridge Connection carrying that key; every Composio HTTP task in every stack authenticates through it. */
-  readonly composioConnection: events.Connection;
-  /** EventBridge Connection carrying the OpenAI key; the accept workflow and the assistant loop (runtime stack) call OpenAI through it. */
-  readonly openaiConnection: events.Connection;
   /** Every alarm in every stack pages this topic. */
   readonly alarmTopic: sns.Topic;
   /** Channel identity -> tenant + person: `telegram:<id>` or `sms:<e164>`. Seeded from each tenant's `people`. */
@@ -190,7 +182,7 @@ export class VoiceStack extends cdk.Stack {
     // and no API Gateway authorizer can see. It checks the signature and starts
     // the accept workflow; stdlib crypto plus the runtime's AWS SDK, no bundle.
     const webhookFn = fn('webhook', 'webhook.ts', {
-      description: 'Verifies the OpenAI webhook signature and starts the accept workflow',
+      description: 'Verifies the OpenAI webhook signature and hands the body to accept',
       timeout: cdk.Duration.seconds(10),
     });
     this.openaiSecret.grantRead(webhookFn);
@@ -215,48 +207,39 @@ export class VoiceStack extends cdk.Stack {
     this.composioSecret = new secretsmanager.Secret(this, 'ComposioSecret', {
       description: 'Composio project API key ({"COMPOSIO_API_KEY": ...})',
     });
-    // ---- Accept workflow (workflows/receptionist/accept.ts): verified webhook -> tenant ->
-    // claim -> accept -> recognize -> enqueue. Express, execution data not
-    // logged. The API keys ride in EventBridge Connections (resolved from the
-    // secrets when the Connection is created or changed; CloudFormation does
-    // not re-resolve on a rotation alone, so also `aws events update-connection`).
-    this.composioConnection = new events.Connection(this, 'ComposioConnection', {
-      description: 'Composio API key for the platform workflows (voice + runtime stacks)',
-      authorization: events.Authorization.apiKey('x-api-key', this.composioSecret.secretValueFromJson('COMPOSIO_API_KEY')),
+
+    // ---- Accept (packages/receptionist/src/accept.ts): verified webhook -> tenant ->
+    // claim -> recognize -> accept -> enqueue. Plain code, invoked asynchronously
+    // by the verifier (so OpenAI gets its 200 at once): a request handler on the
+    // call path, where a cold orchestrator would ring in the caller's ear. A
+    // failed attempt is retried by Lambda (the claim is idempotent) and then
+    // dead-letters and alarms.
+    const acceptDlq = new sqs.Queue(this, 'AcceptDlq', { retentionPeriod: cdk.Duration.days(14) });
+    const acceptFn = fn('accept', 'accept.ts', {
+      description: 'Called number -> tenant, claim, caller recognition while it rings, accept, the session job',
+      timeout: cdk.Duration.seconds(30),
+      env: {
+        SESSION_QUEUE_URL: sessionQueue.queueUrl,
+        COMPOSIO_SECRET_ARN: this.composioSecret.secretArn,
+        ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
+      },
+      deadLetterQueue: acceptDlq,
     });
-    const openaiConnection = new events.Connection(this, 'OpenAIConnection', {
-      description: 'OpenAI API key for the accept workflow and the assistant loop',
-      authorization: events.Authorization.apiKey('Authorization', cdk.SecretValue.unsafePlainText(`Bearer ${this.openaiSecret.secretValueFromJson('OPENAI_API_KEY').unsafeUnwrap()}`)),
-    });
-    this.openaiConnection = openaiConnection;
-    const acceptWorkflow = new sfn.StateMachine(this, 'AcceptWorkflow', {
-      stateMachineName: `${prefix}-accept`,
-      tracingEnabled: true, // X-Ray: the workflow joins the trace the event carried
-      definitionBody: sfn.DefinitionBody.fromString(JSON.stringify(acceptDefinition({
-        tenantsTable: this.tenantsTable.tableName,
-        callsTable: this.callsTable.tableName,
-        sessionQueueUrl: sessionQueue.queueUrl,
-        openaiConnectionArn: openaiConnection.connectionArn,
-        composioConnectionArn: this.composioConnection.connectionArn,
-        memoryId: props.callerMemory?.memoryId,
-      }))),
-      timeout: cdk.Duration.minutes(2),
-      ...expressNoData(this, 'AcceptWorkflowLogs'),
-    });
-    this.tenantsTable.grantReadData(acceptWorkflow);
-    this.callsTable.grantReadWriteData(acceptWorkflow);
-    sessionQueue.grantSendMessages(acceptWorkflow);
-    grantHttp(acceptWorkflow, [this.composioConnection, openaiConnection], [`${COMPOSIO_API}*`, `${OPENAI_API}*`]);
+    this.openaiSecret.grantRead(acceptFn);
+    this.composioSecret.grantRead(acceptFn);
+    this.tenantsTable.grantReadData(acceptFn);
+    this.callsTable.grantReadWriteData(acceptFn);
+    sessionQueue.grantSendMessages(acceptFn);
     if (props.callerMemory) {
-      acceptWorkflow.addToRolePolicy(new iam.PolicyStatement({
+      acceptFn.addToRolePolicy(new iam.PolicyStatement({
         actions: MEMORY_USE_ACTIONS,
         resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`],
       }));
     }
-    webhookFn.addEnvironment('ACCEPT_WORKFLOW_ARN', acceptWorkflow.stateMachineArn);
-    acceptWorkflow.grantStartExecution(webhookFn);
-    failedExecutionsAlarm(this, 'AcceptWorkflowFailed', acceptWorkflow, this.alarmTopic, 'Voice accept');
-
+    webhookFn.addEnvironment('ACCEPT_FUNCTION_NAME', acceptFn.functionName);
+    acceptFn.grantInvoke(webhookFn);
+    errorAlarm(this, 'AcceptErrors', acceptFn, this.alarmTopic, 'Voice accept');
+    dlqAlarm(this, 'AcceptDlqAlarm', acceptDlq, this.alarmTopic, 'Voice accept: a call could not be accepted after retries');
 
     // ---- Event routing --------------------------------------------------------
 
