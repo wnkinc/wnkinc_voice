@@ -347,6 +347,15 @@ Outputs (printed by `npm run deploy`, or `aws cloudformation describe-stacks --s
 
 Optional config: `sessionMaxConcurrency` (default 20) — ceiling on simultaneous calls, and therefore on concurrent OpenAI Realtime sessions.
 
+**Dropping a cross-stack import.** When a stack stops importing another stack's export (a table,
+a Connection), deploy the consumer alone first, then the producer: CloudFormation refuses to delete
+an export a deployed stack still imports, and rolls the producer back.
+
+```bash
+npm run deploy -- wnk-runtime-dev --exclusively   # the consumer, alone
+npm run deploy -- wnk-voice-dev                   # then the producer may drop the export
+```
+
 ### 1. Configure secrets
 
 The stack creates the secret with placeholder values; nothing works until you set real ones.
