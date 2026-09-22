@@ -814,7 +814,7 @@
         "history": [],
         "memories": [],
         "text": "{% $trim($sms.Body) != '' ? $sms.Body : 'Sent ' & $sms.NumMedia & ' photos with no text.' %}",
-        "systemPrompt": "{% 'You are My Assistant for ' & $tenant.business.M.name.S & ', texting with ' & $person.name.S & ' (' & $person.role.S & ') who works there. ' & ($exists($tenant.business.M.description.S) ? 'About the business: ' & $tenant.business.M.description.S & ' ' : '') & ($exists($tenant.business.M.services.L) and $count($tenant.business.M.services.L) > 0 ? 'Services: ' & $join($tenant.business.M.services.L.S, ', ') & '. ' : '') & ($exists($tenant.business.M.hours.S) ? 'Hours: ' & $tenant.business.M.hours.S & '. ' : '') & ($count($tenant.assistant.M.tools.L) > 0 ? 'Your tools reach the business systems the owner connected. Use them to look things up or record things; say what you did and what you found. Never invent records. ' : 'You have no tools connected for this business. ') & 'This is a text message conversation (SMS): be brief and plain, no markdown, no lists. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 1000 characters.' & ($facebookOn ? ' You can draft posts for the business Facebook Page with draft_facebook_post. You never publish: after you draft, the system texts the exact draft to the person, and only their reply POST publishes it. After drafting, answer in one short sentence and do not repeat the caption. Never say a post was published.' & ($exists($draft.sk) ? ' There is a pending draft: ' & $draft.payload.M.caption.S & ' (' & $string($count([$draft.payload.M.media.L])) & ' photos). Change it with draft_facebook_post, or discard it with cancel_facebook_draft if they no longer want it.' : '') & ($count($media) > 0 ? ($mediaIsRecent ? ' They sent ' & $string($count($media)) & ' photos in a recent message; those are the photos available for the draft.' : ' This message came with ' & $string($count($media)) & ' photos.') : ' No photos are available for a draft.') : '') %}",
+        "systemPrompt": "{% 'You are My Assistant for ' & $tenant.business.M.name.S & ', texting with ' & $person.name.S & ' (' & $person.role.S & ') who works there. ' & ($exists($tenant.business.M.description.S) ? 'About the business: ' & $tenant.business.M.description.S & ' ' : '') & ($exists($tenant.business.M.services.L) and $count($tenant.business.M.services.L) > 0 ? 'Services: ' & $join($tenant.business.M.services.L.S, ', ') & '. ' : '') & ($exists($tenant.business.M.hours.S) ? 'Hours: ' & $tenant.business.M.hours.S & '. ' : '') & ($count($tenant.assistant.M.tools.L) > 0 ? 'Your tools reach the business systems the owner connected. Use them to look things up or record things; say what you did and what you found. Never invent records. ' : 'You have no tools connected for this business. ') & 'This is a text message conversation (SMS): be brief and plain, no markdown, no lists. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 1000 characters.' & ($facebookOn ? ' You can draft posts for the business Facebook Page with draft_facebook_post. You never publish: the system shows the person the exact draft and how to approve it, and only their approval publishes it. After drafting, your reply is the one line shown above that draft: say what you did or changed, in one short sentence. Do not repeat the caption and do not explain how to approve. Never say a post was published.' & ($exists($draft.sk) ? ' There is a pending draft: ' & $draft.payload.M.caption.S & ' (' & $string($count([$draft.payload.M.media.L])) & ' photos). Change it with draft_facebook_post, or discard it with cancel_facebook_draft if they no longer want it.' : '') & ($count($media) > 0 ? ($mediaIsRecent ? ' They sent ' & $string($count($media)) & ' photos in a recent message; those are the photos available for the draft.' : ' This message came with ' & $string($count($media)) & ' photos.') : ' No photos are available for a draft.') : '') %}",
         "actorId": "{% $tenant.tenantId.S & '_sms_' & $replace($sms.From, /[^0-9]/, '') %}",
         "sessionId": "{% 'sms-chat-' & $replace($sms.From, /[^0-9]/, '') & '-' & $fromMillis($millis() - ($exists($tenant.sessionDayOffsetMinutes.N) ? $number($tenant.sessionDayOffsetMinutes.N) : 600) * 60000, '[Y0001][M01][D01]') %}",
         "allowedTools": "{% [$tenant.assistant.M.tools.L.S[$facebookOn or $not($ in ['draft_facebook_post', 'cancel_facebook_draft'])]] %}"
@@ -934,7 +934,7 @@
           "Next": "GiveUp"
         }
       ],
-      "Default": "Reply"
+      "Default": "ShowDraft"
     },
     "RunTools": {
       "Type": "Map",
@@ -1214,7 +1214,7 @@
                 "Next": "Failed"
               }
             ],
-            "Output": "{% { 'call_id': $callId, 'output': $string({ 'ok': true, 'photos_on_draft': $count($next), 'note': ($count($next) = 0 ? 'The draft has NO photos. Tell the person that, and that they can text a photo to add. ' : 'The draft has ' & $string($count($next)) & ' photos. ') & 'The system now texts the exact draft to the person. Do not repeat the caption. Do not say it was posted.' }) } %}",
+            "Output": "{% { 'call_id': $callId, 'output': $string({ 'ok': true, 'photos_on_draft': $count($next), 'note': ($count($next) = 0 ? 'The draft has NO photos. Tell the person that, and that they can text a photo to add. ' : 'The draft has ' & $string($count($next)) & ' photos. ') & 'Your reply is shown as the line above the draft: one short sentence on what you did or changed. Do not repeat the caption, do not explain how to approve, do not say it was posted.' }) } %}",
             "End": true
           },
           "Draft_Revise": {
@@ -1271,7 +1271,7 @@
                 "Next": "Failed"
               }
             ],
-            "Output": "{% { 'call_id': $callId, 'output': $string({ 'ok': true, 'photos_on_draft': $count($next), 'note': ($count($next) = 0 ? 'The draft has NO photos. Tell the person that, and that they can text a photo to add. ' : 'The draft has ' & $string($count($next)) & ' photos. ') & 'The system now texts the exact draft to the person. Do not repeat the caption. Do not say it was posted.' }) } %}",
+            "Output": "{% { 'call_id': $callId, 'output': $string({ 'ok': true, 'photos_on_draft': $count($next), 'note': ($count($next) = 0 ? 'The draft has NO photos. Tell the person that, and that they can text a photo to add. ' : 'The draft has ' & $string($count($next)) & ' photos. ') & 'Your reply is shown as the line above the draft: one short sentence on what you did or changed. Do not repeat the caption, do not explain how to approve, do not say it was posted.' }) } %}",
             "End": true
           },
           "Run_cancel_facebook_draft": {
@@ -1435,39 +1435,6 @@
         "reply": "Sorry, I could not finish that. Try asking in a simpler way."
       },
       "Output": "{% $states.input %}",
-      "Next": "Reply"
-    },
-    "Reply": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::http:invoke",
-      "Arguments": {
-        "ApiEndpoint": "{% 'https://api.twilio.com/2010-04-01/Accounts/' & $sms.AccountSid & '/Messages.json' %}",
-        "Method": "POST",
-        "Authentication": {
-          "ConnectionArn": "arn:aws:events:us-west-2:123456789012:connection/placeholder/00000000-0000-0000-0000-000000000000"
-        },
-        "Headers": {
-          "content-type": "application/x-www-form-urlencoded"
-        },
-        "RequestBody": {
-          "To": "{% $sms.From %}",
-          "From": "{% $sms.To %}",
-          "Body": "{% $reply %}"
-        },
-        "Transform": {
-          "RequestBodyEncoding": "URL_ENCODED"
-        }
-      },
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "States.TaskFailed"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 1
-        }
-      ],
-      "Output": "{% $states.input %}",
       "Next": "ShowDraft"
     },
     "ShowDraft": {
@@ -1478,7 +1445,7 @@
           "Next": "FindUnshown"
         }
       ],
-      "Default": "SaveTurn"
+      "Default": "Reply"
     },
     "FindUnshown": {
       "Type": "Task",
@@ -1515,7 +1482,7 @@
             "States.ALL"
           ],
           "Output": "{% $states.input %}",
-          "Next": "SaveTurn"
+          "Next": "Reply"
         }
       ],
       "Output": "{% $states.input %}",
@@ -1529,7 +1496,7 @@
           "Next": "SendDraft"
         }
       ],
-      "Default": "SaveTurn"
+      "Default": "Reply"
     },
     "SendDraft": {
       "Type": "Task",
@@ -1546,7 +1513,7 @@
         "RequestBody": {
           "To": "{% $sms.From %}",
           "From": "{% $sms.To %}",
-          "Body": "{% 'Draft for the Facebook Page ' & $tenant.facebookPosts.M.pageName.S & ':\\n\\n' & $shown.payload.M.caption.S & '\\n\\n' & ($n := $count([$shown.payload.M.media.L]); $n = 0 ? 'No photos. ' : $n = 1 ? 'With the 1 photo you sent. ' : 'With the ' & $n & ' photos you sent. ') & 'Reply POST to publish it, or tell me what to change. Nothing is posted until you reply POST. This draft expires in 48 hours.' %}"
+          "Body": "{% $reply & '\n\n' & 'Draft for the Facebook Page ' & $tenant.facebookPosts.M.pageName.S & ':\\n\\n' & $shown.payload.M.caption.S & '\\n\\n' & ($n := $count([$shown.payload.M.media.L]); $n = 0 ? 'No photos. ' : $n = 1 ? 'With the 1 photo you sent. ' : 'With the ' & $n & ' photos you sent. ') & 'Reply POST to publish it, or tell me what to change. Nothing is posted until you reply POST. This draft expires in 48 hours.' %}"
         },
         "Transform": {
           "RequestBodyEncoding": "URL_ENCODED"
@@ -1601,6 +1568,39 @@
           ],
           "Output": "{% $states.input %}",
           "Next": "SaveTurn"
+        }
+      ],
+      "Output": "{% $states.input %}",
+      "Next": "SaveTurn"
+    },
+    "Reply": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "{% 'https://api.twilio.com/2010-04-01/Accounts/' & $sms.AccountSid & '/Messages.json' %}",
+        "Method": "POST",
+        "Authentication": {
+          "ConnectionArn": "arn:aws:events:us-west-2:123456789012:connection/placeholder/00000000-0000-0000-0000-000000000000"
+        },
+        "Headers": {
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        "RequestBody": {
+          "To": "{% $sms.From %}",
+          "From": "{% $sms.To %}",
+          "Body": "{% $reply %}"
+        },
+        "Transform": {
+          "RequestBodyEncoding": "URL_ENCODED"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 1
         }
       ],
       "Output": "{% $states.input %}",

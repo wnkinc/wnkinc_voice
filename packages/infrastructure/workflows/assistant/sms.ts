@@ -167,13 +167,14 @@ export function smsDefinition(refs: SmsRefs) {
         },
         Output: q('$states.input'), Next: assistantLoopStart(refs),
       },
-      ...assistantLoopStates(refs, 'Reply', fb ? { tools, runners: facebookToolRunners(fb), content: contentExpr } : {}),
-      // The prompt asks for far less than Twilio's limit.
-      Reply: sendText('$reply', fb ? 'ShowDraft' : afterReply),
+      ...assistantLoopStates(refs, fb ? 'ShowDraft' : 'Reply', fb ? { tools, runners: facebookToolRunners(fb), content: contentExpr } : {}),
+      // A new draft goes out under the model's line as one text, in place of the plain reply.
       ...(fb ? {
-        ShowDraft: { Type: 'Choice', Choices: [{ Condition: q('$facebookOn'), Next: 'FindUnshown' }], Default: afterReply },
-        ...facebookShowDraftStates(fb, sendText, afterReply),
+        ShowDraft: { Type: 'Choice', Choices: [{ Condition: q('$facebookOn'), Next: 'FindUnshown' }], Default: 'Reply' },
+        ...facebookShowDraftStates(fb, sendText, 'Reply', afterReply),
       } : {}),
+      // The prompt asks for far less than Twilio's limit.
+      Reply: sendText('$reply', afterReply),
       ...(save ? { SaveTurn: { ...save, Output: q('$states.input'), Next: 'Usage' } } : {}),
       Usage: {
         Type: 'Task', Resource: 'arn:aws:states:::dynamodb:putItem',

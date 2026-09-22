@@ -16,7 +16,8 @@
  *   - The model proposes. Its two tools write and discard `pending` rows and
  *     nothing else. It has no publish tool; none may be added.
  *   - The workflow shows. After the model's turn it texts the draft word for
- *     word from the row and records which revision the person was shown.
+ *     word from the row, under the model's one-line reply, in one text, and
+ *     records which revision the person was shown.
  *   - The person approves. Their whole message is the approval word, matched
  *     here before the model runs, on the revision they were shown.
  *   - The workflow executes. It locks the row (pending -> executing, on that
@@ -76,7 +77,7 @@ export const draftMessageExpr = (row: string) => [
 export const postIdExpr = (body: string) => `$exists(${body}.data.post_id) ? ${body}.data.post_id : ${body}.data.id`;
 /** What the model is told about drafting, and about the draft and photos in front of it. */
 export const facebookPromptExpr = [
-  `' You can draft posts for the business Facebook Page with ${FACEBOOK_TOOLS[0]}. You never publish: after you draft, the system texts the exact draft to the person, and only their reply ${APPROVAL_WORD} publishes it. After drafting, answer in one short sentence and do not repeat the caption. Never say a post was published.'`,
+  `' You can draft posts for the business Facebook Page with ${FACEBOOK_TOOLS[0]}. You never publish: the system shows the person the exact draft and how to approve it, and only their approval publishes it. After drafting, your reply is the one line shown above that draft: say what you did or changed, in one short sentence. Do not repeat the caption and do not explain how to approve. Never say a post was published.'`,
   `($exists($draft.sk) ? ' There is a pending draft: ' & $draft.payload.M.caption.S & ' (' & $string($count([$draft.payload.M.media.L])) & ' photos). Change it with ${FACEBOOK_TOOLS[0]}, or discard it with ${FACEBOOK_TOOLS[1]} if they no longer want it.' : '')`,
   `($count($media) > 0 ? ($mediaIsRecent ? ' They sent ' & $string($count($media)) & ' photos in a recent message; those are the photos available for the draft.' : ' This message came with ' & $string($count($media)) & ' photos.') : ' No photos are available for a draft.')`,
 ].join(' & ');
@@ -218,7 +219,7 @@ export function facebookApprovalStates(refs: FacebookPostRefs, send: Send, toMod
 export function facebookToolRunners(refs: FacebookPostRefs) {
   const out = (value: string) => q(`{ 'call_id': $callId, 'output': $string(${value}) }`);
   const failed = [{ ErrorEquals: ['States.ALL'], Next: 'Failed' }];
-  const drafted = "{ 'ok': true, 'photos_on_draft': $count($next), 'note': ($count($next) = 0 ? 'The draft has NO photos. Tell the person that, and that they can text a photo to add. ' : 'The draft has ' & $string($count($next)) & ' photos. ') & 'The system now texts the exact draft to the person. Do not repeat the caption. Do not say it was posted.' }";
+  const drafted = "{ 'ok': true, 'photos_on_draft': $count($next), 'note': ($count($next) = 0 ? 'The draft has NO photos. Tell the person that, and that they can text a photo to add. ' : 'The draft has ' & $string($count($next)) & ' photos. ') & 'Your reply is shown as the line above the draft: one short sentence on what you did or changed. Do not repeat the caption, do not explain how to approve, do not say it was posted.' }";
   // Assigned in its own state: a state's Output cannot read what the same state assigns.
   const payload = { M: { caption: { S: q('$a.caption') }, media: { L: q('$next') } } };
 
@@ -289,15 +290,17 @@ export function facebookToolRunners(refs: FacebookPostRefs) {
 // ---- After the model: show the person what the row says -------------------------
 
 /**
- * Enters at `FindUnshown`. A pending revision the person has not been sent is
- * texted from the row, then recorded as shown; only then can POST approve it.
- * Reads the row, not the turn: a send that failed last time goes out now.
+ * Enters at `FindUnshown`, in place of the channel's reply. A pending revision
+ * the person has not been sent goes out as one text, the model's reply above
+ * the draft from the row, and is recorded as shown; only then can POST approve
+ * it. Otherwise the turn's reply goes out as usual (`reply`). Reads the row,
+ * not the turn: a send that failed last time goes out now.
  */
-export function facebookShowDraftStates(refs: FacebookPostRefs, send: Send, next: string) {
+export function facebookShowDraftStates(refs: FacebookPostRefs, send: Send, reply: string, next: string) {
   return {
-    FindUnshown: { ...findPending(refs), Assign: { shown: q(pendingExpr('$states.result')) }, Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: next }], Output: q('$states.input'), Next: 'NeedsShowing' },
-    NeedsShowing: { Type: 'Choice', Choices: [{ Condition: q('$exists($shown.sk) and $number($shown.shownRevision.N) < $number($shown.revision.N)'), Next: 'SendDraft' }], Default: next },
-    SendDraft: send(draftMessageExpr('$shown'), 'MarkShown'),
+    FindUnshown: { ...findPending(refs), Assign: { shown: q(pendingExpr('$states.result')) }, Catch: [{ ErrorEquals: ['States.ALL'], Output: q('$states.input'), Next: reply }], Output: q('$states.input'), Next: 'NeedsShowing' },
+    NeedsShowing: { Type: 'Choice', Choices: [{ Condition: q('$exists($shown.sk) and $number($shown.shownRevision.N) < $number($shown.revision.N)'), Next: 'SendDraft' }], Default: reply },
+    SendDraft: send(`$reply & '\n\n' & ${draftMessageExpr('$shown')}`, 'MarkShown'),
     MarkShown: {
       Type: 'Task', Resource: 'arn:aws:states:::dynamodb:updateItem',
       Arguments: {
