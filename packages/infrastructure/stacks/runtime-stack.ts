@@ -65,6 +65,10 @@ export class RuntimeStack extends cdk.Stack {
   readonly twilioSecret: secretsmanager.Secret;
   /** The media link resolver; the worker's activities invoke it. */
   readonly mediaLinkFn: lambda.IFunction;
+  /** The bot token and the generated webhook path; the worker's Telegram route and replies use them too. */
+  readonly telegramSecret: secretsmanager.Secret;
+  /** The Browserbase project key; the worker's login handoff uses it. */
+  readonly browserbaseSecret: secretsmanager.Secret;
 
   constructor(scope: Construct, id: string, props: RuntimeStackProps) {
     super(scope, id, props);
@@ -271,6 +275,8 @@ export class RuntimeStack extends cdk.Stack {
     twilioSecret.grantRead(mediaLinkFn);
     this.twilioSecret = twilioSecret;
     this.mediaLinkFn = mediaLinkFn;
+    this.telegramSecret = telegramSecret;
+    this.browserbaseSecret = browserbaseSecret;
     errorAlarm(this, 'MediaLinkErrors', mediaLinkFn, props.alarmTopic, 'Media link resolver');
 
     const smsWorkflow = new sfn.StateMachine(this, 'SmsWorkflow', {

@@ -1,57 +1,22 @@
 /**
  * The SMS turn through a real Worker on Temporal's test server, every side
- * effect a recorded fake. What these hold: the person's POST publishes once
+ * effect a recorded fake (test/fakes.ts). What these hold: the person's POST publishes once
  * and only on the revision they were shown, without the model; the model's
  * tools write drafts and nothing else, whatever the model asks for; the
  * draft the person sees is the row, under the model's line.
  */
-import { fileURLToPath } from 'node:url';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
-import { Worker } from '@temporalio/worker';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type * as activities from '../src/activities/index.js';
-import type { ModelResult } from '../src/activities/model.js';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { smsTurn } from '../src/workflows/index.js';
-import type { DraftRow, PersonRow, TenantRow } from '../src/types.js';
+import { answer, draft, fakes, person, run as runWorkflow, tenant, type Fakes } from './fakes.js';
 
-type Activities = typeof activities;
-type Fakes = { [K in keyof Activities]: ReturnType<typeof vi.fn<Activities[K]>> };
-
-const tenant: TenantRow = {
-  tenantId: 'deck', phoneNumber: '+15550001111', business: { name: 'Deck Co' },
-  assistant: { enabled: true, tools: ['search_contacts', 'draft_facebook_post', 'cancel_facebook_draft'] },
-  facebookPosts: { enabled: true, pageId: '42', pageName: 'Deck Co' },
-};
-const person: PersonRow = { channelId: 'sms:+15550002222', tenantId: 'deck', tenantPhone: '+15550001111', name: 'Meg', role: 'owner' };
-const photo = { messageSid: 'MM1', mediaSid: 'ME1' };
-const draft = (revision: number, shown: number): DraftRow => ({ tenantId: 'deck', sk: 'sms:+15550002222#facebook_post#t#1', status: 'pending', revision, shownRevision: shown, approveBy: 9e9, payload: { caption: 'Cedar deck, finished today.', media: [photo] } });
 const text = (body: string, extra: Record<string, string> = {}) => ({ sms: { From: '+15550002222', To: '+15550001111', AccountSid: 'AC1', MessageSid: `MM${Math.random()}`, Body: body, NumMedia: '0', ...extra } });
-const answer = (reply: string, calls: ModelResult['calls'] = []): ModelResult => ({ responseId: 'r', calls, reply, tokens: 3, inputTokens: 2, outputTokens: 1 });
-
-/** Every activity a recorded fake with a quiet default; a test overrides what it needs. */
-function fakes(): Fakes {
-  return {
-    lookupPerson: vi.fn(async () => person), lookupTenant: vi.fn(async () => tenant),
-    findPending: vi.fn(async () => undefined), createDraft: vi.fn(async () => ({ sk: 'new' })), reviseDraft: vi.fn(async () => true), cancelDraft: vi.fn(async () => true),
-    lockDraft: vi.fn(async () => true), markShown: vi.fn(async () => true), markCompleted: vi.fn(async () => undefined), markFailed: vi.fn(async () => undefined), markUnconfirmed: vi.fn(async () => undefined),
-    rememberMedia: vi.fn(async () => undefined), recentMedia: vi.fn(async () => []),
-    sendText: vi.fn(async () => undefined), mintLinks: vi.fn(async () => ['https://link/1']),
-    callModel: vi.fn(async () => answer('Sure.')), executeTool: vi.fn(async () => ({ successful: true, data: { id: 'page_post1' } })),
-    loadHistory: vi.fn(async () => []), recall: vi.fn(async () => []), saveTurn: vi.fn(async () => undefined), recordUsage: vi.fn(async () => undefined),
-    echo: vi.fn(async (n: string) => `pong: ${n}`),
-  };
-}
 
 let env: TestWorkflowEnvironment;
 beforeAll(async () => { env = await TestWorkflowEnvironment.createTimeSkipping(); }, 120_000);
 afterAll(async () => { await env?.teardown(); });
 
-let n = 0;
-async function run(f: Fakes, input: ReturnType<typeof text>) {
-  const taskQueue = `sms-${n++}`;
-  const worker = await Worker.create({ connection: env.nativeConnection, taskQueue, workflowsPath: fileURLToPath(new URL('../src/workflows/index.ts', import.meta.url)), activities: f });
-  return worker.runUntil(env.client.workflow.execute(smsTurn, { taskQueue, workflowId: `wf-${taskQueue}`, args: [input] }));
-}
+const run = (f: Fakes, input: ReturnType<typeof text>) => runWorkflow(env, f, smsTurn, [input]);
 const sent = (f: Fakes) => f.sendText.mock.calls.map((c) => c[3]);
 
 describe('the approval', () => {

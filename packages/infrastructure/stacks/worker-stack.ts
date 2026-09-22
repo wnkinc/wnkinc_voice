@@ -10,10 +10,12 @@
  * assumes the invocation role from its own accounts, gated by an external id
  * the secret generates here, so the guard never passes through a person.
  *
- * The SMS front door: Twilio -> API Gateway -> SQS -> the starter (the same
- * image, a different handler) -> a workflow per text. It sits beside the
- * Step Functions route until the cutover; a tenant's number is pointed at
- * one or the other (scripts/twilio-webhook.mts).
+ * The front doors: SMS (Twilio -> API Gateway -> SQS -> the starter -> a
+ * workflow per text) and Telegram (API Gateway -> the starter -> a workflow
+ * per update), each starter the same image with a different handler. They
+ * sit beside the Step Functions routes until the cutover; a tenant's number
+ * and the bot are pointed at one or the other (scripts/twilio-webhook.mts,
+ * scripts/telegram-webhook.mts).
  *
  * The fallback: the same image as a Fargate service at zero tasks
  * (packages/worker/src/service.ts). Serverless Workers are a preview; if the
@@ -30,7 +32,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
-import { HttpSqsIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import { HttpLambdaIntegration, HttpSqsIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import type * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -68,6 +70,11 @@ export interface WorkerStackProps extends cdk.StackProps {
   readonly composioSecret: secretsmanager.ISecret;
   /** Twilio credentials and the generated webhook path segment. */
   readonly twilioSecret: secretsmanager.ISecret;
+  /** The Telegram bot token and the generated webhook path segment. */
+  readonly telegramSecret: secretsmanager.ISecret;
+  /** The Browserbase project API key; the project id is cdk.json context, not a secret. */
+  readonly browserbaseSecret: secretsmanager.ISecret;
+  readonly browserbaseProjectId: string;
   /** The media link resolver (packages/media-link). */
   readonly mediaLinkFunction: lambda.IFunction;
   readonly callerMemory?: { readonly memoryId: string; readonly memoryArn: string };
@@ -107,6 +114,9 @@ export class WorkerStack extends cdk.Stack {
       OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
       COMPOSIO_SECRET_ARN: props.composioSecret.secretArn,
       TWILIO_SECRET_ARN: props.twilioSecret.secretArn,
+      TELEGRAM_SECRET_ARN: props.telegramSecret.secretArn,
+      BROWSERBASE_SECRET_ARN: props.browserbaseSecret.secretArn,
+      BROWSERBASE_PROJECT_ID: props.browserbaseProjectId,
       MEDIA_LINK_FUNCTION_ARN: props.mediaLinkFunction.functionArn,
       ASSISTANT_MODEL: process.env.ASSISTANT_MODEL ?? 'gpt-5.5',
       ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
@@ -117,8 +127,11 @@ export class WorkerStack extends cdk.Stack {
       props.openaiSecret.grantRead(role);
       props.composioSecret.grantRead(role);
       props.twilioSecret.grantRead(role);
+      props.telegramSecret.grantRead(role);
+      props.browserbaseSecret.grantRead(role);
       props.peopleTable.grantReadData(role);
-      props.tenantsTable.grantReadData(role);
+      // Read for every turn; written by the login handoff (its window and the saved browser's id).
+      props.tenantsTable.grantReadWriteData(role);
       props.actionsTable.grantReadWriteData(role);
       props.usageTable.grantWriteData(role);
       props.mediaLinkFunction.grantInvoke(role);
@@ -209,6 +222,29 @@ export class WorkerStack extends cdk.Stack {
     errorAlarm(this, 'SmsStartErrors', starter, props.alarmTopic, 'Assistant (SMS, Temporal): starter');
     dlqAlarm(this, 'SmsDlqAlarm', smsDlq, props.alarmTopic, 'Assistant (SMS, Temporal): a text could not start the workflow');
 
+    // ---- The Telegram front door ---------------------------------------------------
+    // Telegram posts JSON and wants a 200 at once; the starter answers as soon
+    // as the workflow is started. A start that fails answers 5xx, and Telegram
+    // retries the same update id, which then starts nothing twice.
+    const telegramStartName = `${prefix}-telegram-start`;
+    const telegramStart = new lambda.DockerImageFunction(this, 'TelegramStart', {
+      functionName: telegramStartName,
+      description: 'Each Telegram update starts a telegramTurn workflow, keyed by the update id',
+      code: image('lib/starter.telegram'),
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(20),
+      environment: { TEMPORAL_SECRET_ARN: secret.secretArn, NODE_OPTIONS: '--enable-source-maps' },
+      logGroup: logGroup(telegramStartName, 'TelegramStartLogs'),
+    });
+    secret.grantRead(telegramStart);
+    new apigwv2.HttpRoute(this, 'TelegramRoute', {
+      httpApi: props.api,
+      routeKey: apigwv2.HttpRouteKey.with(`/temporal/telegram/${props.telegramSecret.secretValueFromJson('WEBHOOK_PATH').unsafeUnwrap()}`, apigwv2.HttpMethod.POST),
+      integration: new HttpLambdaIntegration('TelegramWebhook', telegramStart),
+    });
+    errorAlarm(this, 'TelegramStartErrors', telegramStart, props.alarmTopic, 'Assistant (Telegram, Temporal): starter');
+
     // ---- The fallback: the same Worker, long-running, at zero -----------------------
     // Public subnets and a public IP, no NAT: the worker only makes outbound
     // calls, and a NAT gateway would cost more than the whole stack.
@@ -234,5 +270,6 @@ export class WorkerStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'invokeRoleArn', { value: invoke.roleArn, description: 'The --aws-lambda-assume-role-arn when registering a version' });
     new cdk.CfnOutput(this, 'secretName', { value: secret.secretName });
     new cdk.CfnOutput(this, 'smsWebhookPath', { value: '/temporal/sms/<WEBHOOK_PATH from the Twilio secret>' });
+    new cdk.CfnOutput(this, 'telegramWebhookPath', { value: '/temporal/telegram/<WEBHOOK_PATH from the Telegram secret>' });
   }
 }

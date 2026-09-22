@@ -22,6 +22,7 @@ export interface TenantRow {
   business: { name: string; description?: string; services?: string[]; hours?: string };
   assistant?: { enabled?: boolean; tools?: string[] };
   facebookPosts?: { enabled?: boolean; pageId?: string; pageName?: string };
+  browser?: { enabled?: boolean; contextId?: string; loginUntil?: string };
 }
 
 /** A texted photo by its Twilio ids; links are minted when needed, never stored. */

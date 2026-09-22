@@ -12,6 +12,9 @@ export { callModel } from './model.js';
 export { executeTool } from './composio.js';
 export { loadHistory, recall, saveTurn } from './memory.js';
 export { recordUsage } from './usage.js';
+export { sendTelegram } from './telegram.js';
+export { browserLiveView, createBrowserContext, releaseBrowserSession, startBrowserSession } from './browser.js';
+export { claimLoginWindow, clearLoginWindow, listTenants, saveBrowserContext } from './tenants.js';
 
 /** Proves the pipe end to end without touching anything. */
 export async function echo(name: string): Promise<string> {

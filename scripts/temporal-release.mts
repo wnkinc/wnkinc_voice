@@ -23,6 +23,8 @@ import { BUILD_ID, DEPLOYMENT_NAME, TASK_QUEUE } from '../packages/worker/src/ve
 import { REGION, temporalSecret } from './lib/temporal-env.mts';
 
 const STACK = 'wnk-worker-dev';
+/** Every morning, 15:10 UTC: ten minutes after the connection check, so a failure is about the loop, not Composio. */
+const SCHEDULES = [{ id: 'assistant-health', cron: '10 15 * * *', type: 'assistantHealth' }];
 
 const sh = (cmd: string, args: string[], env: NodeJS.ProcessEnv = {}) =>
   execFileSync(cmd, args, { encoding: 'utf8', env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'inherit'] }).trim();
@@ -69,3 +71,13 @@ console.log(`task queue bound: ${TASK_QUEUE}`);
 temporal(['worker', 'deployment', 'set-current-version', '--deployment-name', DEPLOYMENT_NAME, '--build-id', BUILD_ID, '--yes']);
 const current = temporal(['worker', 'deployment', 'describe', '--name', DEPLOYMENT_NAME, '-o', 'json']);
 console.log(current.includes(`"currentVersionBuildID": "${BUILD_ID}"`) ? `current: ${BUILD_ID}` : 'WARNING: current version did not change');
+
+// 5. The schedules: config, applied idempotently. Each is a workflow type on
+//    the task queue at a cron time (UTC); one running at a time, a missed run
+//    skipped rather than piled up.
+for (const s of SCHEDULES) {
+  const exists = (() => { try { temporal(['schedule', 'describe', '--schedule-id', s.id, '-o', 'json']); return true; } catch { return false; } })();
+  if (exists) continue;
+  temporal(['schedule', 'create', '--schedule-id', s.id, '--cron', s.cron, '--workflow-type', s.type, '--task-queue', TASK_QUEUE, '--workflow-id', s.id, '--overlap-policy', 'Skip']);
+  console.log(`schedule created: ${s.id} (${s.cron} UTC -> ${s.type})`);
+}

@@ -450,14 +450,20 @@ deadline nears: idle costs nothing, no fleet. The stack (`stacks/worker-stack.ts
 function, the invocation role only Temporal's accounts may assume (gated by a generated external
 id), the platform secret holding the namespace connection, and the SMS front door.
 
-**SMS on Temporal.** The same flow as the Step Functions route, side by side with it until the
-cutover: Twilio posts to `/temporal/sms/<WEBHOOK_PATH>`, the starter (the same image, a different
-handler) begins one `smsTurn` workflow per text with Twilio's MessageSid as the workflow id, so a
-redelivered post runs nothing twice. Facebook drafts and the POST approval carry over unchanged
-(`packages/worker/src/sms/facebook.ts`, the ledger rules as pure functions;
+**The assistant on Temporal.** The same flows as the Step Functions routes, side by side with
+them until the cutover. One loop (`workflows/loop.ts`: memory, the model, the gated tools, the
+round cap) under three workflows: `smsTurn` (Twilio posts to `/temporal/sms/<WEBHOOK_PATH>`, one
+workflow per text keyed by the MessageSid), `telegramTurn` (Telegram posts to
+`/temporal/telegram/<WEBHOOK_PATH>`, one per update keyed by the update id, the reply through the
+Bot API as an activity), and `assistantHealth` (a Temporal Schedule every morning; a silent
+tenant fails the workflow, which is the alarm). The owner's `/login` starts `browserLogin`, whose
+window is a durable timer. The starters are the same image with different handlers, and a
+redelivered webhook starts nothing twice. Facebook drafts and the POST approval carry over
+unchanged (`packages/worker/src/sms/facebook.ts`, the ledger rules as pure functions;
 `test/sms-turn.test.ts` runs the workflow through a real Worker with recorded fakes and holds the
-split: POST publishes once, only on the shown revision, never through the model). Point a
-tenant's number at it with `npx tsx scripts/twilio-webhook.mts set <tenantId> temporal`.
+split: POST publishes once, only on the shown revision, never through the model). Point traffic
+with `npx tsx scripts/twilio-webhook.mts set <tenantId> temporal` and
+`npx tsx scripts/telegram-webhook.mts set temporal`.
 
 **Releasing.** Every change that should reach the worker, code or configuration, is a new build
 id in `packages/worker/src/version.ts`: a published Lambda version is immutable, so nothing

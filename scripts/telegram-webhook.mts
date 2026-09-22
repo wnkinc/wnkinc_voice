@@ -1,7 +1,8 @@
 /**
  * Point the Telegram bot at the platform (or show/remove the webhook).
  *
- *   npx tsx scripts/telegram-webhook.mts set      # register <apiEndpoint>/telegram/<WEBHOOK_PATH>
+ *   npx tsx scripts/telegram-webhook.mts set           # register <apiEndpoint>/telegram/<WEBHOOK_PATH> (Step Functions)
+ *   npx tsx scripts/telegram-webhook.mts set temporal  # register <apiEndpoint>/temporal/telegram/<WEBHOOK_PATH> (the worker)
  *   npx tsx scripts/telegram-webhook.mts info     # what Telegram has now (pending updates, last error)
  *   npx tsx scripts/telegram-webhook.mts delete
  *
@@ -16,6 +17,8 @@ import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-sec
 import { execFileSync } from 'node:child_process';
 
 const action = process.argv[2] ?? 'info';
+const engine = process.argv[3] ?? 'sfn';
+if (!['sfn', 'temporal'].includes(engine)) { console.error('usage: npx tsx scripts/telegram-webhook.mts set|info|delete [temporal]'); process.exit(2); }
 const output = (stack: string, key: string) =>
   execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', 'us-west-2'], { encoding: 'utf8' }).trim();
 
@@ -34,13 +37,13 @@ const api = async (method: string, body?: unknown) => {
 };
 
 if (action === 'set') {
-  const url = `${apiEndpoint}/telegram/${secret.WEBHOOK_PATH}`;
+  const url = `${apiEndpoint}/${engine === 'temporal' ? 'temporal/telegram' : 'telegram'}/${secret.WEBHOOK_PATH}`;
   console.log(await api('setWebhook', { url, allowed_updates: ['message'], drop_pending_updates: true }));
 } else if (action === 'delete') {
   console.log(await api('deleteWebhook'));
 } else {
   const info = await api('getWebhookInfo');
   const r = (info.result ?? {}) as Record<string, unknown>;
-  if (typeof r.url === 'string') r.url = r.url.replace(/\/telegram\/.*$/, '/telegram/<hidden>');
+  if (typeof r.url === 'string') r.url = r.url.replace(/\/telegram\/[^/]*$/, '/telegram/<hidden>');
   console.log(JSON.stringify(r, null, 2));
 }

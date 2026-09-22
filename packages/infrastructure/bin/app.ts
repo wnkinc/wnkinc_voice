@@ -50,6 +50,8 @@ new WorkerStack(app, 'wnk-worker-dev', {
   peopleTable: voice.peopleTable, actionsTable: voice.actionsTable, api: voice.api,
   openaiSecret: voice.openaiSecret, composioSecret: voice.composioSecret,
   twilioSecret: runtime.twilioSecret, mediaLinkFunction: runtime.mediaLinkFn,
+  telegramSecret: runtime.telegramSecret, browserbaseSecret: runtime.browserbaseSecret,
+  browserbaseProjectId: app.node.tryGetContext('browserbaseProjectId') as string,
 });
 
 // Per tenant (tenants/<id>.ts), the stacks its file asks for: its automations,

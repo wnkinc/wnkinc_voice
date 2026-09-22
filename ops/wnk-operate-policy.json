@@ -174,7 +174,8 @@
         "lambda:GetFunction",
         "lambda:ListFunctions",
         "pipes:DescribePipe",
-        "pipes:ListPipes"
+        "pipes:ListPipes",
+        "logs:TestMetricFilter"
       ],
       "Resource": "*"
     },

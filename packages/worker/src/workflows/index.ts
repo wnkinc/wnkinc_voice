@@ -7,6 +7,9 @@ import { proxyActivities } from '@temporalio/workflow';
 import type * as activities from '../activities/index.js';
 
 export { smsTurn } from './sms-turn.js';
+export { telegramTurn } from './telegram-turn.js';
+export { browserLogin } from './browser-login.js';
+export { assistantHealth } from './assistant-health.js';
 
 const { echo } = proxyActivities<typeof activities>({ startToCloseTimeout: '10 seconds' });
 

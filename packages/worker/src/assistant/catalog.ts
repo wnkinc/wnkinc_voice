@@ -106,18 +106,24 @@ export function shapeToolResult(body: { successful?: boolean; data?: Record<stri
   return s.length > MAX_TOOL_OUTPUT_CHARS ? `${s.slice(0, MAX_TOOL_OUTPUT_CHARS)}...[truncated]` : s;
 }
 
-/** The system prompt for a text conversation with one of the tenant's people; `extra` is what a channel appends. */
-export function systemPrompt(tenant: TenantRow, person: PersonRow, extra = ''): string {
+/** How each channel wants its replies. */
+export const CHANNEL = {
+  sms: { verb: 'texting', line: 'This is a text message conversation (SMS): be brief and plain, no markdown, no lists. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 1000 characters.' },
+  chat: { verb: 'chatting', line: 'This is a chat: be brief and plain, no markdown. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 3000 characters.' },
+} as const;
+
+/** The system prompt for a conversation with one of the tenant's people; `extra` is what a channel appends. */
+export function systemPrompt(tenant: TenantRow, person: PersonRow, channel: keyof typeof CHANNEL, extra = ''): string {
   const b = tenant.business;
   return [
-    `You are My Assistant for ${b.name}, texting with ${person.name} (${person.role}) who works there. `,
+    `You are My Assistant for ${b.name}, ${CHANNEL[channel].verb} with ${person.name} (${person.role}) who works there. `,
     b.description ? `About the business: ${b.description} ` : '',
     b.services?.length ? `Services: ${b.services.join(', ')}. ` : '',
     b.hours ? `Hours: ${b.hours}. ` : '',
     (tenant.assistant?.tools?.length ?? 0) > 0
       ? 'Your tools reach the business systems the owner connected. Use them to look things up or record things; say what you did and what you found. Never invent records. '
       : 'You have no tools connected for this business. ',
-    'This is a text message conversation (SMS): be brief and plain, no markdown, no lists. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 1000 characters.',
+    CHANNEL[channel].line,
     extra,
   ].join('');
 }

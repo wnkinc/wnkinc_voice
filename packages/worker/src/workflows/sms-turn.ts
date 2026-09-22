@@ -17,16 +17,16 @@
  */
 import { proxyActivities } from '@temporalio/workflow';
 import type * as activities from '../activities/index.js';
-import { ASSISTANT_TOOLS, FALLBACK_REPLY, MAX_ROUNDS, instructions, isComposioTool, shapeToolResult, systemPrompt, toolDefs, type ToolName } from '../assistant/catalog.js';
-import { APPROVAL_WORD, FACEBOOK_VERSION, MAX_CAPTION_CHARS, allowedTools, draftMessage, draftedNote, facebookOn, facebookPrompt, isApproval, modelContent, nextMedia, postId } from '../sms/facebook.js';
+import { systemPrompt } from '../assistant/catalog.js';
+import { APPROVAL_WORD, FACEBOOK_VERSION, allowedTools, draftMessage, facebookOn, facebookPrompt, isApproval, modelContent, postId } from '../sms/facebook.js';
 import { mediaFromSms, textOrPhotos, type Sms } from '../sms/inbound.js';
 import type { Photo } from '../types.js';
+import { orElse, runAssistantLoop, sessionDay } from './loop.js';
 
 type Activities = typeof activities;
 const reads = proxyActivities<Activities>({ startToCloseTimeout: '20 seconds', retry: { maximumAttempts: 3 } });
 const ledger = proxyActivities<Activities>({ startToCloseTimeout: '20 seconds', retry: { maximumAttempts: 3 } });
 const texts = proxyActivities<Activities>({ startToCloseTimeout: '30 seconds', retry: { maximumAttempts: 2, initialInterval: '2 seconds' } });
-const model = proxyActivities<Activities>({ startToCloseTimeout: '90 seconds', retry: { maximumAttempts: 3, initialInterval: '2 seconds', backoffCoefficient: 2 } });
 const tools = proxyActivities<Activities>({ startToCloseTimeout: '60 seconds', retry: { maximumAttempts: 2 } });
 /** Photos and memory: a failure costs only that; the turn still answers. */
 const bestEffort = proxyActivities<Activities>({ startToCloseTimeout: '20 seconds', retry: { maximumAttempts: 2 } });
@@ -35,16 +35,6 @@ const publish = proxyActivities<Activities>({ startToCloseTimeout: '60 seconds',
 
 export interface SmsTurnInput { sms: Sms }
 export type SmsTurnOutcome = 'ignored' | 'unknown-sender' | 'assistant-off' | 'replied' | 'posted' | 'post-failed' | 'post-unconfirmed';
-
-async function orElse<T>(p: Promise<T>, fallback: T): Promise<T> {
-  try { return await p; } catch { return fallback; }
-}
-
-/** One memory session per phone per day, rolling at 3 AM tenant-local (sessionDayOffsetMinutes, computed by the seed; 600 = Pacific if unset). */
-function sessionDay(offsetMinutes: number | undefined): string {
-  const d = new Date(Date.now() - (offsetMinutes ?? 600) * 60_000);
-  return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
-}
 
 export async function smsTurn({ sms }: SmsTurnInput): Promise<SmsTurnOutcome> {
   const media = mediaFromSms(sms);
@@ -87,27 +77,12 @@ export async function smsTurn({ sms }: SmsTurnInput): Promise<SmsTurnOutcome> {
   const digits = sms.From.replace(/[^0-9]/g, '');
   const actorId = `${tenantId}_sms_${digits}`;
   const sessionId = `sms-chat-${digits}-${sessionDay(tenant.sessionDayOffsetMinutes)}`;
-  const history = await orElse(bestEffort.loadHistory(actorId, sessionId), []);
-  const memories = await orElse(bestEffort.recall(actorId, text), []);
-  const prompt = instructions(systemPrompt(tenant, person, fbOn ? facebookPrompt(draft, photos, mediaIsRecent) : ''), memories);
-  const defs = toolDefs(allowed);
-
-  let usage = { tokens: 0, inputTokens: 0, outputTokens: 0 };
-  let res = await model.callModel({ instructions: prompt, tools: defs, input: [...history, { role: 'user', content: modelContent(text, imageLinks) }] });
-  let round = 0;
-  const count = (r: typeof res) => { usage = { tokens: usage.tokens + r.tokens, inputTokens: usage.inputTokens + r.inputTokens, outputTokens: usage.outputTokens + r.outputTokens }; };
-  count(res);
-  while (res.calls.length > 0 && round < MAX_ROUNDS) {
-    // Each call the model made, gated and run. A refused or failed tool is a result the model reads, not a failed turn.
-    const outputs = await Promise.all(res.calls.map(async (call) => ({
-      type: 'function_call_output', call_id: call.call_id,
-      output: await runTool(call.name, call.arguments, { tenantId, approver, allowed, photos }),
-    })));
-    round += 1;
-    res = await model.callModel({ instructions: prompt, tools: defs, previousResponseId: res.responseId, input: outputs });
-    count(res);
-  }
-  const reply = res.calls.length > 0 || res.reply.trim().length === 0 ? FALLBACK_REPLY : res.reply;
+  const turn = await runAssistantLoop({
+    tenantId, allowed, text, actorId, sessionId, approver, photos,
+    prompt: systemPrompt(tenant, person, 'sms', fbOn ? facebookPrompt(draft, photos, mediaIsRecent) : ''),
+    content: modelContent(text, imageLinks),
+  });
+  const reply = turn.reply;
 
   // ---- After the model: show the person what the row says ------------------------
   // A pending revision the person has not been sent goes out as one text, the
@@ -122,45 +97,8 @@ export async function smsTurn({ sms }: SmsTurnInput): Promise<SmsTurnOutcome> {
     await send(reply);
   }
   await orElse(bestEffort.saveTurn(actorId, sessionId, text, reply), undefined);
-  await reads.recordUsage(tenantId, approver, usage.tokens, usage.inputTokens, usage.outputTokens);
+  await reads.recordUsage(tenantId, approver, turn.tokens, turn.inputTokens, turn.outputTokens);
   return 'replied';
-}
-
-interface ToolContext { tenantId: string; approver: string; allowed: string[]; photos: Photo[] }
-
-/** One tool call from the model: the allow-list is the gate; the two ledger tools write drafts and nothing else. */
-async function runTool(name: string, rawArgs: string, ctx: ToolContext): Promise<string> {
-  if (!ctx.allowed.includes(name) || !(name in ASSISTANT_TOOLS)) return 'This tool is not available for this business.';
-  const failed = 'The tool failed. Tell the person you could not complete that part.';
-  let a: Record<string, unknown>;
-  try { a = JSON.parse(rawArgs) as Record<string, unknown>; } catch { return failed; }
-  try {
-    const tool = ASSISTANT_TOOLS[name as ToolName];
-    if (isComposioTool(tool)) {
-      return shapeToolResult(await tools.executeTool(ctx.tenantId, tool.slug, tool.args(a, new Date().toISOString())), tool.shape);
-    }
-    if (name === 'draft_facebook_post') {
-      const caption = typeof a.caption === 'string' ? a.caption : '';
-      if (caption.trim().length === 0 || caption.length > MAX_CAPTION_CHARS) return JSON.stringify({ error: `The caption must be 1 to ${MAX_CAPTION_CHARS} characters so the draft fits in one text message.` });
-      // Asked again inside the turn, not read from the earlier lookup: the model may draft twice in one turn.
-      const row = await ledger.findPending(ctx.tenantId, ctx.approver);
-      const next = nextMedia(String(a.photos), row?.payload.media ?? [], ctx.photos);
-      if (row) {
-        if (!await ledger.reviseDraft(ctx.tenantId, row.sk, row.revision, caption, next)) return failed;
-      } else {
-        await ledger.createDraft(ctx.tenantId, ctx.approver, caption, next);
-      }
-      return draftedNote(next.length);
-    }
-    if (name === 'cancel_facebook_draft') {
-      const row = await ledger.findPending(ctx.tenantId, ctx.approver);
-      if (!row) return JSON.stringify({ ok: true, note: 'There was no pending draft.' });
-      return await ledger.cancelDraft(ctx.tenantId, row.sk) ? JSON.stringify({ ok: true, note: 'The draft was discarded.' }) : failed;
-    }
-    return failed;
-  } catch {
-    return failed;
-  }
 }
 
 /** The row is locked (`executing`) on the revision the person approved: mint the photo links, post once, record the outcome, tell them. */
