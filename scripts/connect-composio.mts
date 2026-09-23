@@ -11,6 +11,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { COMPOSIO_TOOLKITS, composioConnect, composioGmail, type ComposioToolkit } from '@wnk/shared/composio';
+import { STACKS } from '../packages/infrastructure/names.js';
 
 const tenantId = process.argv[2];
 if (!tenantId) { console.error(`usage: npx tsx scripts/connect-composio.mts <tenantId> [${COMPOSIO_TOOLKITS.join('|')}]`); process.exit(2); }
@@ -19,7 +20,7 @@ if (!COMPOSIO_TOOLKITS.includes(toolkit)) throw new Error(`unknown toolkit ${too
 
 if (!process.env.COMPOSIO_API_KEY && !process.env.COMPOSIO_SECRET_ARN) {
   process.env.COMPOSIO_SECRET_ARN = execFileSync('aws', [
-    'cloudformation', 'describe-stacks', '--stack-name', 'wnk-voice-dev',
+    'cloudformation', 'describe-stacks', '--stack-name', STACKS.platform,
     '--query', "Stacks[0].Outputs[?OutputKey=='composioSecretArn'].OutputValue | [0]",
     '--output', 'text', '--region', 'us-west-2',
   ], { encoding: 'utf8' }).trim();

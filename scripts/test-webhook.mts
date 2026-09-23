@@ -14,15 +14,16 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { execFileSync } from 'node:child_process';
+import { STACKS } from '../packages/infrastructure/names.js';
 
 const REGION = 'us-west-2';
 const mode = process.argv[2] ?? 'ping';
 const to = process.argv[3] ?? '+15555550100';
 const from = process.argv[4] ?? '+15555550155';
 const out = (stack: string, key: string) => execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', REGION], { encoding: 'utf8' }).trim();
-const url = out('wnk-voice-dev', 'webhookUrl');
-const secretArn = out('wnk-voice-dev', 'openaiSecretArn');
-const callsTable = out('wnk-voice-dev', 'callsTableName');
+const url = out(STACKS.receptionist, 'webhookUrl');
+const secretArn = out(STACKS.platform, 'openaiSecretArn');
+const callsTable = out(STACKS.platform, 'callsTableName');
 const sm = new SecretsManagerClient({ region: REGION });
 const secret = (JSON.parse((await sm.send(new GetSecretValueCommand({ SecretId: secretArn }))).SecretString ?? '{}') as { OPENAI_WEBHOOK_SECRET: string }).OPENAI_WEBHOOK_SECRET;
 

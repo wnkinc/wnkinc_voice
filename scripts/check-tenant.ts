@@ -11,6 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dynamoStore, TenantConfigSchema } from '@wnk/shared';
+import { STACKS } from '../packages/infrastructure/names.js';
 
 const REGION = 'us-west-2';
 const tenantId = process.argv[2];
@@ -20,7 +21,7 @@ const out = (stack: string, key: string) =>
   execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', REGION], { encoding: 'utf8' }).trim();
 
 process.env.AWS_REGION ??= REGION;
-process.env.TENANTS_TABLE = out('wnk-voice-dev', 'tenantsTableName');
+process.env.TENANTS_TABLE = out(STACKS.platform, 'tenantsTableName');
 
 let failed = false;
 const ok = (label: string, detail = '') => console.log(`  ✓ ${label}${detail ? ` — ${detail}` : ''}`);

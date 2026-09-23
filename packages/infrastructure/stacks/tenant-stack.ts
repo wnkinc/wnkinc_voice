@@ -5,8 +5,9 @@ import type * as lambda from 'aws-cdk-lib/aws-lambda';
 import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
-import { dlqAlarm } from '../infra_utils/alarms.js';
 import { AUTOMATIONS, type TenantAutomations } from '@wnk/shared/contracts';
+import { dlqAlarm } from '../infra_utils/alarms.js';
+import { EVENT_SOURCE } from './platform-stack.js';
 
 export interface TenantStackProps extends cdk.StackProps, TenantAutomations {
   readonly prefix: string;
@@ -38,7 +39,7 @@ export class TenantStack extends cdk.Stack {
       new events.Rule(this, `${pascal(a.workflow)}Rule`, {
         eventBus: props.bus,
         description: `${tenantId}: ${on} -> ${a.workflow}`,
-        eventPattern: { source: ['wnkinc.voice'], detailType: [on], detail: { tenantId: [tenantId] } },
+        eventPattern: { source: [EVENT_SOURCE], detailType: [on], detail: { tenantId: [tenantId] } },
         targets: [new targets.LambdaFunction(props.automationStarter, {
           event: events.RuleTargetInput.fromObject({ workflow: a.workflow, options: a.options ?? {}, detail: events.EventField.fromPath('$.detail'), id: events.EventField.eventId }),
           retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: startDlq,

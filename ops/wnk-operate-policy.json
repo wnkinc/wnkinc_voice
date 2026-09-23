@@ -15,8 +15,8 @@
         "dynamodb:DescribeTable"
       ],
       "Resource": [
-        "arn:aws:dynamodb:us-west-2:539247450358:table/wnk-voice-dev-*",
-        "arn:aws:dynamodb:us-west-2:539247450358:table/wnk-voice-dev-*/index/*"
+        "arn:aws:dynamodb:us-west-2:539247450358:table/wnk-dev-platform-*",
+        "arn:aws:dynamodb:us-west-2:539247450358:table/wnk-dev-platform-*/index/*"
       ]
     },
     {
@@ -33,6 +33,7 @@
         "arn:aws:secretsmanager:us-west-2:539247450358:secret:TelegramSecret*",
         "arn:aws:secretsmanager:us-west-2:539247450358:secret:TwilioSecret*",
         "arn:aws:secretsmanager:us-west-2:539247450358:secret:BrowserbaseSecret*",
+        "arn:aws:secretsmanager:us-west-2:539247450358:secret:wnk-dev/*",
         "arn:aws:secretsmanager:us-west-2:539247450358:secret:wnkinc-voice-dev/*"
       ]
     },
@@ -50,7 +51,7 @@
       "Action": [
         "events:PutEvents"
       ],
-      "Resource": "arn:aws:events:us-west-2:539247450358:event-bus/wnkinc-voice-dev-events"
+      "Resource": "arn:aws:events:us-west-2:539247450358:event-bus/wnk-dev-events"
     },
     {
       "Sid": "EventsRead",
@@ -152,8 +153,8 @@
         "bedrock-agentcore:GetEvent"
       ],
       "Resource": [
-        "arn:aws:bedrock-agentcore:us-west-2:539247450358:memory/wnkinc_voice_dev_caller_memory-*",
-        "arn:aws:bedrock-agentcore:us-west-2:539247450358:memory/wnkinc_voice_dev_caller_memory-*/*"
+        "arn:aws:bedrock-agentcore:us-west-2:539247450358:memory/wnk_dev_caller_memory-*",
+        "arn:aws:bedrock-agentcore:us-west-2:539247450358:memory/wnk_dev_caller_memory-*/*"
       ]
     },
     {
@@ -164,7 +165,7 @@
         "sns:ListSubscriptionsByTopic",
         "sns:GetTopicAttributes"
       ],
-      "Resource": "arn:aws:sns:us-west-2:539247450358:wnkinc-voice-dev-alarms"
+      "Resource": "arn:aws:sns:us-west-2:539247450358:wnk-dev-alarms"
     },
     {
       "Sid": "WorkerRelease",
@@ -173,7 +174,7 @@
         "lambda:ListVersionsByFunction",
         "lambda:PublishVersion"
       ],
-      "Resource": "arn:aws:lambda:us-west-2:539247450358:function:wnkinc-voice-dev-worker"
+      "Resource": "arn:aws:lambda:us-west-2:539247450358:function:wnk-dev-worker"
     },
     {
       "Sid": "WorkerFallback",
@@ -182,7 +183,7 @@
         "ecs:UpdateService",
         "ecs:DescribeServices"
       ],
-      "Resource": "arn:aws:ecs:us-west-2:539247450358:service/wnkinc-voice-dev-worker/wnkinc-voice-dev-worker-fallback"
+      "Resource": "arn:aws:ecs:us-west-2:539247450358:service/wnk-dev-worker/wnk-dev-worker-fallback"
     }
   ]
 }
