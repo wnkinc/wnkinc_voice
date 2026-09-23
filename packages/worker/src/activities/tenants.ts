@@ -1,7 +1,7 @@
 /** Tenant rows beyond the lookup: every tenant (the canary), and the browser fields the login handoff owns. */
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
-import type { TenantRow } from '../types.js';
+import type { TenantRow } from '@wnk/shared/contracts';
 import { env, now } from './config.js';
 import { ddb } from './identity.js';
 

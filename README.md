@@ -228,8 +228,8 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 ### The automations menu
 
 Each after-call automation is a workflow in the worker (`packages/worker/src/workflows/automations.ts`),
-listed in the catalog (`packages/worker/src/automations/catalog.ts`) with the bus event that starts
-it. A tenant file lists the ones it runs:
+registered in the contracts (`AUTOMATIONS` in `packages/shared/src/contracts.ts`) with the bus event
+that starts it. A tenant file lists the ones it runs:
 
 | Workflow | On | What it does |
 |---|---|---|

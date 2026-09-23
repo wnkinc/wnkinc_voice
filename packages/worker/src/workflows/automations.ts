@@ -8,7 +8,8 @@
  */
 import { ApplicationFailure, proxyActivities } from '@temporalio/workflow';
 import type * as activities from '../activities/index.js';
-import { escapeHtml, hasCrm, leadEmailBody, nextBusinessMorning, splitName, type CallEnded, type LeadRecorded, type OwnerNotify } from '../automations/catalog.js';
+import type { CallEnded, LeadRecorded, OwnerNotify } from '@wnk/shared/contracts';
+import { escapeHtml, hasCrm, leadEmailBody, nextBusinessMorning, splitName } from '../automations/catalog.js';
 import { orElse } from './loop.js';
 
 type Activities = typeof activities;

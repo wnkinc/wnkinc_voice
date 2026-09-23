@@ -1,0 +1,14 @@
+# The worker image is built from the repo root (packages/worker/Dockerfile), so
+# that build can take @wnk/shared. Everything is out unless named here; what
+# is named is also what the CDK asset hash covers, so only these files rebuild
+# the image.
+*
+!package.json
+!package-lock.json
+!packages/shared/package.json
+!packages/shared/src
+!packages/worker/package.json
+!packages/worker/tsconfig.json
+!packages/worker/src
+!packages/worker/scripts
+!packages/worker/Dockerfile

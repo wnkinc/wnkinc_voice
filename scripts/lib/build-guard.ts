@@ -6,9 +6,11 @@
  * and never runs.
  */
 
-/** Paths whose change reaches the worker: its source and image, and the stack that sets its environment. Tests and docs do not. */
+/** Paths whose change reaches the worker: its source and image, the contracts it bundles, and the stack that sets its environment. Tests and docs do not. */
 export function reachesTheWorker(path: string): boolean {
   if (path === 'packages/infrastructure/stacks/worker-stack.ts') return true;
+  if (path === '.dockerignore') return true;
+  if (path.startsWith('packages/shared/src/')) return true;
   if (!path.startsWith('packages/worker/')) return false;
   if (path.startsWith('packages/worker/test/')) return false;
   return !path.endsWith('.md');

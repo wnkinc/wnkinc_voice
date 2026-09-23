@@ -14,7 +14,7 @@ import { proxyActivities } from '@temporalio/workflow';
 import type * as activities from '../activities/index.js';
 import { ASSISTANT_TOOLS, FALLBACK_REPLY, MAX_ROUNDS, instructions, isComposioTool, shapeToolResult, toolDefs, type ToolName } from '../assistant/catalog.js';
 import { MAX_CAPTION_CHARS, draftedNote, nextMedia } from '../sms/facebook.js';
-import type { Photo } from '../types.js';
+import type { Photo } from '@wnk/shared/contracts';
 
 type Activities = typeof activities;
 const ledger = proxyActivities<Activities>({ startToCloseTimeout: '20 seconds', retry: { maximumAttempts: 3 } });

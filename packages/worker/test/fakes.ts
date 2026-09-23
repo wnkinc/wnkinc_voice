@@ -5,7 +5,7 @@ import { Worker } from '@temporalio/worker';
 import { expect, vi } from 'vitest';
 import type * as activities from '../src/activities/index.js';
 import type { ModelResult } from '../src/activities/model.js';
-import type { DraftRow, PersonRow, TenantRow } from '../src/types.js';
+import type { DraftRow, PersonRecord, TenantRow } from '@wnk/shared/contracts';
 
 type Activities = typeof activities;
 export type Fakes = { [K in keyof Activities]: ReturnType<typeof vi.fn<Activities[K]>> };
@@ -16,7 +16,7 @@ export const tenant: TenantRow = {
   facebookPosts: { enabled: true, pageId: '42', pageName: 'Deck Co' },
   browser: { enabled: true },
 };
-export const person: PersonRow = { channelId: 'sms:+15550002222', tenantId: 'deck', tenantPhone: '+15550001111', name: 'Meg', role: 'owner' };
+export const person: PersonRecord = { channelId: 'sms:+15550002222', tenantId: 'deck', tenantPhone: '+15550001111', name: 'Meg', role: 'owner' };
 export const photo = { messageSid: 'MM1', mediaSid: 'ME1' };
 export const draft = (revision: number, shown: number): DraftRow =>
   ({ tenantId: 'deck', sk: 'sms:+15550002222#facebook_post#t#1', status: 'pending', revision, shownRevision: shown, approveBy: 9e9, payload: { caption: 'Cedar deck, finished today.', media: [photo] } });

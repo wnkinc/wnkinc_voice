@@ -1,33 +1,10 @@
 /**
- * The tenant automations: what runs on the bus for a tenant, keyed by the
- * workflow that runs it. A tenant's file lists the ones it gets; the tenant
- * stack makes a rule per entry that matches that tenant's events alone and
- * starts the named workflow with the event and the tenant's options. A
- * variation is an option here, never a conditional a shared workflow
- * branches on for one tenant. Pure: the rules the workflows apply.
+ * The tenant automations' rules, as pure functions the workflows apply: what
+ * a row's flags mean, the next business morning, the email body, the
+ * toolkits the connection canary expects. The registry (which workflow runs
+ * on which event) and the event shapes are contracts, in @wnk/shared.
  */
-import type { TenantRow } from '../types.js';
-
-export const AUTOMATIONS = {
-  /** lead.recorded -> the owner's email from their own Gmail, with what the CRM and memory already know. */
-  leadEmail: { on: 'lead.recorded' },
-  /** lead.recorded -> the contact upserted, a note, a follow-up task the next business morning. */
-  crmLead: { on: 'lead.recorded' },
-  /** call.ended -> a transcript note on the caller's contact, when they are already one. */
-  crmCall: { on: 'call.ended' },
-  /** owner.notify -> the owner's Telegram. */
-  ownerAlert: { on: 'owner.notify' },
-  /** call.ended -> the transcript into the caller's memory, the minutes metered. Every tenant, identically: the platform's rule, not a tenant file's. */
-  callEnded: { on: 'call.ended' },
-} as const;
-export type AutomationName = keyof typeof AUTOMATIONS;
-export const AUTOMATION_NAMES = Object.keys(AUTOMATIONS) as AutomationName[];
-
-// ---- The events, as the receptionist publishes them (VoiceEvent in @wnk/shared, minus `type`) ----
-export interface Lead { leadId: string; callId: string; callerName: string; phone?: string; reason: string; preferredCallbackTime?: string; notes?: string }
-export interface LeadRecorded { tenantId: string; tenantPhoneNumber: string; callId: string; lead: Lead }
-export interface CallEnded { tenantId: string; tenantPhoneNumber: string; callId: string; callerPhone?: string; status: string; durationSeconds: number }
-export interface OwnerNotify { tenantId: string; tenantPhoneNumber: string; callId: string; summary: string; urgency: 'normal' | 'urgent'; callerPhone?: string }
+import type { LeadRecorded, TenantRow } from '@wnk/shared/contracts';
 
 /** The tenant has a CRM the platform may act in: HubSpot, consented through Composio. */
 export const hasCrm = (t: TenantRow) => t.crm?.type === 'hubspot' && t.crm.via === 'composio';

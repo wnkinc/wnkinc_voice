@@ -3,7 +3,7 @@
  * tenant's own Telegram account is served as an MCP server for their ChatGPT
  * (stack wnk-telegram-mcp-meg-dev; onboarding in packages/telegram-mcp/README.md).
  */
-import type { TenantAutomations } from '../packages/infrastructure/stacks/tenant-stack.js';
+import type { TenantAutomations } from '@wnk/shared/contracts';
 
 export const meg: TenantAutomations = {
   tenantId: 'meg',

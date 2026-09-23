@@ -1,10 +1,8 @@
 import { z } from 'zod';
+import { ACTION_APPROVAL_WORDS, ACTION_STATUSES, ASSISTANT_TOOL_NAMES, type ActionType, type CallStatus, type Photo, type TranscriptEntry } from './contracts.js';
 
 /** E.164 phone number, e.g. +15555550100 */
 export const E164 = z.string().regex(/^\+[1-9]\d{6,14}$/, 'must be E.164 (+15555550100)');
-
-/** Assistant tool names; the catalog that runs them is `packages/worker/src/assistant/catalog.ts` (kept in step by a test). */
-export const ASSISTANT_TOOL_NAMES = ['search_contacts', 'add_note', 'draft_facebook_post', 'cancel_facebook_draft'] as const;
 
 // ---- Actions: the approval ledger ---------------------------------------------
 // One row per action that reaches a customer irreversibly or costs money, in
@@ -17,11 +15,8 @@ export const ASSISTANT_TOOL_NAMES = ['search_contacts', 'add_note', 'draft_faceb
 // A row stuck in `executing` means the outcome is unknown: a person reconciles
 // it, nothing retries it.
 
-export const ACTION_STATUSES = ['pending', 'executing', 'completed', 'failed', 'rejected'] as const;
-
-/** Each action type and the exact word (any case, nothing else in the message) that approves it. It names the action so a YES meant for something else approves nothing. */
-export const ACTION_APPROVAL_WORDS = { facebook_post: 'POST' } as const;
-export type ActionType = keyof typeof ACTION_APPROVAL_WORDS;
+/** A texted photo, as the ledger stores it. */
+export const PhotoSchema = z.object({ messageSid: z.string(), mediaSid: z.string() }) satisfies z.ZodType<Photo>;
 
 /** An Actions row as the workflows write it (plain values; the table holds the DynamoDB-typed form). */
 export const ActionSchema = z.object({
@@ -42,7 +37,7 @@ export const ActionSchema = z.object({
   payload: z.object({
     caption: z.string(),
     /** Texted photos by Twilio id; links are minted when needed, never stored. */
-    media: z.array(z.object({ messageSid: z.string(), mediaSid: z.string() })),
+    media: z.array(PhotoSchema),
   }),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -79,16 +74,6 @@ export function personChannelKeys(p: Person): string[] {
   if (p.telegramId !== undefined) keys.push(channelKey('telegram', p.telegramId));
   if (p.phone) keys.push(channelKey('sms', p.phone));
   return keys;
-}
-
-/** One People-table row: a channel identity that resolves to a tenant and a person. */
-export interface PersonRecord {
-  channelId: string;
-  tenantId: string;
-  /** The tenant row's key, so one GetItem reaches the tenant from a person. */
-  tenantPhone: string;
-  name: string;
-  role: Person['role'];
 }
 
 /**
@@ -219,14 +204,6 @@ export interface CallParty {
   to?: string;
 }
 
-export type CallStatus = 'claimed' | 'accepted' | 'in_progress' | 'completed' | 'failed';
-
-export interface TranscriptEntry {
-  role: 'user' | 'assistant' | 'tool';
-  text: string;
-  at: string;
-}
-
 export interface ToolCallRecord {
   name: string;
   args: unknown;
@@ -248,24 +225,6 @@ export interface CallRecord {
   toolCalls?: ToolCallRecord[];
   error?: string;
   expiresAt?: number; // DynamoDB TTL (epoch seconds)
-}
-
-/**
- * What the receptionist captured, as carried on the `lead.recorded` event. Not
- * a table: the tenant's CRM is the record of the lead, and the call row (the
- * `record_lead` tool call plus the once-markers each consumer writes) is the
- * audit that the platform did what it should. `leadId` keys those markers.
- */
-export interface Lead {
-  tenantId: string;
-  leadId: string;
-  callId: string;
-  createdAt: string;
-  callerName: string;
-  phone?: string;
-  reason: string;
-  preferredCallbackTime?: string;
-  notes?: string;
 }
 
 /** What the webhook learned about the caller from the CRM before accepting. */
@@ -294,10 +253,3 @@ export interface SessionJob {
   startedAt: string;
   extras?: CallExtras;
 }
-
-/** Domain events on the EventBridge bus; rules route each to a workflow on the worker (the platform's, or a tenant's). */
-export type VoiceEvent =
-  | { type: 'lead.recorded'; tenantId: string; tenantPhoneNumber: string; callId: string; lead: Lead }
-  | { type: 'owner.notify'; tenantId: string; tenantPhoneNumber: string; callId: string; summary: string; urgency: 'normal' | 'urgent'; callerPhone?: string }
-  // Ids and outcome only: the transcript stays on the call row, fetched by id by whoever needs it.
-  | { type: 'call.ended'; tenantId: string; tenantPhoneNumber: string; callId: string; callerPhone?: string; status: CallStatus; durationSeconds: number };

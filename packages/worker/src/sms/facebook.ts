@@ -13,13 +13,12 @@
  * A prompt injection, or a model that misreads the person, can at most put a
  * draft in front of them.
  */
-import type { DraftRow, Photo, TenantRow } from '../types.js';
+import { ACTION_APPROVAL_WORDS, type DraftRow, type Photo, type TenantRow } from '@wnk/shared/contracts';
 
 /** Composio's Facebook toolkit release. Its oldest, which an unpinned call runs, cannot post to a Page. */
 export const FACEBOOK_VERSION = '20260902_00';
 export const ACTION_TYPE = 'facebook_post';
-/** ACTION_APPROVAL_WORDS.facebook_post in @wnk/shared (kept in step by a test). */
-export const APPROVAL_WORD = 'POST';
+export const APPROVAL_WORD: string = ACTION_APPROVAL_WORDS.facebook_post;
 export const APPROVAL_HOURS = 48;
 /** How long a row stays as the log after it is written. */
 export const LOG_DAYS = 400;

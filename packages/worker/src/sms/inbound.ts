@@ -2,7 +2,7 @@
  * Twilio's inbound post, as the starter parses it and the workflow reads it.
  * Pure: shared by the starter Lambda, the workflow bundle, and the tests.
  */
-import type { Photo } from '../types.js';
+import type { Photo } from '@wnk/shared/contracts';
 
 /** Twilio's form fields (From, To, Body, AccountSid, MessageSid, NumMedia, MediaUrl<n>, ...). */
 export type Sms = Record<string, string>;

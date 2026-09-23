@@ -3,14 +3,15 @@
  * (name, description, a slim schema) and what runs when it calls one (a
  * Composio slug, its arguments from the model's `a`, and the shape of the
  * result handed back). A tenant's row lists which names its assistant may
- * use; that list is the allow-list the workflow enforces. Mirror of
- * ASSISTANT_TOOL_NAMES in @wnk/shared (kept in step by a test). Pure.
+ * use; that list is the allow-list the workflow enforces. The names are
+ * ASSISTANT_TOOL_NAMES in the contracts; the catalog must define each and
+ * nothing else, which the compiler holds. Pure.
  *
  * Deferred: `send_email`. Sending mail on the model's say-so reaches a
  * customer irreversibly; it gets the ledger's split, a draft tool here and
  * a SEND the workflow matches, never a send tool.
  */
-import type { PersonRow, TenantRow } from '../types.js';
+import type { AssistantToolName, PersonRecord, TenantRow } from '@wnk/shared/contracts';
 
 export const MAX_ROUNDS = 6;
 export const MAX_TOOL_OUTPUT_CHARS = 6000;
@@ -86,7 +87,7 @@ export const ASSISTANT_TOOLS = {
     description: 'Discard the pending Facebook post draft when the person no longer wants it.',
     parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
   } satisfies LedgerTool,
-} as const;
+} as const satisfies Record<AssistantToolName, ComposioTool | LedgerTool>;
 
 export type ToolName = keyof typeof ASSISTANT_TOOLS;
 export const TOOL_NAMES = Object.keys(ASSISTANT_TOOLS) as ToolName[];
@@ -113,7 +114,7 @@ export const CHANNEL = {
 } as const;
 
 /** The system prompt for a conversation with one of the tenant's people; `extra` is what a channel appends. */
-export function systemPrompt(tenant: TenantRow, person: PersonRow, channel: keyof typeof CHANNEL, extra = ''): string {
+export function systemPrompt(tenant: TenantRow, person: PersonRecord, channel: keyof typeof CHANNEL, extra = ''): string {
   const b = tenant.business;
   return [
     `You are My Assistant for ${b.name}, ${CHANNEL[channel].verb} with ${person.name} (${person.role}) who works there. `,

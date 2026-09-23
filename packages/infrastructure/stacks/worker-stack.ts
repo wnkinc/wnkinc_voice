@@ -52,7 +52,8 @@ import type { Construct } from 'constructs';
 import { dlqAlarm, errorAlarm } from '../infra_utils/alarms.js';
 import { MEMORY_USE_ACTIONS } from './memory-stack.js';
 
-const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../worker');
+/** The image's build context is the repo root (the worker takes @wnk/shared); the root .dockerignore names what goes in, and so what the asset hash covers. */
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 /** The Temporal Cloud accounts that invoke Serverless Workers (docs.temporal.io, serverless-workers/aws-lambda). */
 export const TEMPORAL_CLOUD_INVOKERS = ['902542641901', '160190466495', '819232936619', '829909441867', '354116250941']
@@ -141,7 +142,7 @@ export class WorkerStack extends cdk.Stack {
     errorAlarm(this, 'MediaLinkErrors', mediaLink, props.alarmTopic, 'Media link resolver');
 
     // One image for the worker, the starter and the fallback: the handler differs.
-    const asset = new DockerImageAsset(this, 'Image', { directory: PACKAGE_DIR, platform: Platform.LINUX_ARM64, exclude: ['node_modules', 'lib', 'test', '*.md'] });
+    const asset = new DockerImageAsset(this, 'Image', { directory: REPO_ROOT, file: 'packages/worker/Dockerfile', platform: Platform.LINUX_ARM64 });
     const image = (cmd: string) => lambda.DockerImageCode.fromEcr(asset.repository, { tagOrDigest: asset.imageTag, cmd: [cmd] });
     const logGroup = (name: string, cid: string) => new logs.LogGroup(this, cid, { logGroupName: `/aws/lambda/${name}`, retention: logs.RetentionDays.ONE_MONTH, removalPolicy: cdk.RemovalPolicy.DESTROY });
     // What the activities reach, by name. Tenant config stays in the tenant row.

@@ -20,7 +20,7 @@ import type * as activities from '../activities/index.js';
 import { systemPrompt } from '../assistant/catalog.js';
 import { APPROVAL_WORD, FACEBOOK_VERSION, allowedTools, draftMessage, facebookOn, facebookPrompt, isApproval, modelContent, postId, postLink } from '../sms/facebook.js';
 import { mediaFromSms, textOrPhotos, type Sms } from '../sms/inbound.js';
-import type { Photo } from '../types.js';
+import type { Photo } from '@wnk/shared/contracts';
 import { orElse, runAssistantLoop, sessionDay } from './loop.js';
 
 type Activities = typeof activities;

@@ -7,7 +7,7 @@
  */
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
-import type { TranscriptEntry } from '../types.js';
+import type { TranscriptEntry } from '@wnk/shared/contracts';
 import { env, epoch, now } from './config.js';
 import { ddb } from './identity.js';
 
