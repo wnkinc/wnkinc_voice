@@ -9,7 +9,7 @@ import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import type { TranscriptEntry } from '@wnk/shared/contracts';
 import { env, epoch, now } from './config.js';
-import { ddb } from './identity.js';
+import { ddb } from './clients.js';
 
 /** The marker and, when asked, the transcript. */
 export async function readCall(callId: string, key: string, transcript = false): Promise<{ done: boolean; transcript: TranscriptEntry[] }> {

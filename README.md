@@ -107,7 +107,7 @@ number is the identity.
                                                                                           │ unknown sender / assistant off? → done, silently
                                                                                           │ /login from the owner? → browserLogin workflow
                                                                                           ▼
-                                                              the agent loop (packages/worker/src/workflows/loop.ts):
+                                                              the agent loop (packages/worker/src/workflows/assistant/loop.ts):
                                                     Memory: this session's history + what it recalls about the person
                                                     ──▶ callModel (OpenAI Responses) ──▶ tool call? gate it, run it through
                                                         Composio AS the tenant, back to the model ──▶ ... until it answers
@@ -121,7 +121,7 @@ stop. The steps between its decisions are the seam the platform controls: the to
 tenant row's `assistant.tools` list, every Composio call names the tenant, tool results are
 bounded, rounds are capped at six, and each call is an activity in the workflow history. Rounds
 inside one turn chain with OpenAI's `previous_response_id`, so a later round sends only the tool
-results. Tools are a catalog (`packages/worker/src/assistant/catalog.ts`): what the model sees is a
+results. Tools are a catalog (`packages/worker/src/rules/assistant.ts`): what the model sees is a
 slim schema (`search_contacts(query)`), what runs is a Composio slug with defaults. Adding a tool is
 one catalog entry and a name on the rows that get it.
 
@@ -145,7 +145,7 @@ Telegram turn as the tenant's owner; the reply lands on their Telegram and is pr
 **Facebook posts over SMS.** For a tenant with `facebookPosts` on, a texted photo reaches the
 model, the model drafts through the Actions ledger, the workflow texts the draft word for word
 from the row under the model's line, and the person's reply POST publishes it without the model
-(`packages/worker/src/sms/facebook.ts`; the split is held by `packages/worker/test/sms-turn.test.ts`).
+(`packages/worker/src/rules/facebook.ts`; the split is held by `packages/worker/test/sms-turn.test.ts`).
 
 **Saved browser: `/login`.** A business signs into the sites it uses once, and the platform keeps
 that browser. The owner sends `/login <site>` to the bot; the Telegram turn starts the
@@ -222,12 +222,12 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `receptionist.maxCallSeconds` (default 600, max 840) | Ours, not OpenAI's: the agent is asked to wrap up, then the call is hung up |
 | `crm` | `{ "type": "hubspot", "via": "composio" }` enables caller recognition, CRM sync, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
 | `emailResponder` | `{ enabled }`: owner follow-up email per lead, from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default off; the workflow refuses a tenant whose flag is off. |
-| `assistant` | `{ enabled, tools }`: the chat assistant for the tenant's people. `tools` is the allow-list, by name from the catalog in `packages/worker/src/assistant/catalog.ts` (`search_contacts`, `add_note`; both need the HubSpot consent). Empty means it answers from the prompt and memory alone. |
+| `assistant` | `{ enabled, tools }`: the chat assistant for the tenant's people. `tools` is the allow-list, by name from the catalog in `packages/worker/src/rules/assistant.ts` (`search_contacts`, `add_note`; both need the HubSpot consent). Empty means it answers from the prompt and memory alone. |
 | `browser` | `{ enabled, contextId }`: the tenant's saved browser in Browserbase (cookies, logins). The browser-login workflow creates the context on the owner's first `/login` and writes it to the row; copy it into the file when the reply says so, or a re-seed starts a fresh browser. |
 
 ### The automations menu
 
-Each after-call automation is a workflow in the worker (`packages/worker/src/workflows/automations.ts`),
+Each after-call automation is a workflow in the worker (`packages/worker/src/workflows/automations/`),
 registered in the contracts (`AUTOMATIONS` in `packages/shared/src/contracts.ts`) with the bus event
 that starts it. A tenant file lists the ones it runs:
 
@@ -466,7 +466,7 @@ deadline nears: idle costs nothing, no fleet. The stack (`stacks/worker-stack.ts
 function, the invocation role only Temporal's accounts may assume (gated by a generated external
 id), the platform secret holding the namespace connection, and the SMS front door.
 
-**The assistant on Temporal.** One loop (`workflows/loop.ts`: memory, the model, the gated tools, the
+**The assistant on Temporal.** One loop (`workflows/assistant/loop.ts`: memory, the model, the gated tools, the
 round cap) under three workflows: `smsTurn` (Twilio posts to `/temporal/sms/<WEBHOOK_PATH>`, one
 workflow per text keyed by the MessageSid), `telegramTurn` (Telegram posts to
 `/temporal/telegram/<WEBHOOK_PATH>`, one per update keyed by the update id, the reply through the
@@ -474,7 +474,7 @@ Bot API as an activity), and `assistantHealth` (a Temporal Schedule every mornin
 tenant fails the workflow, which is the alarm). The owner's `/login` starts `browserLogin`, whose
 window is a durable timer. The starters are the same image with different handlers, and a
 redelivered webhook starts nothing twice. Facebook drafts and the POST approval carry over
-unchanged (`packages/worker/src/sms/facebook.ts`, the ledger rules as pure functions;
+unchanged (`packages/worker/src/rules/facebook.ts`, the ledger rules as pure functions;
 `test/sms-turn.test.ts` runs the workflow through a real Worker with recorded fakes and holds the
 split: POST publishes once, only on the shown revision, never through the model). Point traffic
 with `npx tsx scripts/twilio-webhook.mts set <tenantId>` and
@@ -491,7 +491,7 @@ key (the browser login expires; this does not).
 **When it breaks.** Two alarms from the SDK's own log lines: a failed workflow (an activity
 exhausted its retries, or the workflow threw; what a failed execution was on Step Functions) and
 five failed activities in an hour. Serverless Workers are a preview: the same image runs as a
-Fargate service at zero tasks (`packages/worker/src/service.ts`, announcing the same build id),
+Fargate service at zero tasks (`packages/worker/src/entry/service.ts`, announcing the same build id),
 and the stack output `fallbackService` is the one command that brings it up; the queue drains
 with no release. Set it back to zero when the Lambda path is healthy again.
 
@@ -508,9 +508,9 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 | `packages/receptionist/src/session.ts` | Lambda: SQS-triggered, one call per invocation, holds the WebSocket for the call's duration. Owns the socket and nothing else: memory and usage are the call-ended workflow's |
 | `packages/receptionist/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/receptionist/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload. To add a tool: a zod args schema, a handler, a `tool({...})` entry, then its name in a tenant's `tools`. Tools that need durability publish an event and return; a workflow consumes it |
-| `packages/worker/` | The Temporal Worker: `workflows/` (deterministic: the shared loop, the SMS and Telegram turns, browser login, the four tenant automations, both canaries), `activities/` (the side effects, each taking its tenant id), `assistant/catalog.ts` (the tool catalog and prompts), `automations/catalog.ts` (the automations and their rules), `sms/` (inbound parsing and the Facebook ledger rules), `handler.ts` (Lambda), `starter.ts` (the front doors), `service.ts` (the Fargate fallback), `version.ts` (deployment name, build id, task queue) |
+| `packages/worker/` | The Temporal Worker. `workflows/` is the bundle side, deterministic, one barrel Temporal registers: `assistant/` (the shared loop, the SMS and Telegram turns, browser login), `automations/` (one file per tenant automation), `platform/` (call-ended, both canaries). `activities/` is the side effects, each taking its tenant id. `rules/` is the pure functions both sides and the tests use (the assistant's tool catalog and prompts, the Facebook ledger rules, inbound SMS parsing, the automations' rules). `entry/` is the three processes on one image: `handler.ts` (Lambda), `starter.ts` (the front doors), `service.ts` (the Fargate fallback), with the Temporal connection read once in `temporal.ts`. `search-attributes.ts` names what every workflow is indexed by; `version.ts` the deployment name, build id, task queue |
 | `packages/media-link/` | The one Lambda on the assistant path: a texted photo's Twilio ids -> the signed link Twilio redirects to (about four hours, fetchable by anyone). Code because fails an HTTP task on a 307 and keeps the Location header from the workflow. Takes ids, never a URL; refuses a photo not texted to the tenant's number it is given. Moves no bytes, stores nothing |
-| `packages/worker/src/sms/facebook.ts` | Facebook posts over SMS, and the pattern for every action that reaches a customer irreversibly: the model drafts into the Actions ledger, the workflow shows the draft from the row, the person's exact word approves, the workflow executes once. `packages/worker/test/sms-turn.test.ts` holds the split |
+| `packages/worker/src/rules/facebook.ts` | Facebook posts over SMS, and the pattern for every action that reaches a customer irreversibly: the model drafts into the Actions ledger, the workflow shows the draft from the row, the person's exact word approves, the workflow executes once. `packages/worker/test/sms-turn.test.ts` holds the split |
 | `packages/telegram-mcp/` | A tenant's own Telegram account (a user login, not the assistant's bot) as a remote MCP server for their ChatGPT or Claude: the pinned chigwell/telegram-mcp engine in a container Lambda behind a secret URL. `server.py` only loads the tenant's secrets and removes the tools Lambda can't serve. Onboarding in its README |
 | `tenants/<id>.ts`, `tenants/index.ts` | What that tenant runs: its automations on the bus, and `telegramMcp` for the connector. The registry is one line per tenant. Tracked, unlike the rows |
 | `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant with automations, from its file: rules filtered on the tenant id, targeting the worker's automation starter |

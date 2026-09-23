@@ -3,7 +3,7 @@ import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import type { TenantRow } from '@wnk/shared/contracts';
 import { env, now } from './config.js';
-import { ddb } from './identity.js';
+import { ddb } from './clients.js';
 
 /** The Tenants table is tiny (one row per called number); a scan is the read. */
 export async function listTenants(): Promise<TenantRow[]> {

@@ -15,16 +15,16 @@
 import type { APIGatewayProxyHandlerV2, SQSHandler } from 'aws-lambda';
 import { Client, Connection, WorkflowExecutionAlreadyStartedError } from '@temporalio/client';
 import { isAutomation } from '@wnk/shared/contracts';
-import { isRoutable, parseForm } from './sms/inbound.js';
-import { TASK_QUEUE } from './version.js';
-import { env, secret } from './activities/config.js';
+import { isRoutable, parseForm } from '../rules/sms.js';
+import { TENANT_ID } from '../search-attributes.js';
+import { TASK_QUEUE } from '../version.js';
+import { temporalConnection } from './temporal.js';
 
 let client: Promise<Client> | undefined;
 async function connect(): Promise<Client> {
-  const s = await secret(env('TEMPORAL_SECRET_ARN'));
-  for (const key of ['TEMPORAL_ADDRESS', 'TEMPORAL_NAMESPACE', 'TEMPORAL_API_KEY']) if (!s[key]) throw new Error(`${key} is empty in the Temporal secret`);
-  const connection = await Connection.connect({ address: s.TEMPORAL_ADDRESS, tls: true, apiKey: s.TEMPORAL_API_KEY });
-  return new Client({ connection, namespace: s.TEMPORAL_NAMESPACE });
+  const t = await temporalConnection();
+  const connection = await Connection.connect({ address: t.address, tls: true, apiKey: t.apiKey });
+  return new Client({ connection, namespace: t.namespace });
 }
 
 export const handler: SQSHandler = async (event) => {
@@ -69,7 +69,10 @@ export const automation = async (event: AutomationStart): Promise<void> => {
   client ??= connect().catch((err: unknown) => { client = undefined; throw err; });
   const c = await client;
   try {
-    await c.workflow.start(name, { taskQueue: TASK_QUEUE, workflowId: `${name}-${d.tenantId}-${key}`, args: [d, event.options ?? {}], workflowIdReusePolicy: 'ALLOW_DUPLICATE_FAILED_ONLY' });
+    await c.workflow.start(name, {
+      taskQueue: TASK_QUEUE, workflowId: `${name}-${d.tenantId}-${key}`, args: [d, event.options ?? {}], workflowIdReusePolicy: 'ALLOW_DUPLICATE_FAILED_ONLY',
+      typedSearchAttributes: [{ key: TENANT_ID, value: d.tenantId }],
+    });
   } catch (err) {
     if (!(err instanceof WorkflowExecutionAlreadyStartedError)) throw err;
   }

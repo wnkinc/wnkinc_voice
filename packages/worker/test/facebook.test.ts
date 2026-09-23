@@ -1,7 +1,7 @@
 /** The Facebook rules and the inbound parsing, as pure functions: the tests the Step Functions expressions had, carried over. */
 import { describe, expect, it } from 'vitest';
-import { APPROVAL_WORD, FACEBOOK_TOOLS, allowedTools, draftMessage, facebookOn, facebookPrompt, isApproval, modelContent, nextMedia, postId, postLink } from '../src/sms/facebook.js';
-import { mediaFromSms, parseForm, textOrPhotos } from '../src/sms/inbound.js';
+import { APPROVAL_WORD, FACEBOOK_TOOLS, allowedTools, draftMessage, facebookOn, facebookPrompt, isApproval, modelContent, nextMedia, postId, postLink } from '../src/rules/facebook.js';
+import { mediaFromSms, parseForm, textOrPhotos } from '../src/rules/sms.js';
 import type { AssistantToolName, DraftRow } from '@wnk/shared/contracts';
 
 const photo = (n: string) => ({ messageSid: 'MM1', mediaSid: `ME${n}` });

@@ -22,6 +22,7 @@
 import { execFileSync } from 'node:child_process';
 import { BUILD_ID, DEPLOYMENT_NAME, TASK_QUEUE } from '../packages/worker/src/version.js';
 import { REGION, temporalSecret } from './lib/temporal-env.mts';
+import { missingSearchAttributes } from './lib/temporal-namespace.mts';
 
 const STACK = 'wnk-worker-dev';
 /** Every morning: the connection check at 15:00 UTC, the assistant probe ten minutes after it, so a failure there is about the loop, not Composio. */
@@ -41,6 +42,10 @@ const secret = await temporalSecret();
 // The browser login's token, when present, is tried first and may have expired: point the CLI past it.
 const temporalEnv = { TEMPORAL_ADDRESS: secret.TEMPORAL_ADDRESS!, TEMPORAL_NAMESPACE: secret.TEMPORAL_NAMESPACE!, TEMPORAL_API_KEY: secret.TEMPORAL_API_KEY!, TEMPORAL_CONFIG_FILE: '/dev/null' };
 const temporal = (args: string[]) => sh('temporal', args, temporalEnv);
+
+// 0. The namespace configuration the build depends on (CI checked it before the deploy too; here for a release by hand).
+const missing = missingSearchAttributes(temporalEnv.TEMPORAL_NAMESPACE, temporalEnv);
+if (missing.length > 0) { console.error(`the namespace lacks search attribute(s) the worker sets; a person creates each once (ops/README.md):\n  ${missing.map((m) => m.command).join('\n  ')}`); process.exit(1); }
 
 // 1. An immutable Lambda version of the deployed code, one per build id. If this
 //    build id already has one (a rerun), reuse it rather than publishing again.

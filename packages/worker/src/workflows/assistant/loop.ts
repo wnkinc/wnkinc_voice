@@ -11,10 +11,11 @@
  * still meets these.
  */
 import { proxyActivities } from '@temporalio/workflow';
-import type * as activities from '../activities/index.js';
-import { ASSISTANT_TOOLS, FALLBACK_REPLY, MAX_ROUNDS, instructions, isComposioTool, shapeToolResult, toolDefs, type ToolName } from '../assistant/catalog.js';
-import { MAX_CAPTION_CHARS, draftedNote, nextMedia } from '../sms/facebook.js';
+import type * as activities from '../../activities/index.js';
 import type { Photo } from '@wnk/shared/contracts';
+import { ASSISTANT_TOOLS, FALLBACK_REPLY, MAX_ROUNDS, instructions, isComposioTool, shapeToolResult, toolDefs, type ToolName } from '../../rules/assistant.js';
+import { MAX_CAPTION_CHARS, draftedNote, nextMedia } from '../../rules/facebook.js';
+import { orElse } from '../common.js';
 
 type Activities = typeof activities;
 const ledger = proxyActivities<Activities>({ startToCloseTimeout: '20 seconds', retry: { maximumAttempts: 3 } });
@@ -22,10 +23,6 @@ const model = proxyActivities<Activities>({ startToCloseTimeout: '90 seconds', r
 const tools = proxyActivities<Activities>({ startToCloseTimeout: '60 seconds', retry: { maximumAttempts: 2 } });
 /** Memory: a failure costs only that; the turn still answers. */
 const memory = proxyActivities<Activities>({ startToCloseTimeout: '20 seconds', retry: { maximumAttempts: 2 } });
-
-export async function orElse<T>(p: Promise<T>, fallback: T): Promise<T> {
-  try { return await p; } catch { return fallback; }
-}
 
 export interface LoopInput {
   tenantId: string;

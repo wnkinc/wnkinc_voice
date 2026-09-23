@@ -1,6 +1,6 @@
 /** One call to OpenAI's Responses API. Rounds inside a turn chain with previous_response_id, so a later round sends only the tool results. */
 import { ApplicationFailure } from '@temporalio/activity';
-import { MAX_OUTPUT_TOKENS } from '../assistant/catalog.js';
+import { MAX_OUTPUT_TOKENS } from '../rules/assistant.js';
 import { env, secret } from './config.js';
 
 export const OPENAI_API = 'https://api.openai.com/v1/';

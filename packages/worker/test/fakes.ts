@@ -1,11 +1,22 @@
 /** Every activity as a recorded fake with a quiet default, and a worker on Temporal's test server to run a workflow against them. */
 import { fileURLToPath } from 'node:url';
-import type { TestWorkflowEnvironment } from '@temporalio/testing';
+import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { Worker } from '@temporalio/worker';
 import { expect, vi } from 'vitest';
+import type { DraftRow, PersonRecord, TenantRow } from '@wnk/shared/contracts';
 import type * as activities from '../src/activities/index.js';
 import type { ModelResult } from '../src/activities/model.js';
-import type { DraftRow, PersonRecord, TenantRow } from '@wnk/shared/contracts';
+import { SEARCH_ATTRIBUTES } from '../src/search-attributes.js';
+
+/** KEYWORD -> the proto enum's value, for the operator service. */
+const INDEXED_VALUE_TYPE = { TEXT: 1, KEYWORD: 2, INT: 3, DOUBLE: 4, BOOL: 5, DATETIME: 6, KEYWORD_LIST: 7 } as const;
+
+/** Temporal's test server with time skipping, knowing the platform's search attributes as the namespace does: it validates them like the real one, and registers them only through its operator service. */
+export async function testEnv(): Promise<TestWorkflowEnvironment> {
+  const env = await TestWorkflowEnvironment.createTimeSkipping();
+  await env.connection.operatorService.addSearchAttributes({ namespace: 'default', searchAttributes: Object.fromEntries(SEARCH_ATTRIBUTES.map((k) => [k.name, INDEXED_VALUE_TYPE[k.type]])) });
+  return env;
+}
 
 type Activities = typeof activities;
 export type Fakes = { [K in keyof Activities]: ReturnType<typeof vi.fn<Activities[K]>> };

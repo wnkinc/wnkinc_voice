@@ -7,16 +7,15 @@
  */
 import { fileURLToPath } from 'node:url';
 import { NativeConnection, Worker } from '@temporalio/worker';
-import * as activities from './activities/index.js';
-import { env, secret } from './activities/config.js';
-import { BUILD_ID, DEPLOYMENT_NAME, TASK_QUEUE } from './version.js';
+import * as activities from '../activities/index.js';
+import { BUILD_ID, DEPLOYMENT_NAME, TASK_QUEUE } from '../version.js';
+import { temporalConnection } from './temporal.js';
 
-const s = await secret(env('TEMPORAL_SECRET_ARN'));
-for (const key of ['TEMPORAL_ADDRESS', 'TEMPORAL_NAMESPACE', 'TEMPORAL_API_KEY']) if (!s[key]) throw new Error(`${key} is empty in the Temporal secret`);
-const connection = await NativeConnection.connect({ address: s.TEMPORAL_ADDRESS, tls: true, apiKey: s.TEMPORAL_API_KEY });
+const t = await temporalConnection();
+const connection = await NativeConnection.connect({ address: t.address, tls: true, apiKey: t.apiKey });
 const worker = await Worker.create({
   connection,
-  namespace: s.TEMPORAL_NAMESPACE!,
+  namespace: t.namespace,
   taskQueue: TASK_QUEUE,
   workflowBundle: { codePath: fileURLToPath(new URL('./workflow-bundle.js', import.meta.url)) },
   activities,

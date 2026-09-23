@@ -4,12 +4,12 @@
  * revoked connection fails nothing on its own (enrichment carries on
  * without it), so this turns that silence into a failed workflow, which
  * alarms. What each row promises is read from its own flags
- * (automations/catalog.ts expectedToolkits); a new tenant is covered by the
+ * (rules/automations.ts expectedToolkits); a new tenant is covered by the
  * scan; nothing here names one.
  */
 import { ApplicationFailure, proxyActivities } from '@temporalio/workflow';
-import type * as activities from '../activities/index.js';
-import { expectedToolkits, missingToolkits } from '../automations/catalog.js';
+import type * as activities from '../../activities/index.js';
+import { expectedToolkits, missingToolkits } from '../../rules/automations.js';
 
 const reads = proxyActivities<typeof activities>({ startToCloseTimeout: '30 seconds', retry: { maximumAttempts: 3 } });
 

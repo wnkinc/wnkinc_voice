@@ -10,7 +10,8 @@ import { build } from 'esbuild';
 
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 const result = await build({
-  entryPoints: [here('../src/handler.ts'), here('../src/service.ts'), here('../src/starter.ts')],
+  entryPoints: [here('../src/entry/handler.ts'), here('../src/entry/service.ts'), here('../src/entry/starter.ts')],
+  outbase: here('../src/entry'),
   outdir: here('../lib'),
   bundle: true,
   platform: 'node',
