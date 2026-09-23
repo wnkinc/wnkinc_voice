@@ -12,8 +12,8 @@
  * as user_id), and accept does the same under a deadline. What remains here is
  * for the consent scripts: connect links and the owner's Gmail address.
  *
- * Deliberately NOT re-exported from the shared index: import from
- * '@wnk/shared/composio' (scripts only) so no Lambda bundle carries the SDK.
+ * Lives with the scripts, not in @wnk/shared: the SDK depends on the OpenAI
+ * SDK, and a package the worker's image installs must not carry either.
  *
  * Config: COMPOSIO_SECRET_ARN (Secrets Manager JSON {"COMPOSIO_API_KEY":...})
  * or COMPOSIO_API_KEY directly (scripts). Optional COMPOSIO_GMAIL_VERSION /

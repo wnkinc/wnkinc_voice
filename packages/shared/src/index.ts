@@ -1,4 +1,7 @@
 export * from './contracts.js';
+export * from './secrets.js';
+export * from './composio-api.js';
+export * from './memory.js';
 export * from './types.js';
 export * from './store.js';
 export * from './events.js';

@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@wnk/shared": "*"
+    "@wnk/shared": "*",
+    "aws-cdk-lib": "^2.266.0",
+    "constructs": "^10.4.0"
   }
 }

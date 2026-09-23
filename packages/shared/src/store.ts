@@ -1,18 +1,23 @@
-import { randomUUID } from 'node:crypto';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { env } from './config.js';
 import type { CallStatus, PersonRecord, TranscriptEntry } from './contracts.js';
 import { personChannelKeys, TenantConfigSchema, type CallRecord, type TenantConfig, type TenantConfigInput, type ToolCallRecord } from './types.js';
 
 /**
- * The persistence the CODE still does: the session Lambda's call row and the
- * seed's writes. Claiming a call, the once-markers, and
- * the People lookup are activities on the worker now (packages/worker/src/activities/).
- * DynamoDB in AWS, in-memory in tests.
+ * The rows, behind one interface: the tenant and people reads every side
+ * makes (the receptionist, the worker's identity activities, the scripts),
+ * the seed's writes, and the session Lambda's call row. What one side alone
+ * writes (the worker's once-markers, ledger and browser window) stays in that
+ * side's activities. DynamoDB in AWS, in-memory in tests.
  */
 export interface Store {
+  /** The tenant a called number routes to, validated on read: a row that no longer parses fails closed. */
   getTenant(phoneNumber: string): Promise<TenantConfig | undefined>;
+  /** Every tenant (the table is one row per called number; a scan is the read). */
+  listTenants(): Promise<TenantConfig[]>;
+  /** Who a channel identity is: `telegram:<id>` or `sms:<e164>` -> the tenant and person, as the seed mirrored it. */
+  getPerson(channelId: string): Promise<PersonRecord | undefined>;
   putTenant(input: TenantConfigInput): Promise<TenantConfig>;
   /**
    * Mirror a tenant's `people` into the People table (one row per channel
@@ -24,19 +29,8 @@ export interface Store {
   setCallStatus(callId: string, status: CallStatus, extra?: Partial<CallRecord>): Promise<void>;
   appendTranscript(callId: string, entry: TranscriptEntry): Promise<void>;
   appendToolCall(callId: string, tc: ToolCallRecord): Promise<void>;
-  /** Tenant by id (table is keyed by phone; scan — tenant tables are tiny). */
+  /** Tenant by id (the table is keyed by phone; a scan, the table is tiny). */
   findTenantById(tenantId: string): Promise<TenantConfig | undefined>;
-  /** Newest-first calls for a tenant (byTenant GSI). */
-  listCalls(tenantId: string, limit?: number): Promise<CallRecord[]>;
-  /**
-   * Claim the tenant's saved browser until `untilIso` (one window at a time:
-   * two sessions on one Browserbase context race on release). False when a
-   * window is already open. The same row field the browser-login workflow claims.
-   */
-  claimBrowser(phoneNumber: string, untilIso: string): Promise<boolean>;
-  releaseBrowser(phoneNumber: string): Promise<void>;
-  /** One usage row (the same shape the workflows write): what was metered, how much, and for what. */
-  putUsage(row: { tenantId: string; meter: string; units: number; ref: string }): Promise<void>;
 }
 
 function peopleRecords(tenant: TenantConfig): PersonRecord[] {
@@ -44,8 +38,9 @@ function peopleRecords(tenant: TenantConfig): PersonRecord[] {
     personChannelKeys(p).map((channelId) => ({ channelId, tenantId: tenant.tenantId, tenantPhone: tenant.phoneNumber, name: p.name, role: p.role })));
 }
 
-export function dynamoStore(): Store {
-  const db = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
+/** Over the given DocumentClient, or one of its own. */
+export function dynamoStore(client?: DynamoDBDocumentClient): Store {
+  const db = client ?? DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
   // Resolved on use so a tool that only touches one table (e.g. the seed script) needs only that env var.
   const table = (name: string, value: string) => {
     if (!value) throw new Error(`${name} not set`);
@@ -54,7 +49,6 @@ export function dynamoStore(): Store {
   const tenants = () => table('TENANTS_TABLE', env.tenantsTable);
   const calls = () => table('CALLS_TABLE', env.callsTable);
   const people = () => table('PEOPLE_TABLE', env.peopleTable);
-  const usage = () => table('USAGE_TABLE', env.usageTable);
 
   const appendList = (callId: string, attr: 'transcript' | 'toolCalls', item: unknown) =>
     db.send(new UpdateCommand({
@@ -68,6 +62,14 @@ export function dynamoStore(): Store {
     async getTenant(phoneNumber) {
       const res = await db.send(new GetCommand({ TableName: tenants(), Key: { phoneNumber } }));
       return res.Item ? TenantConfigSchema.parse(res.Item) : undefined;
+    },
+    async listTenants() {
+      const res = await db.send(new ScanCommand({ TableName: tenants() }));
+      return (res.Items ?? []).map((i) => TenantConfigSchema.parse(i));
+    },
+    async getPerson(channelId) {
+      const res = await db.send(new GetCommand({ TableName: people(), Key: { channelId } }));
+      return res.Item as PersonRecord | undefined;
     },
     async putTenant(input) {
       const tenant = TenantConfigSchema.parse(input);
@@ -119,50 +121,17 @@ export function dynamoStore(): Store {
       const item = res.Items?.[0];
       return item ? TenantConfigSchema.parse(item) : undefined;
     },
-    async claimBrowser(phoneNumber, untilIso) {
-      try {
-        await db.send(new UpdateCommand({
-          TableName: tenants(), Key: { phoneNumber },
-          UpdateExpression: 'SET #b.loginUntil = :until',
-          ConditionExpression: 'attribute_exists(phoneNumber) AND (attribute_not_exists(#b.loginUntil) OR #b.loginUntil < :now)',
-          ExpressionAttributeNames: { '#b': 'browser' },
-          ExpressionAttributeValues: { ':until': untilIso, ':now': new Date().toISOString() },
-        }));
-        return true;
-      } catch (err) {
-        if ((err as { name?: string }).name === 'ConditionalCheckFailedException') return false;
-        throw err;
-      }
-    },
-    async releaseBrowser(phoneNumber) {
-      await db.send(new UpdateCommand({ TableName: tenants(), Key: { phoneNumber }, UpdateExpression: 'REMOVE #b.loginUntil', ExpressionAttributeNames: { '#b': 'browser' } }));
-    },
-    async putUsage({ tenantId, meter, units, ref }) {
-      await db.send(new PutCommand({ TableName: usage(), Item: { tenantId, sk: `${new Date().toISOString()}#${meter}#${randomUUID()}`, meter, units, ref } }));
-    },
-    async listCalls(tenantId, limit = 50) {
-      const res = await db.send(new QueryCommand({
-        TableName: calls(),
-        IndexName: 'byTenant',
-        KeyConditionExpression: 'tenantId = :t',
-        ExpressionAttributeValues: { ':t': tenantId },
-        ScanIndexForward: false,
-        Limit: limit,
-      }));
-      return (res.Items ?? []) as CallRecord[];
-    },
   };
 }
 
 /** In-memory store for tests. */
-export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls: Map<string, CallRecord>; people: Map<string, PersonRecord>; usage: { tenantId: string; meter: string; units: number; ref: string }[] } {
+export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls: Map<string, CallRecord>; people: Map<string, PersonRecord> } {
   const tenantMap = new Map(tenants.map((t) => {
     const parsed = TenantConfigSchema.parse(t);
     return [parsed.phoneNumber, parsed] as const;
   }));
   const calls = new Map<string, CallRecord>();
   const peopleMap = new Map<string, PersonRecord>();
-  const usageRows: { tenantId: string; meter: string; units: number; ref: string }[] = [];
   const must = (id: string) => {
     const c = calls.get(id);
     if (!c) throw new Error(`unknown call ${id}`);
@@ -171,8 +140,9 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
   return {
     calls,
     people: peopleMap,
-    usage: usageRows,
     getTenant: async (n) => tenantMap.get(n),
+    listTenants: async () => [...tenantMap.values()],
+    getPerson: async (id) => peopleMap.get(id),
     async putTenant(input) {
       const t = TenantConfigSchema.parse(input);
       tenantMap.set(t.phoneNumber, t);
@@ -185,26 +155,11 @@ export function memoryStore(tenants: TenantConfigInput[] = []): Store & { calls:
     async findTenantById(tenantId) {
       return [...tenantMap.values()].find((t) => t.tenantId === tenantId);
     },
-    async claimBrowser(phoneNumber, untilIso) {
-      const t = tenantMap.get(phoneNumber);
-      if (!t || (t.browser.loginUntil && t.browser.loginUntil >= new Date().toISOString())) return false;
-      t.browser.loginUntil = untilIso;
-      return true;
-    },
-    async releaseBrowser(phoneNumber) {
-      const t = tenantMap.get(phoneNumber);
-      if (t) delete t.browser.loginUntil;
-    },
-    async putUsage(row) { usageRows.push(row); },
     async syncPeople(tenant) {
       for (const [k, v] of peopleMap) if (v.tenantId === tenant.tenantId) peopleMap.delete(k);
       const wanted = peopleRecords(tenant);
       for (const p of wanted) peopleMap.set(p.channelId, p);
       return wanted;
-    },
-    async listCalls(tenantId, limit = 50) {
-      return [...calls.values()].filter((c) => c.tenantId === tenantId)
-        .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? '')).slice(0, limit);
     },
   };
 }

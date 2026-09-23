@@ -10,7 +10,7 @@
  * proves it: Gmail profile, or a HubSpot owners lookup, through the adapter.
  */
 import { execFileSync } from 'node:child_process';
-import { COMPOSIO_TOOLKITS, composioConnect, composioGmail, type ComposioToolkit } from '@wnk/shared/composio';
+import { COMPOSIO_TOOLKITS, composioConnect, composioGmail, type ComposioToolkit } from './lib/composio.mts';
 import { STACKS } from '../packages/infrastructure/names.js';
 
 const tenantId = process.argv[2];

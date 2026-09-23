@@ -1,52 +1,20 @@
-/** The person's chat memory (AgentCore Memory): this session's earlier turns, what the service extracted about them, and the turn written back. No memory configured: nothing remembered, the turn still answers. */
-import { BedrockAgentCoreClient, CreateEventCommand, ListEventsCommand, RetrieveMemoryRecordsCommand } from '@aws-sdk/client-bedrock-agentcore';
-
-const client = new BedrockAgentCoreClient({});
-const memoryId = () => process.env.MEMORY_ID;
+/** The person's chat memory and the callers' call memory (AgentCore Memory, @wnk/shared/memory): this session's earlier turns, what the service extracted, the turn written back. No memory configured: nothing remembered, the turn still answers. */
+import { memory } from './clients.js';
 
 export interface HistoryMessage { role: string; content: string }
 
 /** This session's earlier turns, oldest first. */
-export async function loadHistory(actorId: string, sessionId: string): Promise<HistoryMessage[]> {
-  const id = memoryId();
-  if (!id) return [];
-  const r = await client.send(new ListEventsCommand({ memoryId: id, actorId, sessionId, includePayloads: true, maxResults: 20 }));
-  return (r.events ?? [])
-    .sort((a, b) => (a.eventTimestamp?.getTime() ?? 0) - (b.eventTimestamp?.getTime() ?? 0))
-    .flatMap((e) => (e.payload ?? []).flatMap((p) => (p.conversational?.role && p.conversational.content?.text ? [{ role: p.conversational.role.toLowerCase(), content: p.conversational.content.text }] : [])));
-}
+export const loadHistory = async (actorId: string, sessionId: string): Promise<HistoryMessage[]> =>
+  (await memory.history(actorId, sessionId)).map((l) => ({ role: l.role, content: l.text }));
 
 /** What the Memory service extracted about this person across all their sessions, relevance-ranked by the text. */
-export async function recall(actorId: string, text: string): Promise<string[]> {
-  const id = memoryId();
-  if (!id) return [];
-  const r = await client.send(new RetrieveMemoryRecordsCommand({ memoryId: id, namespacePath: `/callers/${actorId}`, searchCriteria: { searchQuery: text, topK: 8 } }));
-  return (r.memoryRecordSummaries ?? []).flatMap((m) => (m.content?.text ? [m.content.text] : []));
-}
+export const recall = (actorId: string, text: string): Promise<string[]> => memory.retrieve(actorId, '', text, 8);
 
-export async function saveTurn(actorId: string, sessionId: string, text: string, reply: string): Promise<void> {
-  const id = memoryId();
-  if (!id) return;
-  await client.send(new CreateEventCommand({
-    memoryId: id, actorId, sessionId, eventTimestamp: new Date(),
-    payload: [{ conversational: { role: 'USER', content: { text } } }, { conversational: { role: 'ASSISTANT', content: { text: reply } } }],
-  }));
-}
+export const saveTurn = (actorId: string, sessionId: string, text: string, reply: string): Promise<void> =>
+  memory.write(actorId, sessionId, [{ role: 'user', text }, { role: 'assistant', text: reply }]);
 
 /** A caller's preferences only: how and when they want to be reached, which the CRM has no field for. Facts and summaries are the assistant's. */
-export async function recallPreferences(actorId: string): Promise<string[]> {
-  const id = memoryId();
-  if (!id) return [];
-  const r = await client.send(new RetrieveMemoryRecordsCommand({ memoryId: id, namespacePath: `/callers/${actorId}/preferences`, searchCriteria: { searchQuery: 'how and when this caller prefers to be contacted', topK: 4 } }));
-  return (r.memoryRecordSummaries ?? []).flatMap((m) => (m.content?.text ? [m.content.text] : []));
-}
+export const recallPreferences = (actorId: string): Promise<string[]> => memory.retrieve(actorId, '/preferences', 'how and when this caller prefers to be contacted', 4);
 
 /** A call's transcript into the caller's memory as one event, the call id as the session; facts and preferences are extracted asynchronously. */
-export async function rememberCall(actorId: string, callId: string, lines: { role: 'user' | 'assistant'; text: string }[]): Promise<void> {
-  const id = memoryId();
-  if (!id || lines.length === 0) return;
-  await client.send(new CreateEventCommand({
-    memoryId: id, actorId, sessionId: callId, eventTimestamp: new Date(),
-    payload: lines.map((l) => ({ conversational: { role: l.role === 'user' ? 'USER' : 'ASSISTANT', content: { text: l.text } } })),
-  }));
-}
+export const rememberCall = (actorId: string, callId: string, lines: { role: 'user' | 'assistant'; text: string }[]): Promise<void> => memory.write(actorId, callId, lines);

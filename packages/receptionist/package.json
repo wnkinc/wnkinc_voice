@@ -4,6 +4,16 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@wnk/shared": "*"
+    "@aws-sdk/client-dynamodb": "^3.1116.0",
+    "@aws-sdk/client-lambda": "^3.1116.0",
+    "@aws-sdk/client-sqs": "^3.1116.0",
+    "@aws-sdk/lib-dynamodb": "^3.1116.0",
+    "@openai/agents": "^0.17.0",
+    "@wnk/shared": "*",
+    "openai": "^7.5.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.0"
   }
 }

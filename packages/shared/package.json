@@ -6,9 +6,17 @@
   "exports": {
     ".": "./src/index.ts",
     "./contracts": "./src/contracts.ts",
-    "./composio": "./src/composio.ts"
+    "./store": "./src/store.ts",
+    "./secrets": "./src/secrets.ts",
+    "./composio-api": "./src/composio-api.ts",
+    "./memory": "./src/memory.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.1117.0",
+    "@aws-sdk/client-dynamodb": "^3.1116.0",
+    "@aws-sdk/client-eventbridge": "^3.1116.0",
+    "@aws-sdk/client-secrets-manager": "^3.1116.0",
+    "@aws-sdk/lib-dynamodb": "^3.1116.0",
     "zod": "^4.0.0"
   }
 }

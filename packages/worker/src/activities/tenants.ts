@@ -1,15 +1,11 @@
-/** Tenant rows beyond the lookup: every tenant (the canary), and the browser fields the login handoff owns. */
+/** Tenant rows beyond the lookup: every tenant (the canaries, through the shared store), and the browser fields the login handoff alone owns. */
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import type { TenantRow } from '@wnk/shared/contracts';
 import { env, now } from './config.js';
-import { ddb } from './clients.js';
+import { ddb, store } from './clients.js';
 
-/** The Tenants table is tiny (one row per called number); a scan is the read. */
-export async function listTenants(): Promise<TenantRow[]> {
-  const r = await ddb.send(new ScanCommand({ TableName: env('TENANTS_TABLE') }));
-  return (r.Items ?? []) as TenantRow[];
-}
+export const listTenants = (): Promise<TenantRow[]> => store.listTenants();
 
 /**
  * One browser window at a time per tenant: two sessions on one context race
