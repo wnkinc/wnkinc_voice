@@ -46,10 +46,14 @@ should live.
 - Every change that should reach the worker, code or configuration, is a new
   `BUILD_ID` in `packages/worker/src/version.ts`: a published Lambda version is
   immutable, so nothing changes under a running workflow, and rollback is one
-  Temporal command. Deploy through `npm run deploy -- <stack>` (it runs the
+  Temporal command. CI enforces it (`scripts/check-build-id.mts`).
+- Changes land through a pull request. CI runs the gate on the PR (typecheck,
+  tests, the build-id guard) and, on the merge to main, deploys every stack and
+  runs the worker release (`.github/workflows/ci.yml`). Deploying by hand is
+  for a hotfix or a dev experiment: `npm run deploy -- <stack>` (it runs the
   tests first; a bare `cdk deploy` skips the gate), then `npm run release`.
   When a stack stops importing another's export, deploy the consumer alone
-  first (`--exclusively`), then the producer.
+  first (`--exclusively`), then the producer; CI does this on every run.
 - A workflow is tested through a real Worker on Temporal's test server with
   recorded fakes for its activities (`packages/worker/test/fakes.ts`), time
   skipped; a stack's tenancy guarantees are tests on its template. The tests

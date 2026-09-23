@@ -352,6 +352,20 @@ Outputs (printed by `npm run deploy`, or `aws cloudformation describe-stacks --s
 
 Optional config: `sessionMaxConcurrency` (default 20) — ceiling on simultaneous calls, and therefore on concurrent OpenAI Realtime sessions.
 
+### CI
+
+`.github/workflows/ci.yml`. A pull request runs the gate: typecheck, the tests, and the build-id
+guard (`scripts/check-build-id.mts`: a change to anything the worker runs must come with a new
+`BUILD_ID`, or the check fails naming the files). A merge to main runs the gate again, deploys every
+stack (consumers first, then all, so a dropped cross-stack import deploys cleanly), and runs the
+worker release. The deploy job assumes a role through GitHub's OIDC provider, so no AWS key lives in
+GitHub; `ops/github-deploy-role.yaml` creates that role, applied once from the admin profile (the
+template's header has the command). The role may only assume CDK's bootstrap roles and run the release.
+
+Branch protection (main takes only merged PRs with a green `check`) is a GitHub Pro feature on a
+private repository; until then the convention is the rule: work on a branch, open the PR, merge when
+green. A direct push to main still deploys, gate first.
+
 **Dropping a cross-stack import.** When a stack stops importing another stack's export (a table,
 a Connection), deploy the consumer alone first, then the producer: CloudFormation refuses to delete
 an export a deployed stack still imports, and rolls the producer back.

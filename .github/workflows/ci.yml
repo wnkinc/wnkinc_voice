@@ -1,0 +1,68 @@
+# The gate and the deploy. A pull request runs the checks; a merge to main runs
+# them again, deploys every stack, and registers the worker's build with
+# Temporal Cloud. No long-lived AWS keys: the deploy job assumes a role through
+# GitHub's OIDC provider (ops/github-deploy-role.yaml), and that role may only
+# assume CDK's bootstrap roles and run the release.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx vitest run
+      # A change the worker runs must carry a new BUILD_ID: a published Lambda
+      # version is immutable, and Temporal routes only to a registered build.
+      - name: worker changes carry a new build id
+        run: npx tsx scripts/check-build-id.mts "${{ github.event.pull_request.base.sha || github.event.before }}" "${{ github.sha }}"
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # The worker image is linux/arm64; the runner is not.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::539247450358:role/wnkinc-voice-github-deploy
+          aws-region: us-west-2
+      - uses: temporalio/setup-temporal@v0
+      # Consumers first, then everything: a stack that stopped importing another's
+      # export must deploy before that export can go (README: dropping a
+      # cross-stack import). The first pass may fail for a consumer that needs a
+      # NEW export; the second pass, in dependency order, deploys that.
+      # The check job is this deploy's test gate.
+      - name: deploy, consumers first
+        run: npx cdk list 2>/dev/null | tac | xargs npx cdk deploy --exclusively --require-approval never || true
+      - name: deploy everything
+        run: npx cdk deploy --all --require-approval never
+      - name: release the worker build
+        run: npm run release

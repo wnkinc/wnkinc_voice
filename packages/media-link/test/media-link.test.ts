@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createResolver } from '../src/media-link.js';
 
 const credentials = async () => ({ accountSid: 'AC' + 'a'.repeat(32), authToken: 'token' });
-const req = { tenantPhone: '+15098005349', messageSid: 'MM' + 'b'.repeat(32), mediaSid: 'ME' + 'c'.repeat(32) };
+const req = { tenantPhone: '+15555550100', messageSid: 'MM' + 'b'.repeat(32), mediaSid: 'ME' + 'c'.repeat(32) };
 const LINK = 'https://mms.twiliocdn.com/ACx/abc?Expires=1&Signature=s&Key-Pair-Id=k';
 
 /** Twilio as the resolver meets it: the message JSON, then the media redirect. */

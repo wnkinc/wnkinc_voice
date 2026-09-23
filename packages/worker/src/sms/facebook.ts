@@ -58,7 +58,7 @@ export function nextMedia(choice: string, existing: Photo[], media: Photo[]): Ph
 export function draftMessage(pageName: string, row: DraftRow): string {
   const n = row.payload.media.length;
   const photos = n === 0 ? 'No photos. ' : n === 1 ? 'With the 1 photo you sent. ' : `With the ${n} photos you sent. `;
-  return `Draft for the Facebook Page ${pageName}:\n\n${row.payload.caption}\n\n${photos}Reply ${APPROVAL_WORD} to publish it, or tell me what to change. Nothing is posted until you reply ${APPROVAL_WORD}. This draft expires in ${APPROVAL_HOURS} hours.`;
+  return `Draft for the Facebook Page ${pageName}:\n\n${row.payload.caption}\n\n${photos}Reply ${APPROVAL_WORD} to publish it, or tell me what to change. Nothing is posted until you reply with just the one word ${APPROVAL_WORD}. This draft expires in ${APPROVAL_HOURS} hours.`;
 }
 
 /** What the model is told about drafting, and about the draft and photos in front of it. */
@@ -74,6 +74,15 @@ export function facebookPrompt(draft: DraftRow | undefined, media: Photo[], medi
 /** The post id from a Composio result: photo tools answer `post_id`, the text tool `id`. */
 export function postId(body: { data?: { post_id?: string; id?: string } }): string | undefined {
   return body.data?.post_id ?? body.data?.id;
+}
+
+/**
+ * The link texted after a post. Facebook answers `<pageId>_<postId>`; the bare `facebook.com/<that>` form
+ * redirects on the web but the Facebook app cannot resolve it ("This content isn't available"), so the
+ * link is the `/posts/` permalink shape the app opens.
+ */
+export function postLink(pageId: string, id: string): string {
+  return `https://www.facebook.com/${pageId}/posts/${id.split('_').pop()}`;
 }
 
 /** The user message for the model: the text, plus the photos when their links were minted. */

@@ -28,7 +28,7 @@ describe('the approval', () => {
     expect(f.executeTool).toHaveBeenCalledTimes(1);
     expect(f.executeTool).toHaveBeenCalledWith('deck', 'FACEBOOK_CREATE_PHOTO_POST', { page_id: '42', message: 'Cedar deck, finished today.', url: 'https://link/1' }, '20260902_00');
     expect(f.markCompleted).toHaveBeenCalledWith('deck', draft(2, 2).sk, 'page_post1');
-    expect(sent(f)).toEqual(['Posted to Deck Co: https://www.facebook.com/page_post1']);
+    expect(sent(f)).toEqual(['Posted to Deck Co: https://www.facebook.com/42/posts/post1']);
     expect(f.callModel).not.toHaveBeenCalled();
   }, 60_000);
 
