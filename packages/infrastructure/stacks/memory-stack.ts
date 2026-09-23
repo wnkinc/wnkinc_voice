@@ -9,11 +9,12 @@ export interface MemoryStackProps extends cdk.StackProps {
 }
 
 /**
- * AgentCore Memory: the platform's own caller memory, replacing the
- * HubSpot-note hack. Agents write call transcripts as events (actorId =
- * `<tenantId>_<phone digits>`, sessionId = callId); managed strategies extract
- * long-term records asynchronously into per-caller namespaces, which the
- * webhook and the email agent retrieve. tenantId prefixes the actor id, so
+ * AgentCore Memory: the platform's own memory of callers and of the people
+ * who chat with the assistant. The call-ended workflow writes each transcript
+ * as an event (actorId = `<tenantId>_<phone digits>`, sessionId = callId) and
+ * the assistant's turns write theirs; managed strategies extract long-term
+ * records asynchronously into per-actor namespaces, which accept (while it
+ * rings) and the workflows retrieve. tenantId prefixes the actor id, so
  * tenant isolation is structural.
  */
 export class MemoryStack extends cdk.Stack {
@@ -39,7 +40,7 @@ export class MemoryStack extends cdk.Stack {
           namespaces: ['/callers/{actorId}/preferences'],
         }),
         // One running summary per conversation session (the assistant's daily
-        // sessions); the harness retrieves across all of an actor's sessions
+        // sessions); the assistant's loop retrieves across all of an actor's sessions
         // through the parent path, so yesterday's context is recallable today.
         new ManagedMemoryStrategy(MemoryStrategyType.SUMMARIZATION, {
           strategyName: 'session_summaries',

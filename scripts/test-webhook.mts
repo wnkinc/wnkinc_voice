@@ -1,6 +1,6 @@
 /**
  * Post a signed, synthetic OpenAI webhook at the platform and watch what the
- * verifier and the accept workflow do with it. No real call exists, so an
+ * verifier and accept do with it. No real call exists, so an
  * incoming-call event ends at OpenAI's accept with a 404: the path up to and
  * including the claim is proven, and the call row ends `failed` (the accept
  * workflow's failed-executions alarm fires once; expected).
@@ -54,4 +54,4 @@ while (Date.now() - started < 60_000) {
   const row = (await db.send(new GetCommand({ TableName: callsTable, Key: { callId } }))).Item;
   if (row && row.status !== 'claimed') { console.log(`call row: status=${row.status} tenant=${row.tenantId} from=${row.from} to=${row.to} error=${row.error ?? ''}`); process.exit(0); }
 }
-console.log('no call row within 60 s; check the accept workflow log group');
+console.log('no call row within 60 s; check accept\'s log group');

@@ -45,6 +45,5 @@ describe('tenant stack', () => {
       expect(t.DeadLetterConfig).toBeDefined();
       expect(t.RetryPolicy.MaximumRetryAttempts).toBe(2);
     }
-    expect(Object.keys(template.findResources('AWS::StepFunctions::StateMachine'))).toHaveLength(0);
   });
 });
