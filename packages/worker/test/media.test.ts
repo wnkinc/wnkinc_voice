@@ -1,5 +1,6 @@
+/** The media link resolver: where Twilio redirects, our credentials only to Twilio, and one tenant's photo never minted for another. */
 import { describe, expect, it, vi } from 'vitest';
-import { createResolver } from '../src/media-link.js';
+import { createResolver } from '../src/activities/media.js';
 
 const credentials = async () => ({ accountSid: 'AC' + 'a'.repeat(32), authToken: 'token' });
 const req = { tenantPhone: '+15555550100', messageSid: 'MM' + 'b'.repeat(32), mediaSid: 'ME' + 'c'.repeat(32) };
@@ -14,7 +15,7 @@ const twilio = (opts: { to?: string; mediaStatus?: number; location?: string | n
 describe('media link resolver', () => {
   it('returns where Twilio redirects, without following it', async () => {
     const fetch = twilio();
-    expect(await createResolver({ credentials, fetch })(req)).toEqual({ url: LINK });
+    expect(await createResolver({ credentials, fetch })(req)).toBe(LINK);
     const [url, init] = fetch.mock.calls[1]!;
     expect(url).toBe(`https://api.twilio.com/2010-04-01/Accounts/AC${'a'.repeat(32)}/Messages/${req.messageSid}/Media/${req.mediaSid}`);
     expect(init).toMatchObject({ redirect: 'manual' });

@@ -5,7 +5,7 @@
  *
  * Two roles, not to be confused: the function's execution role (what the
  * Worker may touch: the Temporal secret, the platform secrets its activities
- * read, the tables, the media link resolver, memory) and the invocation role
+ * read, the tables, memory) and the invocation role
  * (what Temporal may do: invoke and describe this one function). Temporal
  * assumes the invocation role from its own accounts, gated by an external id
  * the secret generates here, so the guard never passes through a person.
@@ -43,7 +43,6 @@ import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
-import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type * as sns from 'aws-cdk-lib/aws-sns';
@@ -120,28 +119,6 @@ export class WorkerStack extends cdk.Stack {
       description: 'Browserbase: {"BROWSERBASE_API_KEY": <project API key>}',
       generateSecretString: { secretStringTemplate: JSON.stringify({}), generateStringKey: 'BROWSERBASE_API_KEY', excludePunctuation: true },
     });
-    // The media link resolver (packages/media-link): a texted photo's Twilio ids
-    // -> the signed link Twilio redirects to. Code because the redirect's
-    // Location header is the answer and nothing managed hands it back. Invoked
-    // synchronously by an activity, so its failures surface in the workflow.
-    const mediaLinkName = `${prefix}-media-link-resolver`;
-    const mediaLink = new NodejsFunction(this, 'MediaLink', {
-      functionName: mediaLinkName,
-      description: 'Texted photo ids -> the signed link Twilio redirects to (nothing fetched, nothing stored)',
-      entry: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../media-link/src/media-link.ts'),
-      handler: 'handler',
-      runtime: lambda.Runtime.NODEJS_22_X,
-      architecture: lambda.Architecture.ARM_64,
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(10),
-      environment: { TWILIO_SECRET_ARN: twilioSecret.secretArn, NODE_OPTIONS: '--enable-source-maps' },
-      logGroup: new logs.LogGroup(this, 'MediaLinkLogs', { logGroupName: `/aws/lambda/${mediaLinkName}`, retention: logs.RetentionDays.ONE_MONTH, removalPolicy: cdk.RemovalPolicy.DESTROY }),
-      tracing: lambda.Tracing.ACTIVE,
-      bundling: { format: OutputFormat.ESM, target: 'node22', mainFields: ['module', 'main'], sourceMap: true },
-    });
-    twilioSecret.grantRead(mediaLink);
-    errorAlarm(this, 'MediaLinkErrors', mediaLink, props.alarmTopic, 'Media link resolver');
-
     // One image for the worker, the starter and the fallback: the handler differs.
     const asset = new DockerImageAsset(this, 'Image', { directory: REPO_ROOT, file: 'packages/worker/Dockerfile', platform: Platform.LINUX_ARM64 });
     const image = (cmd: string) => lambda.DockerImageCode.fromEcr(asset.repository, { tagOrDigest: asset.imageTag, cmd: [cmd] });
@@ -161,7 +138,6 @@ export class WorkerStack extends cdk.Stack {
       TELEGRAM_SECRET_ARN: telegramSecret.secretArn,
       BROWSERBASE_SECRET_ARN: browserbaseSecret.secretArn,
       BROWSERBASE_PROJECT_ID: props.browserbaseProjectId,
-      MEDIA_LINK_FUNCTION_ARN: mediaLink.functionArn,
       ASSISTANT_MODEL: process.env.ASSISTANT_MODEL ?? 'gpt-5.5',
       ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
     };
@@ -179,7 +155,6 @@ export class WorkerStack extends cdk.Stack {
       props.actionsTable.grantReadWriteData(role);
       props.callsTable.grantReadWriteData(role);
       props.usageTable.grantWriteData(role);
-      mediaLink.grantInvoke(role);
       if (props.callerMemory) {
         role.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({ actions: MEMORY_USE_ACTIONS, resources: [props.callerMemory.memoryArn, `${props.callerMemory.memoryArn}/*`] }));
       }

@@ -1,8 +1,8 @@
 /**
  * Proves the media link resolver against Twilio: the newest texted photo
  * resolves to a link that fetches with no credentials, and the same photo
- * named under another tenant's number is refused. Runs the handler in this
- * process with the operator's read of the Twilio secret. Prints no numbers,
+ * named under another tenant's number is refused. Runs the worker's resolver
+ * (activities/media.ts) in this process with the operator's read of the Twilio secret. Prints no numbers,
  * message text, or links.
  *
  *   npx tsx scripts/test-media-link.mts      (text a photo to a tenant number first)
@@ -13,7 +13,8 @@ import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-sec
 process.env.AWS_REGION ??= 'us-west-2';
 process.env.TWILIO_SECRET_ARN ??= execFileSync('aws', ['secretsmanager', 'list-secrets', '--region', 'us-west-2',
   '--query', "SecretList[?starts_with(Name, 'TwilioSecret')].ARN | [0]", '--output', 'text'], { encoding: 'utf8' }).split('\n')[0]!.trim();
-const { handler } = await import('../packages/media-link/src/media-link.js');
+const { createResolver, twilioCredentials } = await import('../packages/worker/src/activities/media.js');
+const handler = createResolver({ credentials: twilioCredentials });
 
 const s = JSON.parse((await new SecretsManagerClient({}).send(new GetSecretValueCommand({ SecretId: process.env.TWILIO_SECRET_ARN }))).SecretString ?? '{}') as Record<string, string>;
 const headers = { authorization: `Basic ${Buffer.from(`${s.TWILIO_ACCOUNT_SID}:${s.TWILIO_AUTH_TOKEN}`).toString('base64')}` };
@@ -24,7 +25,7 @@ const inbound = (await twilio(`/2010-04-01/Accounts/${s.TWILIO_ACCOUNT_SID}/Mess
 if (!inbound) throw new Error('no inbound message with a photo among the last 20; text one first');
 const media = (await twilio(inbound.subresource_uris.media)).media_list[0];
 
-const { url } = await handler({ tenantPhone: inbound.to, messageSid: inbound.sid, mediaSid: media.sid });
+const url = await handler({ tenantPhone: inbound.to, messageSid: inbound.sid, mediaSid: media.sid });
 const got = await fetch(url);
 console.log(`photo        -> ${new URL(url).host}; fetched with no credentials: ${got.status} ${got.headers.get('content-type')} ${(await got.arrayBuffer()).byteLength} bytes`);
 if (!got.ok) process.exitCode = 1;

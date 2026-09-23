@@ -68,7 +68,7 @@ describe('worker stack', () => {
     for (const own of Object.keys(template.findResources('AWS::SecretsManager::Secret'))) expect(resources.some((r) => r.includes('"Ref":"' + own))).toBe(true);
     for (const imported of ['OpenAI', 'Composio']) expect(resources.some((r) => r.includes(imported))).toBe(true);
     const envVars = worker.Properties.Environment.Variables;
-    for (const key of ['PEOPLE_TABLE', 'TENANTS_TABLE', 'ACTIONS_TABLE', 'CALLS_TABLE', 'USAGE_TABLE', 'OPENAI_SECRET_ARN', 'COMPOSIO_SECRET_ARN', 'TWILIO_SECRET_ARN', 'TELEGRAM_SECRET_ARN', 'BROWSERBASE_SECRET_ARN', 'BROWSERBASE_PROJECT_ID', 'MEDIA_LINK_FUNCTION_ARN', 'MEMORY_ID', 'TEMPORAL_SECRET_ARN']) expect(envVars[key]).toBeDefined();
+    for (const key of ['PEOPLE_TABLE', 'TENANTS_TABLE', 'ACTIONS_TABLE', 'CALLS_TABLE', 'USAGE_TABLE', 'OPENAI_SECRET_ARN', 'COMPOSIO_SECRET_ARN', 'TWILIO_SECRET_ARN', 'TELEGRAM_SECRET_ARN', 'BROWSERBASE_SECRET_ARN', 'BROWSERBASE_PROJECT_ID', 'MEMORY_ID', 'TEMPORAL_SECRET_ARN']) expect(envVars[key]).toBeDefined();
     expect(envVars.TEMPORAL_API_KEY).toBeUndefined();
   });
 

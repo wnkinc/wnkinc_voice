@@ -510,7 +510,6 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 | `packages/receptionist/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/receptionist/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload. To add a tool: a zod args schema, a handler, a `tool({...})` entry, then its name in a tenant's `tools`. Tools that need durability publish an event and return; a workflow consumes it |
 | `packages/worker/` | The Temporal Worker. `workflows/` is the bundle side, deterministic, one barrel Temporal registers: `assistant/` (the shared loop, the SMS and Telegram turns, browser login), `automations/` (one file per tenant automation), `platform/` (call-ended, both canaries). `activities/` is the side effects, each taking its tenant id. `rules/` is the pure functions both sides and the tests use (the assistant's tool catalog and prompts, the Facebook ledger rules, inbound SMS parsing, the automations' rules). `entry/` is the three processes on one image: `handler.ts` (Lambda), `starter.ts` (the front doors), `service.ts` (the Fargate fallback), with the Temporal connection read once in `temporal.ts`. `search-attributes.ts` names what every workflow is indexed by; `version.ts` the deployment name, build id, task queue |
-| `packages/media-link/` | The one Lambda on the assistant path: a texted photo's Twilio ids -> the signed link Twilio redirects to (about four hours, fetchable by anyone). Code from before the worker (a Step Functions task could not read a redirect); an activity can, so folding it in is the next deletion. Takes ids, never a URL; refuses a photo not texted to the tenant's number it is given. Moves no bytes, stores nothing |
 | `packages/worker/src/rules/facebook.ts` | Facebook posts over SMS, and the pattern for every action that reaches a customer irreversibly: the model drafts into the Actions ledger, the workflow shows the draft from the row, the person's exact word approves, the workflow executes once. `packages/worker/test/sms-turn.test.ts` holds the split |
 | `packages/telegram-mcp/` | A tenant's own Telegram account (a user login, not the assistant's bot) as a remote MCP server for their ChatGPT or Claude: the pinned chigwell/telegram-mcp engine in a container Lambda behind a secret URL. `server.py` only loads the tenant's secrets and removes the tools Lambda can't serve. Onboarding in its README |
 | `tenants/<id>.ts`, `tenants/index.ts` | What that tenant runs: its automations on the bus, and `telegramMcp` for the connector. The registry is one line per tenant. Tracked, unlike the rows |
@@ -529,7 +528,6 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 
 ## Roadmap
 
-- Fold the media link resolver into the `mintLinks` activity and delete `packages/media-link`
 - `transfer_call` tool using `POST /calls/{id}/refer`
 - Business-hours awareness / after-hours script
 - Per-tenant API keys / OpenAI projects if needed for billing isolation
