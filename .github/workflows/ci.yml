@@ -36,7 +36,9 @@ jobs:
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: check
-    runs-on: ubuntu-latest
+    # An ARM runner, free on a public repository: the worker image is linux/arm64,
+    # and building it natively takes a minute where emulation took six.
+    runs-on: ubuntu-24.04-arm
     permissions:
       id-token: write
       contents: read
@@ -47,8 +49,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # The worker image is linux/arm64; the runner is not.
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: aws-actions/configure-aws-credentials@v4
         with:
