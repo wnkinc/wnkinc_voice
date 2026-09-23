@@ -9,13 +9,18 @@
 #
 # If the account already has GitHub's OIDC provider, add
 # `--parameter-overrides CreateOidcProvider=false`.
+#
+# The token's subject names the owner and repository WITH their numeric ids
+# (`repo:<owner>@<owner id>/<repo>@<repo id>:ref:refs/heads/<branch>`), which
+# survive a rename. The ids: `gh api repos/<owner>/<repo> --jq '[.owner.id, .id]'`.
 AWSTemplateFormatVersion: '2010-09-09'
 Description: The role GitHub Actions assumes to deploy wnkinc_voice from main
 
 Parameters:
   Repository:
     Type: String
-    Default: wnkinc/wnkinc_voice
+    Description: owner@ownerId/repo@repoId, as the token's subject spells it
+    Default: wnkinc@140204064/wnkinc_voice@1341438878
   Branch:
     Type: String
     Default: main
