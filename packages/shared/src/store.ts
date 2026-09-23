@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { env } from './config.js';
-import { personChannelKeys, TenantConfigSchema, type CallRecord, type CallStatus, type PersonRecord, type TenantConfig, type TenantConfigInput, type ToolCallRecord, type TranscriptEntry } from './types.js';
+import type { CallStatus, PersonRecord, TranscriptEntry } from './contracts.js';
+import { personChannelKeys, TenantConfigSchema, type CallRecord, type TenantConfig, type TenantConfigInput, type ToolCallRecord } from './types.js';
 
 /**
  * The persistence the CODE still does: the session Lambda's call row and the

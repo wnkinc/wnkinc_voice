@@ -5,6 +5,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./contracts": "./src/contracts.ts",
     "./composio": "./src/composio.ts"
+  },
+  "dependencies": {
+    "zod": "^4.0.0"
   }
 }

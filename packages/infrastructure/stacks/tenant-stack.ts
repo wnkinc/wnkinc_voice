@@ -6,25 +6,7 @@ import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
 import { dlqAlarm } from '../infra_utils/alarms.js';
-import { AUTOMATIONS, type AutomationName } from '../../worker/src/automations/catalog.js';
-
-/**
- * One entry of a tenant's automations: the workflow (from the worker's
- * catalog) and this tenant's options for it. A variation for one tenant is
- * an option here, never a conditional in the shared workflow.
- */
-export interface TenantAutomation {
-  readonly workflow: AutomationName;
-  readonly options?: Readonly<Record<string, unknown>>;
-}
-
-/** What a tenant file exports: the id and the automations that tenant gets. */
-export interface TenantAutomations {
-  readonly tenantId: string;
-  readonly automations: readonly TenantAutomation[];
-  /** Serve this tenant's Telegram account as an MCP server, in its own stack (`telegram-mcp-stack.ts`). */
-  readonly telegramMcp?: boolean;
-}
+import { AUTOMATIONS, type TenantAutomations } from '@wnk/shared/contracts';
 
 export interface TenantStackProps extends cdk.StackProps, TenantAutomations {
   readonly prefix: string;

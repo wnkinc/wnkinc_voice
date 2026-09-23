@@ -14,7 +14,7 @@
  */
 import type { APIGatewayProxyHandlerV2, SQSHandler } from 'aws-lambda';
 import { Client, Connection, WorkflowExecutionAlreadyStartedError } from '@temporalio/client';
-import { AUTOMATIONS, type AutomationName } from './automations/catalog.js';
+import { isAutomation } from '@wnk/shared/contracts';
 import { isRoutable, parseForm } from './sms/inbound.js';
 import { TASK_QUEUE } from './version.js';
 import { env, secret } from './activities/config.js';
@@ -60,8 +60,8 @@ export const telegram: APIGatewayProxyHandlerV2 = async (event) => {
 interface AutomationStart { workflow: string; options?: Record<string, unknown>; detail: Record<string, unknown> & { tenantId?: string; callId?: string; lead?: { leadId?: string } }; id?: string }
 
 export const automation = async (event: AutomationStart): Promise<void> => {
-  const name = event.workflow as AutomationName;
-  if (!(name in AUTOMATIONS)) throw new Error(`not an automation: ${event.workflow}`);
+  const name = event.workflow;
+  if (!isAutomation(name)) throw new Error(`not an automation: ${name}`);
   const d = event.detail;
   if (!d?.tenantId) throw new Error('the event names no tenant');
   // Domain identity as the workflow id: a lead's automations by the lead, a call's by the call; an alert has none, so every delivery is its own.

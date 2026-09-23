@@ -1,10 +1,8 @@
 /** The Facebook rules and the inbound parsing, as pure functions: the tests the Step Functions expressions had, carried over. */
-import { ACTION_APPROVAL_WORDS, ASSISTANT_TOOL_NAMES } from '@wnk/shared';
 import { describe, expect, it } from 'vitest';
-import { TOOL_NAMES } from '../src/assistant/catalog.js';
 import { APPROVAL_WORD, FACEBOOK_TOOLS, allowedTools, draftMessage, facebookOn, facebookPrompt, isApproval, modelContent, nextMedia, postId, postLink } from '../src/sms/facebook.js';
 import { mediaFromSms, parseForm, textOrPhotos } from '../src/sms/inbound.js';
-import type { DraftRow } from '../src/types.js';
+import type { AssistantToolName, DraftRow } from '@wnk/shared/contracts';
 
 const photo = (n: string) => ({ messageSid: 'MM1', mediaSid: `ME${n}` });
 const sms = (media: [string, string][], body = 'post this') => ({
@@ -13,14 +11,6 @@ const sms = (media: [string, string][], body = 'post this') => ({
 });
 const draft = (revision: number, shown: number, media = [photo('a')], caption = 'Cedar deck, finished today.'): DraftRow =>
   ({ tenantId: 't', sk: 'sms:+1#facebook_post#t#1', status: 'pending', revision, shownRevision: shown, approveBy: 9e9, payload: { caption, media } });
-
-describe('the worker agrees with @wnk/shared', () => {
-  it('the approval word is the one the ledger names, and the catalog is the tool list a row may name', () => {
-    expect(APPROVAL_WORD).toBe(ACTION_APPROVAL_WORDS.facebook_post);
-    expect([...TOOL_NAMES].sort()).toEqual([...ASSISTANT_TOOL_NAMES].sort());
-    for (const t of FACEBOOK_TOOLS) expect(ASSISTANT_TOOL_NAMES).toContain(t);
-  });
-});
 
 describe('inbound text', () => {
   it('decodes a Twilio post: %2B stays a plus, + becomes a space, %xx decodes', () => {
@@ -95,16 +85,16 @@ describe('the draft', () => {
 });
 
 describe('the tenant\'s allow-list', () => {
-  const tools = ['search_contacts', 'draft_facebook_post', 'cancel_facebook_draft'];
+  const tools = ['search_contacts', 'draft_facebook_post', 'cancel_facebook_draft'] as const;
   it('hides the Facebook tools from a tenant that lists them without the service on', () => {
     expect(allowedTools(tools, false)).toEqual(['search_contacts']);
     expect(allowedTools(tools, true)).toEqual(tools);
     expect(allowedTools(['draft_facebook_post'], false)).toEqual([]);
   });
   it('the service is on only with the flag and the draft tool on the row', () => {
-    const tenant = (enabled: boolean, t: string[]) => ({ tenantId: 't', phoneNumber: '+1', business: { name: 'x' }, assistant: { enabled: true, tools: t }, facebookPosts: { enabled, pageId: '1', pageName: 'P' } });
-    expect(facebookOn(tenant(true, tools))).toBe(true);
-    expect(facebookOn(tenant(false, tools))).toBe(false);
+    const tenant = (enabled: boolean, t: AssistantToolName[]) => ({ tenantId: 't', phoneNumber: '+1', business: { name: 'x' }, assistant: { enabled: true, tools: t }, facebookPosts: { enabled, pageId: '1', pageName: 'P' } });
+    expect(facebookOn(tenant(true, [...tools]))).toBe(true);
+    expect(facebookOn(tenant(false, [...tools]))).toBe(false);
     expect(facebookOn(tenant(true, ['search_contacts']))).toBe(false);
   });
 });

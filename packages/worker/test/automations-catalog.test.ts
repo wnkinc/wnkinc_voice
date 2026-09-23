@@ -1,7 +1,7 @@
 /** The automations' pure rules, with the tests the Step Functions expressions had. */
 import { describe, expect, it } from 'vitest';
 import { expectedToolkits, missingToolkits, nextBusinessMorning, splitName } from '../src/automations/catalog.js';
-import type { TenantRow } from '../src/types.js';
+import type { TenantRow } from '@wnk/shared/contracts';
 
 describe('nextBusinessMorning', () => {
   // Pacific in September: zoneOffset -420 -> seed offset 600.

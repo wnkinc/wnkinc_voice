@@ -5,7 +5,7 @@
  * tenant is an option on the entry, never a conditional in the shared
  * workflow.
  */
-import type { TenantAutomations } from '../packages/infrastructure/stacks/tenant-stack.js';
+import type { TenantAutomations } from '@wnk/shared/contracts';
 
 export const wnk: TenantAutomations = {
   tenantId: 'wnk',

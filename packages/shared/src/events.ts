@@ -1,7 +1,7 @@
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { env, type Logger } from './config.js';
 import { currentXrayHeader } from './trace.js';
-import type { VoiceEvent } from './types.js';
+import type { VoiceEvent } from './contracts.js';
 
 export interface EventPublisher {
   publish(event: VoiceEvent): Promise<void>;

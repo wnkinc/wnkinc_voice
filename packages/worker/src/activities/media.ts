@@ -1,6 +1,6 @@
 /** Texted photo ids -> links, through the media link resolver (packages/media-link), which refuses a photo not texted to this tenant's number. */
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
-import type { Photo } from '../types.js';
+import type { Photo } from '@wnk/shared/contracts';
 import { env } from './config.js';
 
 const lambda = new LambdaClient({});

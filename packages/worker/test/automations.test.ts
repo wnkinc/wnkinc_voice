@@ -1,12 +1,12 @@
 /** The tenant automations through a real Worker with recorded fakes: the flag first, the once-marker, the side effects in order, the mark after. */
 import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { CallEnded, LeadRecorded, OwnerNotify } from '../src/automations/catalog.js';
+import type { CallEnded, LeadRecorded, OwnerNotify, TenantRow } from '@wnk/shared/contracts';
 import { callEnded, crmCall, crmLead, leadEmail, ownerAlert } from '../src/workflows/index.js';
 import { failure, fakes, run as runWorkflow, tenant, type Fakes } from './fakes.js';
 
-const crmTenant = { ...tenant, crm: { type: 'hubspot', via: 'composio' }, emailResponder: { enabled: true }, people: [{ name: 'Meg', role: 'owner' as const, telegramId: 777 }] };
-const lead: LeadRecorded = { tenantId: 'deck', tenantPhoneNumber: '+15550001111', callId: 'call-1', lead: { leadId: 'lead-1', callId: 'call-1', callerName: 'Jordan Rivera', phone: '+15555550155', reason: 'a warped door', preferredCallbackTime: 'mornings' } };
+const crmTenant: TenantRow = { ...tenant, crm: { type: 'hubspot', via: 'composio' }, emailResponder: { enabled: true }, people: [{ name: 'Meg', role: 'owner', telegramId: 777 }] };
+const lead: LeadRecorded = { tenantId: 'deck', tenantPhoneNumber: '+15550001111', callId: 'call-1', lead: { tenantId: 'deck', leadId: 'lead-1', callId: 'call-1', createdAt: '2026-09-01T17:00:00.000Z', callerName: 'Jordan Rivera', phone: '+15555550155', reason: 'a warped door', preferredCallbackTime: 'mornings' } };
 const ended: CallEnded = { tenantId: 'deck', tenantPhoneNumber: '+15550001111', callId: 'call-1', callerPhone: '+15555550155', status: 'completed', durationSeconds: 130 };
 const notify: OwnerNotify = { tenantId: 'deck', tenantPhoneNumber: '+15550001111', callId: 'call-1', summary: 'Flooding at 12 Elm.', urgency: 'urgent', callerPhone: '+15555550155' };
 

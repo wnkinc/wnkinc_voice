@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ACTION_TYPE, APPROVAL_HOURS, LOG_DAYS, RECENT_MEDIA_HOURS } from '../sms/facebook.js';
-import type { DraftRow, Photo } from '../types.js';
+import type { DraftRow, Photo } from '@wnk/shared/contracts';
 import { env, epoch, now } from './config.js';
 import { ddb } from './identity.js';
 

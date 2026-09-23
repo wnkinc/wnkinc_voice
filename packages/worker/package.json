@@ -4,6 +4,9 @@
   "private": true,
   "description": "The Temporal Worker: workflows and activities, run on Lambda when Temporal Cloud has work for it",
   "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && tsx scripts/build.ts && tsx scripts/bundle-workflows.ts"
+  },
   "dependencies": {
     "@aws-lambda-powertools/logger": "^2.35.0",
     "@aws-sdk/client-bedrock-agentcore": "^3.1117.0",
@@ -15,12 +18,14 @@
     "@temporalio/client": "1.24.0",
     "@temporalio/lambda-worker": "1.24.0",
     "@temporalio/worker": "1.24.0",
-    "@temporalio/workflow": "1.24.0"
+    "@temporalio/workflow": "1.24.0",
+    "@wnk/shared": "*"
   },
   "devDependencies": {
     "@temporalio/testing": "1.24.0",
     "@types/aws-lambda": "^8.10.0",
     "@types/node": "^22.0.0",
+    "esbuild": "^0.28.2",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"
   }
