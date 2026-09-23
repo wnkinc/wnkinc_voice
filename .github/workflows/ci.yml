@@ -55,6 +55,11 @@ jobs:
           role-to-assume: arn:aws:iam::539247450358:role/wnkinc-voice-github-deploy
           aws-region: us-west-2
       - uses: temporalio/setup-temporal@v0
+      # The namespace must have the configuration the build depends on (the search
+      # attributes it sets) before any function that sets one is live. A person creates
+      # a missing one (ops/README.md); this fails the deploy until then.
+      - name: check the Temporal namespace
+        run: npx tsx scripts/temporal-namespace.mts
       # Consumers first, then everything: a stack that stopped importing another's
       # export must deploy before that export can go (README: dropping a
       # cross-stack import). The first pass may fail for a consumer that needs a

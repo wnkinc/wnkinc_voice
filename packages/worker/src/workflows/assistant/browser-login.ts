@@ -10,7 +10,7 @@
  * drives the live view. The window is a durable timer.
  */
 import { ApplicationFailure, proxyActivities, sleep } from '@temporalio/workflow';
-import type * as activities from '../activities/index.js';
+import type * as activities from '../../activities/index.js';
 
 type Activities = typeof activities;
 const rows = proxyActivities<Activities>({ startToCloseTimeout: '20 seconds', retry: { maximumAttempts: 3 } });

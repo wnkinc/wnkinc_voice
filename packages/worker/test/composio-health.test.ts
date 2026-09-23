@@ -1,11 +1,11 @@
 /** The connection canary: every tenant's expected toolkits ACTIVE, or a failed workflow that names what is missing. */
-import { TestWorkflowEnvironment } from '@temporalio/testing';
+import type { TestWorkflowEnvironment } from '@temporalio/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { composioHealth } from '../src/workflows/index.js';
-import { failure, fakes, run as runWorkflow, tenant } from './fakes.js';
+import { failure, fakes, run as runWorkflow, tenant, testEnv } from './fakes.js';
 
 let env: TestWorkflowEnvironment;
-beforeAll(async () => { env = await TestWorkflowEnvironment.createTimeSkipping(); }, 120_000);
+beforeAll(async () => { env = await testEnv(); }, 120_000);
 afterAll(async () => { await env?.teardown(); });
 
 describe('composio health', () => {

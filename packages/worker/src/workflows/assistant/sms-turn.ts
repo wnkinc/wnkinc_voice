@@ -7,7 +7,7 @@
  * tokens metered.
  *
  * For a tenant with Facebook posts on, the turn also carries the Actions
- * ledger (../sms/facebook.ts): a texted photo reaches the model, the model
+ * ledger (rules/facebook.ts): a texted photo reaches the model, the model
  * drafts, the workflow texts the draft from the ledger row, and the person's
  * POST publishes it without the model. The publish call is never retried: a
  * lost answer leaves the row `executing` with a note, for a person to
@@ -15,13 +15,15 @@
  *
  * Deterministic: every side effect is an activity; the workflow decides.
  */
-import { proxyActivities } from '@temporalio/workflow';
-import type * as activities from '../activities/index.js';
-import { systemPrompt } from '../assistant/catalog.js';
-import { APPROVAL_WORD, FACEBOOK_VERSION, allowedTools, draftMessage, facebookOn, facebookPrompt, isApproval, modelContent, postId, postLink } from '../sms/facebook.js';
-import { mediaFromSms, textOrPhotos, type Sms } from '../sms/inbound.js';
+import { proxyActivities, upsertSearchAttributes } from '@temporalio/workflow';
+import type * as activities from '../../activities/index.js';
 import type { Photo } from '@wnk/shared/contracts';
-import { orElse, runAssistantLoop, sessionDay } from './loop.js';
+import { systemPrompt } from '../../rules/assistant.js';
+import { APPROVAL_WORD, FACEBOOK_VERSION, allowedTools, draftMessage, facebookOn, facebookPrompt, isApproval, modelContent, postId, postLink } from '../../rules/facebook.js';
+import { mediaFromSms, textOrPhotos, type Sms } from '../../rules/sms.js';
+import { TENANT_ID } from '../../search-attributes.js';
+import { orElse } from '../common.js';
+import { runAssistantLoop, sessionDay } from './loop.js';
 
 type Activities = typeof activities;
 const reads = proxyActivities<Activities>({ startToCloseTimeout: '20 seconds', retry: { maximumAttempts: 3 } });
@@ -48,6 +50,8 @@ export async function smsTurn({ sms }: SmsTurnInput): Promise<SmsTurnOutcome> {
   const tenant = await reads.lookupTenant(person.tenantPhone);
   if (!tenant || tenant.assistant?.enabled !== true) return 'assistant-off';
   const tenantId = tenant.tenantId;
+  // Known only now: the sender named the tenant, the starter could not.
+  upsertSearchAttributes([{ key: TENANT_ID, value: tenantId }]);
   const send = (body: string) => texts.sendText(sms.AccountSid!, sms.To!, sms.From!, body);
 
   // ---- Before the model: is this message the approval? ------------------------

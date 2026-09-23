@@ -1,12 +1,12 @@
 /** The Telegram turn: who reaches the assistant, the owner's /login handoff, and the reply through the Bot API. */
-import { TestWorkflowEnvironment } from '@temporalio/testing';
+import type { TestWorkflowEnvironment } from '@temporalio/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { telegramTurn } from '../src/workflows/index.js';
-import { fakes, person, run as runWorkflow, tenant, type Fakes } from './fakes.js';
+import { fakes, person, run as runWorkflow, tenant, type Fakes, testEnv } from './fakes.js';
 
 const update = (text: string, extra: Record<string, unknown> = {}) => ({ update_id: Math.floor(Math.random() * 1e9), message: { text, from: { id: 777 }, chat: { id: 777, type: 'private' }, ...extra } });
 let env: TestWorkflowEnvironment;
-beforeAll(async () => { env = await TestWorkflowEnvironment.createTimeSkipping(); }, 120_000);
+beforeAll(async () => { env = await testEnv(); }, 120_000);
 afterAll(async () => { await env?.teardown(); });
 const run = (f: Fakes, u: ReturnType<typeof update>) => runWorkflow(env, f, telegramTurn, [u]);
 

@@ -1,14 +1,15 @@
 /** A workflow runs through a real Worker against Temporal's test server, with time skipped. */
 import { fileURLToPath } from 'node:url';
-import { TestWorkflowEnvironment } from '@temporalio/testing';
+import type { TestWorkflowEnvironment } from '@temporalio/testing';
 import { Worker } from '@temporalio/worker';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import * as activities from '../src/activities/index.js';
 import { ping } from '../src/workflows/index.js';
+import { testEnv } from './fakes.js';
 
 let env: TestWorkflowEnvironment;
 beforeAll(async () => {
-  env = await TestWorkflowEnvironment.createTimeSkipping();
+  env = await testEnv();
 }, 120_000);
 afterAll(async () => {
   await env?.teardown();

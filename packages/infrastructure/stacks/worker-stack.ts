@@ -17,7 +17,7 @@
  * different handler.
  *
  * The fallback: the same image as a Fargate service at zero tasks
- * (packages/worker/src/service.ts). Serverless Workers are a preview; if the
+ * (packages/worker/src/entry/service.ts). Serverless Workers are a preview; if the
  * Lambda path misbehaves, set the desired count to one and the queue drains,
  * no release needed. Both write the same log group, where two metric filters
  * on the SDK's own lines raise the alarms: a failed workflow (what a failed

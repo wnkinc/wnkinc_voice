@@ -1,9 +1,9 @@
 /** The tenant automations through a real Worker with recorded fakes: the flag first, the once-marker, the side effects in order, the mark after. */
-import { TestWorkflowEnvironment } from '@temporalio/testing';
+import type { TestWorkflowEnvironment } from '@temporalio/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CallEnded, LeadRecorded, OwnerNotify, TenantRow } from '@wnk/shared/contracts';
 import { callEnded, crmCall, crmLead, leadEmail, ownerAlert } from '../src/workflows/index.js';
-import { failure, fakes, run as runWorkflow, tenant, type Fakes } from './fakes.js';
+import { failure, fakes, run as runWorkflow, tenant, type Fakes, testEnv } from './fakes.js';
 
 const crmTenant: TenantRow = { ...tenant, crm: { type: 'hubspot', via: 'composio' }, emailResponder: { enabled: true }, people: [{ name: 'Meg', role: 'owner', telegramId: 777 }] };
 const lead: LeadRecorded = { tenantId: 'deck', tenantPhoneNumber: '+15550001111', callId: 'call-1', lead: { tenantId: 'deck', leadId: 'lead-1', callId: 'call-1', createdAt: '2026-09-01T17:00:00.000Z', callerName: 'Jordan Rivera', phone: '+15555550155', reason: 'a warped door', preferredCallbackTime: 'mornings' } };
@@ -11,7 +11,7 @@ const ended: CallEnded = { tenantId: 'deck', tenantPhoneNumber: '+15550001111', 
 const notify: OwnerNotify = { tenantId: 'deck', tenantPhoneNumber: '+15550001111', callId: 'call-1', summary: 'Flooding at 12 Elm.', urgency: 'urgent', callerPhone: '+15555550155' };
 
 let env: TestWorkflowEnvironment;
-beforeAll(async () => { env = await TestWorkflowEnvironment.createTimeSkipping(); }, 120_000);
+beforeAll(async () => { env = await testEnv(); }, 120_000);
 afterAll(async () => { await env?.teardown(); });
 const slugs = (f: Fakes) => f.executeTool.mock.calls.map((c) => c[1]);
 const withCrm = () => { const f = fakes(); f.lookupTenant.mockResolvedValue(crmTenant); f.readCall.mockResolvedValue({ done: false, transcript: [] }); return f; };

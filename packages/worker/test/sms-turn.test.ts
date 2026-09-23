@@ -5,15 +5,15 @@
  * tools write drafts and nothing else, whatever the model asks for; the
  * draft the person sees is the row, under the model's line.
  */
-import { TestWorkflowEnvironment } from '@temporalio/testing';
+import type { TestWorkflowEnvironment } from '@temporalio/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { smsTurn } from '../src/workflows/index.js';
-import { answer, draft, fakes, person, run as runWorkflow, tenant, type Fakes } from './fakes.js';
+import { answer, draft, fakes, person, run as runWorkflow, tenant, type Fakes, testEnv } from './fakes.js';
 
 const text = (body: string, extra: Record<string, string> = {}) => ({ sms: { From: '+15550002222', To: '+15550001111', AccountSid: 'AC1', MessageSid: `MM${Math.random()}`, Body: body, NumMedia: '0', ...extra } });
 
 let env: TestWorkflowEnvironment;
-beforeAll(async () => { env = await TestWorkflowEnvironment.createTimeSkipping(); }, 120_000);
+beforeAll(async () => { env = await testEnv(); }, 120_000);
 afterAll(async () => { await env?.teardown(); });
 
 const run = (f: Fakes, input: ReturnType<typeof text>) => runWorkflow(env, f, smsTurn, [input]);

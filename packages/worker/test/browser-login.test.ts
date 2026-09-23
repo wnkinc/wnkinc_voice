@@ -1,12 +1,12 @@
 /** The login handoff: one window at a time, the saved browser reused or created once, the window a real timer, the release and the row cleared after it. */
-import { TestWorkflowEnvironment } from '@temporalio/testing';
+import type { TestWorkflowEnvironment } from '@temporalio/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { browserLogin } from '../src/workflows/index.js';
-import { failure, fakes, run as runWorkflow, tenant, type Fakes } from './fakes.js';
+import { failure, fakes, run as runWorkflow, tenant, type Fakes, testEnv } from './fakes.js';
 
 const input = { tenantId: 'deck', tenantPhoneNumber: '+15550001111', chatId: 777, text: '/login hubspot', windowSeconds: 600 };
 let env: TestWorkflowEnvironment;
-beforeAll(async () => { env = await TestWorkflowEnvironment.createTimeSkipping(); }, 120_000);
+beforeAll(async () => { env = await testEnv(); }, 120_000);
 afterAll(async () => { await env?.teardown(); });
 const run = (f: Fakes) => runWorkflow(env, f, browserLogin, [input]);
 const told = (f: Fakes) => f.sendTelegram.mock.calls.map((c) => c[1]);

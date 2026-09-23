@@ -9,8 +9,9 @@
  * workflow, which is the alarm.
  */
 import { ApplicationFailure, proxyActivities } from '@temporalio/workflow';
-import type * as activities from '../activities/index.js';
-import { orElse, runAssistantLoop } from './loop.js';
+import type * as activities from '../../activities/index.js';
+import { runAssistantLoop } from '../assistant/loop.js';
+import { orElse } from '../common.js';
 
 type Activities = typeof activities;
 const reads = proxyActivities<Activities>({ startToCloseTimeout: '30 seconds', retry: { maximumAttempts: 3 } });

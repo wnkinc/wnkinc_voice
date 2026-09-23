@@ -1,11 +1,11 @@
 /** The canary: every tenant with the assistant on gets one read-only turn; a silent one fails the workflow, which is the alarm. */
-import { TestWorkflowEnvironment } from '@temporalio/testing';
+import type { TestWorkflowEnvironment } from '@temporalio/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { assistantHealth } from '../src/workflows/index.js';
-import { answer, failure, fakes, run as runWorkflow, tenant, type Fakes } from './fakes.js';
+import { answer, failure, fakes, run as runWorkflow, tenant, type Fakes, testEnv } from './fakes.js';
 
 let env: TestWorkflowEnvironment;
-beforeAll(async () => { env = await TestWorkflowEnvironment.createTimeSkipping(); }, 120_000);
+beforeAll(async () => { env = await testEnv(); }, 120_000);
 afterAll(async () => { await env?.teardown(); });
 const run = (f: Fakes) => runWorkflow(env, f, assistantHealth, []);
 

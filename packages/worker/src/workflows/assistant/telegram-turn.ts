@@ -9,11 +9,13 @@
  * business signs into, so only the owner may send it. It runs as its own
  * workflow, abandoned by this one, since it outlives the turn by minutes.
  */
-import { ParentClosePolicy, proxyActivities, startChild } from '@temporalio/workflow';
-import type * as activities from '../activities/index.js';
-import { systemPrompt } from '../assistant/catalog.js';
+import { ParentClosePolicy, proxyActivities, startChild, upsertSearchAttributes } from '@temporalio/workflow';
+import type * as activities from '../../activities/index.js';
+import { systemPrompt } from '../../rules/assistant.js';
+import { TENANT_ID } from '../../search-attributes.js';
+import { orElse } from '../common.js';
 import { browserLogin } from './browser-login.js';
-import { orElse, runAssistantLoop, sessionDay } from './loop.js';
+import { runAssistantLoop, sessionDay } from './loop.js';
 
 type Activities = typeof activities;
 const reads = proxyActivities<Activities>({ startToCloseTimeout: '20 seconds', retry: { maximumAttempts: 3 } });
@@ -34,12 +36,15 @@ export async function telegramTurn(update: TelegramUpdate): Promise<TelegramTurn
   const person = await reads.lookupPerson(`telegram:${m.from.id}`);
   if (!person?.tenantPhone) return 'unknown-sender';
   const tenant = await reads.lookupTenant(person.tenantPhone);
+  // Known only now: the sender named the tenant, the starter could not.
+  if (tenant) upsertSearchAttributes([{ key: TENANT_ID, value: tenant.tenantId }]);
 
   if (m.text.toLowerCase().startsWith('/login') && person.role === 'owner' && tenant?.browser?.enabled === true) {
     await startChild(browserLogin, {
       workflowId: `browser-login-${tenant.tenantId}-${update.update_id}`,
       args: [{ tenantId: tenant.tenantId, tenantPhoneNumber: tenant.phoneNumber, chatId, text: m.text }],
       parentClosePolicy: ParentClosePolicy.ABANDON,
+      typedSearchAttributes: [{ key: TENANT_ID, value: tenant.tenantId }],
     });
     return 'login-started';
   }
