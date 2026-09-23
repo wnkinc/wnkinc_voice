@@ -84,11 +84,11 @@ Resources:
               - Sid: ReleaseSecret
                 Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:wnkinc-voice-dev/temporal-*
+                Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:wnk-dev/temporal-*
               - Sid: ReleaseLambda
                 Effect: Allow
                 Action: [lambda:ListVersionsByFunction, lambda:PublishVersion, lambda:GetFunction]
-                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:wnkinc-voice-dev-worker
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:wnk-dev-worker
 
 Outputs:
   RoleArn:

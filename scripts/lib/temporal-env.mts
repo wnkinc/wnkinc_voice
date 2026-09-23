@@ -1,8 +1,9 @@
 /** The platform namespace connection, from the worker stack's secret, as the environment the Temporal CLI and SDK read. */
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { PREFIX, temporalSecretName } from '../../packages/infrastructure/names.js';
 
 export const REGION = 'us-west-2';
-export const TEMPORAL_SECRET = 'wnkinc-voice-dev/temporal';
+export const TEMPORAL_SECRET = temporalSecretName(PREFIX);
 
 export async function temporalSecret(): Promise<Record<string, string>> {
   const r = await new SecretsManagerClient({ region: REGION }).send(new GetSecretValueCommand({ SecretId: TEMPORAL_SECRET }));

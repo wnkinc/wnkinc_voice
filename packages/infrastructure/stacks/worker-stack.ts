@@ -50,7 +50,11 @@ import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
 import { dlqAlarm, errorAlarm } from '../infra_utils/alarms.js';
+import { temporalSecretName } from '../names.js';
 import { MEMORY_USE_ACTIONS } from './memory-stack.js';
+import { EVENT_SOURCE } from './platform-stack.js';
+
+export { temporalSecretName };
 
 /** The image's build context is the repo root (the worker takes @wnk/shared); the root .dockerignore names what goes in, and so what the asset hash covers. */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -58,9 +62,6 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 /** The Temporal Cloud accounts that invoke Serverless Workers (docs.temporal.io, serverless-workers/aws-lambda). */
 export const TEMPORAL_CLOUD_INVOKERS = ['902542641901', '160190466495', '819232936619', '829909441867', '354116250941']
   .map((account) => `arn:aws:iam::${account}:role/wci-lambda-invoke`);
-
-/** The platform secret holding the Temporal Cloud connection and the invocation guard. */
-export const temporalSecretName = (prefix: string) => `${prefix}/temporal`;
 
 export interface WorkerStackProps extends cdk.StackProps {
   readonly prefix: string;
@@ -315,7 +316,7 @@ export class WorkerStack extends cdk.Stack {
     new events.Rule(this, 'CallEndedRule', {
       eventBus: props.bus,
       description: 'call.ended -> callEnded (memory, usage), every tenant',
-      eventPattern: { source: ['wnkinc.voice'], detailType: ['call.ended'] },
+      eventPattern: { source: [EVENT_SOURCE], detailType: ['call.ended'] },
       targets: [new targets.LambdaFunction(automationStart, {
         event: events.RuleTargetInput.fromObject({ workflow: 'callEnded', options: {}, detail: events.EventField.fromPath('$.detail'), id: events.EventField.eventId }),
         retryAttempts: 2, maxEventAge: cdk.Duration.hours(1), deadLetterQueue: platformDlq,

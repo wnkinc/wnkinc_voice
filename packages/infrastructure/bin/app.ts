@@ -1,49 +1,50 @@
+/**
+ * The platform, as stacks, bottom up. Each layer takes handles only from the
+ * ones above it here; deploying one touches nothing below it. Names come from
+ * ../names.ts: one project, one stage.
+ *
+ *   memory        AgentCore Memory: the callers' memory across calls
+ *   platform      the tables, the bus, the HTTP API, the alarm topic, the platform secrets
+ *   receptionist  the call path: webhook, accept, session
+ *   worker        the Temporal Worker, its starters (the SMS, Telegram, and automation
+ *                 front doors), the channel secrets, the fallback
+ *   tenant-<id>   one per tenant file with automations: rules filtered on its id
+ *   telegram-mcp-<id>  one per tenant file asking for it; takes no platform handles
+ */
 import * as cdk from 'aws-cdk-lib';
+import { PREFIX, STACKS } from '../names.js';
 import { MemoryStack } from '../stacks/memory-stack.js';
+import { PlatformStack } from '../stacks/platform-stack.js';
+import { ReceptionistStack } from '../stacks/receptionist-stack.js';
 import { TelegramMcpStack } from '../stacks/telegram-mcp-stack.js';
 import { TenantStack } from '../stacks/tenant-stack.js';
-import { VoiceStack } from '../stacks/voice-stack.js';
 import { WorkerStack } from '../stacks/worker-stack.js';
 import { tenants } from '../../../tenants/index.js';
 
 const app = new cdk.App();
 const env = { region: 'us-west-2' };
-const prefix = 'wnkinc-voice-dev';
+const prefix = PREFIX;
 
-const memory = new MemoryStack(app, 'wnk-memory-dev', { prefix, env });
+const memory = new MemoryStack(app, STACKS.memory, { prefix, env });
 const callerMemory = { memoryId: memory.memory.memoryId, memoryArn: memory.memory.memoryArn };
 
-const voice = new VoiceStack(app, 'wnk-voice-dev', {
-  prefix,
-  env,
-  callerMemory,
-});
-// The platform handles the worker takes. Built once, so nothing can drift from it.
-const platform = {
-  bus: voice.bus,
-  tenantsTable: voice.tenantsTable,
-  callsTable: voice.callsTable,
-  usageTable: voice.usageTable,
-  alarmTopic: voice.alarmTopic,
-  callerMemory,
-};
+const platform = new PlatformStack(app, STACKS.platform, { prefix, env });
 
-// The Temporal Worker: every workflow runs in it, with the platform handles
-// its activities reach (tables, secrets, memory), the channels' own secrets
-// and the media link resolver, and the front doors on the platform API.
-const worker = new WorkerStack(app, 'wnk-worker-dev', {
-  prefix, env,
-  alarmTopic: voice.alarmTopic, tenantsTable: voice.tenantsTable, callsTable: voice.callsTable, usageTable: voice.usageTable, callerMemory,
-  peopleTable: voice.peopleTable, actionsTable: voice.actionsTable, api: voice.api, bus: voice.bus,
-  openaiSecret: voice.openaiSecret, composioSecret: voice.composioSecret,
+new ReceptionistStack(app, STACKS.receptionist, {
+  prefix, env, callerMemory,
+  tenantsTable: platform.tenantsTable, callsTable: platform.callsTable, bus: platform.bus, api: platform.api, alarmTopic: platform.alarmTopic,
+  openaiSecret: platform.openaiSecret, composioSecret: platform.composioSecret,
+});
+
+const worker = new WorkerStack(app, STACKS.worker, {
+  prefix, env, callerMemory,
+  alarmTopic: platform.alarmTopic, tenantsTable: platform.tenantsTable, callsTable: platform.callsTable, usageTable: platform.usageTable,
+  peopleTable: platform.peopleTable, actionsTable: platform.actionsTable, api: platform.api, bus: platform.bus,
+  openaiSecret: platform.openaiSecret, composioSecret: platform.composioSecret,
   browserbaseProjectId: app.node.tryGetContext('browserbaseProjectId') as string,
 });
 
-// Per tenant (tenants/<id>.ts), the stacks its file asks for: its automations
-// as rules filtered on its id, run on the shared worker; its Telegram
-// connector, which takes no platform handles. Deploying one touches no other
-// tenant and nothing above.
 for (const t of tenants) {
-  if (t.automations.length) new TenantStack(app, `wnk-tenant-${t.tenantId}-dev`, { ...t, prefix, env, bus: voice.bus, alarmTopic: voice.alarmTopic, automationStarter: worker.automationStart });
-  if (t.telegramMcp) new TelegramMcpStack(app, `wnk-telegram-mcp-${t.tenantId}-dev`, { tenantId: t.tenantId, prefix, env });
+  if (t.automations.length) new TenantStack(app, STACKS.tenant(t.tenantId), { ...t, prefix, env, bus: platform.bus, alarmTopic: platform.alarmTopic, automationStarter: worker.automationStart });
+  if (t.telegramMcp) new TelegramMcpStack(app, STACKS.telegramMcp(t.tenantId), { tenantId: t.tenantId, prefix, env });
 }

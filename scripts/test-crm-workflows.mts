@@ -15,6 +15,7 @@ import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { STACKS } from '../packages/infrastructure/names.js';
 
 const REGION = 'us-west-2';
 const tenantId = process.argv[2];
@@ -24,8 +25,8 @@ const callerName = process.argv[4] ?? 'Jordan Rivera';
 const out = (stack: string, key: string) => execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', REGION], { encoding: 'utf8' }).trim();
 const tenant = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { phoneNumber: string; crm?: unknown };
 if (!tenant.crm) throw new Error(`tenant ${tenantId} has no crm block`);
-const bus = out('wnk-voice-dev', 'eventBusName');
-const callsTable = process.env.CALLS_TABLE || out('wnk-voice-dev', 'callsTableName');
+const bus = out(STACKS.platform, 'eventBusName');
+const callsTable = process.env.CALLS_TABLE || out(STACKS.platform, 'callsTableName');
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
 const eb = new EventBridgeClient({ region: REGION });
 const publish = (type: string, detail: Record<string, unknown>) =>

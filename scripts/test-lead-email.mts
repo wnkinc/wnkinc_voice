@@ -15,6 +15,7 @@ import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { STACKS } from '../packages/infrastructure/names.js';
 
 const REGION = 'us-west-2';
 const tenantId = process.argv[2];
@@ -26,7 +27,7 @@ const out = (stack: string, key: string) => execFileSync('aws', ['cloudformation
 
 const tenant = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { phoneNumber: string; emailResponder?: { enabled?: boolean } };
 if (!tenant.emailResponder?.enabled) throw new Error(`tenant ${tenantId}: emailResponder.enabled is off`);
-const bus = out('wnk-voice-dev', 'eventBusName');
+const bus = out(STACKS.platform, 'eventBusName');
 
 const callId = `test-lead-${Date.now()}`;
 const lead = { leadId: process.env.LEAD_ID ?? randomUUID(), createdAt: new Date().toISOString(), tenantId, callId, callerName, phone, reason, preferredCallbackTime: 'weekday mornings' };
@@ -38,7 +39,7 @@ if (put.FailedEntryCount) throw new Error(`put-events failed: ${JSON.stringify(p
 // Express workflow: no execution listing. Success is the side effect: the
 // once-marker on the call row (written after the send).
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
-const callsTable = process.env.CALLS_TABLE || out('wnk-voice-dev', 'callsTableName');
+const callsTable = process.env.CALLS_TABLE || out(STACKS.platform, 'callsTableName');
 const started = Date.now();
 let marked = false;
 while (Date.now() - started < 120_000) {

@@ -1,6 +1,6 @@
 /**
  * What the wnk tenant runs on the bus: stock automations from the worker's
- * catalog, each a rule in this tenant's stack (wnk-tenant-wnk-dev) that
+ * catalog, each a rule in this tenant's stack (wnk-dev-tenant-wnk) that
  * starts the workflow for this tenant's events alone. A variation for this
  * tenant is an option on the entry, never a conditional in the shared
  * workflow.

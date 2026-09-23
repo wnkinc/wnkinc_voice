@@ -239,7 +239,7 @@ that starts it. A tenant file lists the ones it runs:
 | `ownerAlert` | `owner.notify` | The receptionist's urgent alert, delivered to the row's owner on Telegram |
 
 `packages/infrastructure/stacks/tenant-stack.ts` turns the list into one stack per tenant
-(`wnk-tenant-<id>-dev`): for each entry a rule matching only events carrying that tenant's id, which
+(`wnk-dev-tenant-<id>`): for each entry a rule matching only events carrying that tenant's id, which
 hands the worker's automation starter the workflow name, the event, and that tenant's options. The
 workflow runs on the shared worker for the tenant the event names, keyed by the lead or call it is
 about, so a redelivered event reruns only a run that failed. Deploying a tenant stack touches no other
@@ -292,7 +292,7 @@ included: a transcript an activity reads is in that history. The accept machine,
 headers and the caller's last CRM note, is Express with execution data not logged. Events carry ids
 and outcomes; the transcript stays on the call row and is fetched by id where needed.
 
-**The session Lambda.** `aws logs tail /aws/lambda/wnkinc-voice-dev-session --follow`. Deploying
+**The session Lambda.** `aws logs tail /aws/lambda/wnk-dev-session --follow`. Deploying
 new session code is `npm run deploy`. Because in-flight calls live inside a Lambda invocation, a
 deploy never interrupts them: running invocations finish on the old code, new calls get the new code.
 
@@ -348,7 +348,7 @@ aws sns subscribe --topic-arn <alarmTopicArn output> --protocol email \
   --notification-endpoint you@yourdomain.com     # then confirm the email
 ```
 
-Outputs (printed by `npm run deploy`, or `aws cloudformation describe-stacks --stack-name wnk-voice-dev`): `webhookUrl`, `openaiSecretArn`, `tenantsTableName`, `callsTableName`, `eventBusName`, `sessionQueueUrl`, `sessionFunctionName`.
+Outputs (printed by `npm run deploy`, or `aws cloudformation describe-stacks --stack-name <stack>`): on `wnk-dev-platform`, `openaiSecretArn`, `composioSecretArn`, `apiEndpoint`, `tenantsTableName`, `callsTableName`, `eventBusName`, `alarmTopicArn`; on `wnk-dev-receptionist`, `webhookUrl`, `sessionQueueUrl`, `sessionFunctionName`.
 
 Optional config: `sessionMaxConcurrency` (default 20) — ceiling on simultaneous calls, and therefore on concurrent OpenAI Realtime sessions.
 
@@ -371,8 +371,8 @@ a Connection), deploy the consumer alone first, then the producer: CloudFormatio
 an export a deployed stack still imports, and rolls the producer back.
 
 ```bash
-npm run deploy -- wnk-worker-dev --exclusively   # the consumer, alone
-npm run deploy -- wnk-voice-dev                  # then the producer may drop the export
+npm run deploy -- wnk-dev-worker --exclusively   # the consumer, alone
+npm run deploy -- wnk-dev-platform                  # then the producer may drop the export
 ```
 
 ### 1. Configure secrets
@@ -410,7 +410,7 @@ TENANTS_TABLE=<tenantsTableName output> PEOPLE_TABLE=<peopleTableName output> CO
 ```
 
 Then create `tenants/<tenantId>.ts` (copy `tenants/wnk.ts`), add it to `tenants/index.ts`, and
-`npx cdk deploy wnk-tenant-<tenantId>-dev`. The full procedure, including consents and people, is
+`npx cdk deploy wnk-dev-tenant-<tenantId>`. The full procedure, including consents and people, is
 the `new-tenant` skill.
 
 Call the number. With Twilio Elastic SIP Trunking the `To` header carries the OpenAI
@@ -483,7 +483,7 @@ with `npx tsx scripts/twilio-webhook.mts set <tenantId>` and
 **Releasing.** Every change that should reach the worker, code or configuration, is a new build
 id in `packages/worker/src/version.ts`: a published Lambda version is immutable, so nothing
 changes under a running workflow, and rollback is one Temporal command. After
-`npm run deploy -- wnk-worker-dev`, `npm run release` publishes the Lambda version, registers the
+`npm run deploy -- wnk-dev-worker`, `npm run release` publishes the Lambda version, registers the
 build id against it, confirms Temporal's validation invocation bound the task queue, and sets it
 current. `npm run temporal -- workflow list` runs the CLI against the namespace with the worker's
 key (the browser login expires; this does not).
@@ -516,8 +516,10 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 | `packages/infrastructure/stacks/tenant-stack.ts` | One stack per tenant with automations, from its file: rules filtered on the tenant id, targeting the worker's automation starter |
 | `packages/infrastructure/stacks/worker-stack.ts` | The Temporal worker (a container Lambda Temporal Cloud invokes), its secret and invocation role, the three front doors (SMS, Telegram, automations), the platform's call.ended rule, the failure alarms, the Fargate fallback at zero |
 | `packages/infrastructure/stacks/telegram-mcp-stack.ts` | One stack per tenant with `telegramMcp`: the connector Lambda, its Function URL, a role that reads only that tenant's secret. Takes no platform handles |
-| `packages/infrastructure/stacks/voice-stack.ts`, `memory-stack.ts` | The call path (API, the verifier, accept and session Lambdas, tables, bus, queues, the OpenAI and Composio secrets, alarm topic); caller memory |
-| `packages/infrastructure/bin/app.ts`, `infra_utils/` | Stack wiring; alarm presets |
+| `packages/infrastructure/stacks/platform-stack.ts` | What every stack builds on and every tenant shares: the tables, the bus, the HTTP API the front doors add routes to, the alarm topic, the OpenAI and Composio secrets, the activity log. Data and the bus, nothing that runs |
+| `packages/infrastructure/stacks/receptionist-stack.ts` | The call path: the verifier, accept and session Lambdas, the session queue, the OpenAI webhook route on the platform API |
+| `packages/infrastructure/stacks/memory-stack.ts` | Caller memory (AgentCore Memory) |
+| `packages/infrastructure/names.ts`, `bin/app.ts`, `infra_utils/` | The names (one project, one stage: `wnk-dev-<layer>` stacks, `wnk-dev-<resource>` physical names); the stack wiring, bottom up; alarm presets |
 | `packages/shared/src/` | `types.ts` (`TenantConfig` zod schema, records, events), `store.ts` (DynamoDB behind one `Store` interface plus an in-memory version; no leads table, the CRM holds the lead and the call row is the audit), `events.ts` (EventBridge publisher), `config.ts` (env, secrets, OpenAI client, logger), `composio.ts` (Composio SDK, scripts only) |
 | `scripts/` | `seed-tenant.ts` (row upsert), `check-tenant.ts` (pre-flight), `connect-composio.mts` (consent links), `telegram-webhook.mts` and `twilio-webhook.mts` (point each channel at the platform), and the `test-*.mts` provers |
 | `tenants/example.json` | Example tenant config |

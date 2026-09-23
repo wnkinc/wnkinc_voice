@@ -4,7 +4,7 @@
  *
  *   npx tsx scripts/temporal-release.mts
  *
- * Runs after `npm run deploy -- wnk-worker-dev` (or by CI after a merge to
+ * Runs after `npm run deploy -- wnk-dev-worker` (or by CI after a merge to
  * main). In order: publish an
  * immutable Lambda version of what was deployed; create the Worker Deployment
  * Version pointing at that qualified ARN, which makes Temporal invoke it once
@@ -20,11 +20,12 @@
  * the CLI as an environment variable and is never printed.
  */
 import { execFileSync } from 'node:child_process';
+import { STACKS } from '../packages/infrastructure/names.js';
 import { BUILD_ID, DEPLOYMENT_NAME, TASK_QUEUE } from '../packages/worker/src/version.js';
 import { REGION, temporalSecret } from './lib/temporal-env.mts';
 import { missingSearchAttributes } from './lib/temporal-namespace.mts';
 
-const STACK = 'wnk-worker-dev';
+const STACK = STACKS.worker;
 /** Every morning: the connection check at 15:00 UTC, the assistant probe ten minutes after it, so a failure there is about the loop, not Composio. */
 const SCHEDULES = [
   { id: 'composio-health', cron: '0 15 * * *', type: 'composioHealth' },
@@ -83,10 +84,16 @@ console.log(current.includes(`"currentVersionBuildID": "${BUILD_ID}"`) ? `curren
 
 // 5. The schedules: config, applied idempotently. Each is a workflow type on
 //    the task queue at a cron time (UTC); one running at a time, a missed run
-//    skipped rather than piled up.
+//    skipped rather than piled up. One that points at another task queue (the
+//    platform was renamed) is replaced: a schedule keeps its queue for good.
 for (const s of SCHEDULES) {
-  const exists = (() => { try { execFileSync('temporal', ['schedule', 'describe', '--schedule-id', s.id, '-o', 'json'], { env: { ...process.env, ...temporalEnv }, stdio: 'ignore' }); return true; } catch { return false; } })();
-  if (exists) continue;
+  const described = (() => { try { return temporal(['schedule', 'describe', '--schedule-id', s.id, '-o', 'json']); } catch { return undefined; } })();
+  if (described) {
+    const queue = (JSON.parse(described) as { schedule?: { action?: { startWorkflow?: { taskQueue?: { name?: string } } } } }).schedule?.action?.startWorkflow?.taskQueue?.name;
+    if (queue === TASK_QUEUE) continue;
+    temporal(['schedule', 'delete', '--schedule-id', s.id]);
+    console.log(`schedule replaced: ${s.id} was on task queue ${queue}`);
+  }
   temporal(['schedule', 'create', '--schedule-id', s.id, '--cron', s.cron, '--type', s.type, '--task-queue', TASK_QUEUE, '--workflow-id', s.id, '--overlap-policy', 'Skip']);
   console.log(`schedule created: ${s.id} (${s.cron} UTC -> ${s.type})`);
 }

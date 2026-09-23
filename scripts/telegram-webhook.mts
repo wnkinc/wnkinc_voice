@@ -14,13 +14,14 @@
  */
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { execFileSync } from 'node:child_process';
+import { STACKS } from '../packages/infrastructure/names.js';
 
 const action = process.argv[2] ?? 'info';
 const output = (stack: string, key: string) =>
   execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', 'us-west-2'], { encoding: 'utf8' }).trim();
 
-const secretArn = output('wnk-worker-dev', 'telegramSecretArn');
-const apiEndpoint = output('wnk-voice-dev', 'apiEndpoint');
+const secretArn = output(STACKS.worker, 'telegramSecretArn');
+const apiEndpoint = output(STACKS.platform, 'apiEndpoint');
 const sm = new SecretsManagerClient({ region: 'us-west-2' });
 const secret = JSON.parse((await sm.send(new GetSecretValueCommand({ SecretId: secretArn }))).SecretString ?? '{}') as { TELEGRAM_BOT_TOKEN?: string; WEBHOOK_PATH?: string };
 if (!secret.TELEGRAM_BOT_TOKEN || secret.TELEGRAM_BOT_TOKEN === 'set-me') throw new Error(`TELEGRAM_BOT_TOKEN not set in ${secretArn}`);
