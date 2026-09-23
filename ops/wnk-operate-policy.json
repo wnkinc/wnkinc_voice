@@ -33,8 +33,7 @@
         "arn:aws:secretsmanager:us-west-2:539247450358:secret:TelegramSecret*",
         "arn:aws:secretsmanager:us-west-2:539247450358:secret:TwilioSecret*",
         "arn:aws:secretsmanager:us-west-2:539247450358:secret:BrowserbaseSecret*",
-        "arn:aws:secretsmanager:us-west-2:539247450358:secret:wnk-dev/*",
-        "arn:aws:secretsmanager:us-west-2:539247450358:secret:wnkinc-voice-dev/*"
+        "arn:aws:secretsmanager:us-west-2:539247450358:secret:wnk-dev/*"
       ]
     },
     {
