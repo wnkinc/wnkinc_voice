@@ -2,11 +2,10 @@
  * The media link resolver: a texted photo as a link someone else can fetch.
  * Twilio serves MMS media only to our credentials (media auth stays on for
  * every tenant), and answers an authenticated request with a redirect to a
- * signed link that works for anyone for about four hours. A workflow cannot
- * read that redirect: Step Functions fails an HTTP task on a 307 and hands
- * the workflow only the error name, not the Location header. So this is
- * code, and nothing else is: it asks Twilio, does not follow the redirect,
- * and returns where it points. No bytes move and nothing is stored; a
+ * signed link that works for anyone for about four hours. This asks Twilio,
+ * does not follow the redirect, and returns where it points. It is its own
+ * function from before the worker (a Step Functions task could not read the
+ * redirect); an activity can, so folding it in is the next deletion (README). No bytes move and nothing is stored; a
  * workflow calls it again whenever it needs a fresh link (when the model
  * looks at the photo, and again when Facebook fetches it).
  *

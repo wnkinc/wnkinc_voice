@@ -133,7 +133,7 @@ export function buildAgent(tenant: TenantConfig, extras: CallExtras = {}): Realt
 }
 
 /**
- * Session config the session Lambda sends on attach (the accept workflow sends
+ * Session config the session Lambda sends on attach (accept sends
  * only model + voice + a hold instruction). `tenant.receptionist.session` is the
  * tenant's part, under OpenAI's own keys; the rest are platform defaults (see
  * the levers table in this package's README).

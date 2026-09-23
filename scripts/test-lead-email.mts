@@ -36,8 +36,9 @@ const eb = new EventBridgeClient({ region: REGION });
 const put = await eb.send(new PutEventsCommand({ Entries: [{ EventBusName: bus, Source: 'wnkinc.voice', DetailType: 'lead.recorded', Detail: JSON.stringify({ tenantId, tenantPhoneNumber: tenant.phoneNumber, callId, lead }) }] }));
 if (put.FailedEntryCount) throw new Error(`put-events failed: ${JSON.stringify(put.Entries)}`);
 
-// Express workflow: no execution listing. Success is the side effect: the
-// once-marker on the call row (written after the send).
+// The workflow's history is the record (npm run temporal -- workflow show);
+// here success is the side effect: the once-marker on the call row, written
+// after the send.
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
 const callsTable = process.env.CALLS_TABLE || out(STACKS.platform, 'callsTableName');
 const started = Date.now();

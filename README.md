@@ -19,10 +19,10 @@ Three things can happen, and each is its own system:
 A tenant starts with the receptionist. Optional capabilities are enabled on top of it:
 CRM sync, a lead email from the owner's Gmail, the assistant, the saved browser.
 
-The platform is thin custom code on thick rented infrastructure. Two Lambdas are code
-(the webhook verifier and the session that holds a call). Everything else is a Step
-Functions definition or a CDK declaration. See `CLAUDE.md` for the
-goals that decide how to change it.
+The platform is thin custom code on thick rented infrastructure. The code is the three
+Lambdas on the call path (the verifier, accept, the session), the worker's workflows and
+activities, and the starters that open them. Everything else is a managed service or a CDK
+declaration. See `CLAUDE.md` for the goals that decide how to change it.
 
 ## 1. Platform: what every tenant gets
 
@@ -288,9 +288,9 @@ a crash between the send and the mark; it is not exactly-once. Anything that cos
 a customer irreversibly should get a pending → completed ledger with reconciliation instead.
 
 Temporal keeps every workflow's history for the namespace's retention (30 days), activity inputs
-included: a transcript an activity reads is in that history. The accept machine, which handles SIP
-headers and the caller's last CRM note, is Express with execution data not logged. Events carry ids
-and outcomes; the transcript stays on the call row and is fetched by id where needed.
+included: a transcript an activity reads is in that history. Accept, which handles SIP headers and
+the caller's last CRM note, is a Lambda: its log holds the outcome per call, no payloads. Events
+carry ids and outcomes; the transcript stays on the call row and is fetched by id where needed.
 
 **The session Lambda.** `aws logs tail /aws/lambda/wnk-dev-session --follow`. Deploying
 new session code is `npm run deploy`. Because in-flight calls live inside a Lambda invocation, a
@@ -458,13 +458,14 @@ tenant file as `browser.contextId` so a re-seed keeps it.
 
 ## The Temporal worker
 
-The orchestration engine the platform is moving to. `packages/worker` is a Temporal Worker:
+The orchestration engine. `packages/worker` is a Temporal Worker:
 workflows (deterministic, replayed from history) and activities (the side effects, each taking
 its tenant id as an argument). It runs as a container Lambda that Temporal Cloud invokes when
 the task queue has work (Serverless Workers, public preview) and exits when the invocation
 deadline nears: idle costs nothing, no fleet. The stack (`stacks/worker-stack.ts`) declares the
 function, the invocation role only Temporal's accounts may assume (gated by a generated external
-id), the platform secret holding the namespace connection, and the SMS front door.
+id), the platform secret holding the namespace connection, the channel secrets, the three front
+doors (SMS, Telegram, the automations), and the fallback.
 
 **The assistant on Temporal.** One loop (`workflows/assistant/loop.ts`: memory, the model, the gated tools, the
 round cap) under three workflows: `smsTurn` (Twilio posts to `/temporal/sms/<WEBHOOK_PATH>`, one
@@ -489,7 +490,7 @@ current. `npm run temporal -- workflow list` runs the CLI against the namespace 
 key (the browser login expires; this does not).
 
 **When it breaks.** Two alarms from the SDK's own log lines: a failed workflow (an activity
-exhausted its retries, or the workflow threw; what a failed execution was on Step Functions) and
+exhausted its retries, or the workflow threw) and
 five failed activities in an hour. Serverless Workers are a preview: the same image runs as a
 Fargate service at zero tasks (`packages/worker/src/entry/service.ts`, announcing the same build id),
 and the stack output `fallbackService` is the one command that brings it up; the queue drains
@@ -509,7 +510,7 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 | `packages/receptionist/src/call.ts` | One call: `RealtimeSession` + `OpenAIRealtimeSIP` (the OpenAI Agents SDK runs the tool loop); transcripts, time limit, hangup |
 | `packages/receptionist/src/agent.ts` | The receptionist: system prompt, the three tools (`record_lead`, `notify_owner`, `end_call`), session config, `accept` payload. To add a tool: a zod args schema, a handler, a `tool({...})` entry, then its name in a tenant's `tools`. Tools that need durability publish an event and return; a workflow consumes it |
 | `packages/worker/` | The Temporal Worker. `workflows/` is the bundle side, deterministic, one barrel Temporal registers: `assistant/` (the shared loop, the SMS and Telegram turns, browser login), `automations/` (one file per tenant automation), `platform/` (call-ended, both canaries). `activities/` is the side effects, each taking its tenant id. `rules/` is the pure functions both sides and the tests use (the assistant's tool catalog and prompts, the Facebook ledger rules, inbound SMS parsing, the automations' rules). `entry/` is the three processes on one image: `handler.ts` (Lambda), `starter.ts` (the front doors), `service.ts` (the Fargate fallback), with the Temporal connection read once in `temporal.ts`. `search-attributes.ts` names what every workflow is indexed by; `version.ts` the deployment name, build id, task queue |
-| `packages/media-link/` | The one Lambda on the assistant path: a texted photo's Twilio ids -> the signed link Twilio redirects to (about four hours, fetchable by anyone). Code because fails an HTTP task on a 307 and keeps the Location header from the workflow. Takes ids, never a URL; refuses a photo not texted to the tenant's number it is given. Moves no bytes, stores nothing |
+| `packages/media-link/` | The one Lambda on the assistant path: a texted photo's Twilio ids -> the signed link Twilio redirects to (about four hours, fetchable by anyone). Code from before the worker (a Step Functions task could not read a redirect); an activity can, so folding it in is the next deletion. Takes ids, never a URL; refuses a photo not texted to the tenant's number it is given. Moves no bytes, stores nothing |
 | `packages/worker/src/rules/facebook.ts` | Facebook posts over SMS, and the pattern for every action that reaches a customer irreversibly: the model drafts into the Actions ledger, the workflow shows the draft from the row, the person's exact word approves, the workflow executes once. `packages/worker/test/sms-turn.test.ts` holds the split |
 | `packages/telegram-mcp/` | A tenant's own Telegram account (a user login, not the assistant's bot) as a remote MCP server for their ChatGPT or Claude: the pinned chigwell/telegram-mcp engine in a container Lambda behind a secret URL. `server.py` only loads the tenant's secrets and removes the tools Lambda can't serve. Onboarding in its README |
 | `tenants/<id>.ts`, `tenants/index.ts` | What that tenant runs: its automations on the bus, and `telegramMcp` for the connector. The registry is one line per tenant. Tracked, unlike the rows |
@@ -528,7 +529,7 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 
 ## Roadmap
 
-- The rest of the platform onto the Temporal worker: the tenant automations, call-ended, the connection canary; then accept, measured (it is a request handler on the call path)
+- Fold the media link resolver into the `mintLinks` activity and delete `packages/media-link`
 - `transfer_call` tool using `POST /calls/{id}/refer`
 - Business-hours awareness / after-hours script
 - Per-tenant API keys / OpenAI projects if needed for billing isolation

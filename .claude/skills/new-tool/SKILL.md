@@ -9,13 +9,14 @@ Pick the shape by WHO chooses the tool.
 
 ## An open-ended model needs a SaaS (My Assistant)
 
-Composio brokers it; the model gets Composio's meta tools over the tenant's session. No code.
+Composio brokers the credential; the model sees a slim tool of ours, and what runs is a Composio slug as the tenant. A tool is one catalog entry plus its name.
 
-1. Confirm Composio has the toolkit (`composio.dev/toolkits/<slug>`).
+1. Confirm Composio has the toolkit (`composio.dev/toolkits/<slug>`); spike the slug with curl to learn its argument and result shapes.
 2. Owner consent: `npx tsx scripts/connect-composio.mts <tenantId> <toolkit>`; add the toolkit to `expectedToolkits` in `packages/worker/src/rules/automations.ts` (one line: the row flag that implies it) so the daily canary alarms when the connection lapses (the adapter's `connectLink` creates a managed auth config on first use).
-3. Re-mint the tenant's session so it includes the new toolkit: delete `assistant.composioMcpUrl` from `tenants/<id>.json`, then re-run the seed with `COMPOSIO_SECRET_ARN` set. Commit the new URL.
-4. If the model needs guidance the toolkit's schemas do not give (formats, ids), add one sentence to the channel line in `packages/worker/src/rules/assistant.ts` (`CHANNEL`, `systemPrompt`) — data, not code.
-5. Prove with `npx tsx scripts/test-assistant.mts "<a question that needs it>"`.
+3. The tool: its name in `ASSISTANT_TOOL_NAMES` (`packages/shared/src/contracts.ts`), and its entry in `ASSISTANT_TOOLS` (`packages/worker/src/rules/assistant.ts`): the description and slim schema the model sees, the Composio slug, `args` (the slug's arguments from the model's), `shape` (what the model reads from a result). The compiler holds that the catalog defines exactly the names. Bump `BUILD_ID`.
+4. The allow-list: the tool's name in `assistant.tools` on each tenant row that gets it; re-seed. A tenant without it never sees it.
+5. If the model needs guidance the toolkit's schemas do not give (formats, ids), add one sentence to the channel line in `packages/worker/src/rules/assistant.ts` (`CHANNEL`, `systemPrompt`) — data, not code.
+6. Prove with `npx tsx scripts/test-assistant.mts "<a question that needs it>" <tenantId>`.
 
 ## The action reaches a customer irreversibly, or costs money (a post, an email, a refund)
 

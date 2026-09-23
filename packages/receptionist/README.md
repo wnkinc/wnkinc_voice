@@ -1,7 +1,7 @@
 # receptionist
 
-The phone receptionist: two Lambdas and the accept workflow that take a call from
-ring to hangup and publish what happened. Everything that carries audio, holds credentials, or
+The phone receptionist: three Lambdas that take a call from ring to hangup and
+publish what happened. Everything that carries audio, holds credentials, or
 retries is rented; the code here resolves the tenant, threads it through, and
 fails closed.
 
@@ -13,7 +13,7 @@ fails closed.
 | OpenAI Realtime SIP | Answers the SIP call, fires the signed `realtime.call.incoming` webhook, exposes accept/reject and the call WebSocket. | https://platform.openai.com/docs/guides/realtime-sip · https://platform.openai.com/docs/guides/webhooks |
 | OpenAI Agents SDK (`RealtimeSession` + `OpenAIRealtimeSIP`) | Runs the tool loop: validates arguments against zod, calls our handler, returns the result to the model. | https://github.com/openai/openai-agents-js/tree/main/examples/realtime-twilio-sip (the shape `call.ts` copies) |
 | API Gateway HTTP + Lambda | Receives the webhook; the Lambda only verifies the signature. | `infrastructure/stacks/receptionist-stack.ts` |
-| Step Functions accept workflow (Express, no execution data) | Called number → tenant, claim, accept, caller recognition, job to SQS. All managed tasks; SIP parsing is a unit-tested JSONata expression. | `infrastructure/workflows/receptionist/accept.ts` |
+| Lambda, accept (plain code) | Called number → tenant, claim, accept, caller recognition while it rings, job to SQS. A request handler, since it answers while the caller hears ringing; each lookup under a deadline. | `src/accept.ts` |
 | SQS (batch size 1, partial batch failure) | Hands one call to one session invocation; a failed attach dead-letters at once (a retry after the 16-minute visibility timeout would find a dead call). | https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html |
 | DynamoDB Tenants / Calls | Tenant row keyed by called number; call row is the audit (transcript, tool calls, once-markers). | |
 | EventBridge bus `wnkinc.voice` | `lead.recorded`, `owner.notify`, `call.ended` fan out to the workflows on the worker (a rule per tenant stack, one platform rule), each with retries and a DLQ. | https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-dlq.html |
@@ -22,7 +22,8 @@ fails closed.
 
 ## What the code is allowed to do, per file
 
-- `webhook.ts` — the one job only code can do on this path: verify the webhook HMAC over the raw body, then start the accept workflow. About 40 lines, stdlib crypto, no SDK bundle. Everything it used to do (tenant, claim, accept, recognition, enqueue) is the accept workflow in the voice stack.
+- `webhook.ts` — verify the webhook HMAC over the raw body, then hand the body to accept asynchronously so OpenAI gets its 200 at once. About 40 lines, stdlib crypto.
+- `accept.ts` — called number → tenant row (the only place the tenant is chosen; an unknown number rejects with SIP 404 and alarms, an inactive tenant with 603), the claim (a conditional put, so a re-posted webhook is a duplicate), caller recognition under a ringing budget (the tenant's CRM through Composio, then memory; whatever loses the race is left out), the accept, the session job. The handler is a function over injected side effects; the wiring at the bottom uses the shared clients.
 - `session.ts` / `call.ts` — hold the WebSocket for one call, log transcripts and tool calls to the call row, enforce the time limit, hang up cleanly, publish `call.ended` (ids and outcome). Nothing else: memory and usage are the call-ended workflow's. A Lambda holds it because nothing managed holds a WebSocket for fifteen minutes and runs tools.
 - `prompt.ts` — tenant row (`business`, `receptionist.instructions`, `receptionist.greeting`) → the receptionist's system prompt and greeting.
 - `agent.ts` — tenant row (`receptionist.session`, passed under OpenAI's own keys) plus the platform defaults below → session config sent on attach, and the three tools. Each tool is one publish. The tenant comes from the call context; the model never names it.
@@ -54,7 +55,7 @@ where the defaults and the unbuilt levers are written down. Hand-maintained.
 | Instructions | `session.instructions` | composed by `prompt.ts` from `business` and the platform sections (job, scope, time, tools, style, caller id) | `receptionist.instructions.agentName`, `receptionist.instructions.extra` |
 | Unclear audio, read-back, variety | prompt sections OpenAI's realtime prompting guide recommends | partly built: read-back of phone numbers is in; unclear-audio handling and phrase variety are not (platform, no field) | `prompt.ts` |
 | Greeting | `response.create` with instructions, on connect | tenant field, default templated from the business name | `receptionist.greeting` |
-| Hold instruction | `accept` payload instructions | platform default: "do not speak until instructed" | `workflows/receptionist/accept.ts` |
+| Hold instruction | `accept` payload instructions | platform default: "do not speak until instructed" | `src/accept.ts` |
 | Tools | `session.tools` (function tools from zod schemas) | tenant picks names from the platform catalog | `receptionist.session.tools` |
 | Tool choice, parallel tool calls | `tool_choice` | platform default: OpenAI's | `agent.ts` |
 | Output guardrails | Agents SDK `outputGuardrails` (checked on the transcript as it streams; trips cut the response) | not built; the "never invent prices or promises" rule is prompt-only today | `receptionist.guardrails` |
@@ -69,7 +70,7 @@ where the defaults and the unbuilt levers are written down. Hand-maintained.
 ## How to verify
 
 ```bash
-npm test            # agent, session, webhook (signature) suites; infrastructure/test unit-tests the JSONata expressions and validates every synthesized state machine with the Step Functions API
+npm test            # accept (the handler over fakes: routing, the claim, the ringing budget), agent, session, webhook (signature); infrastructure/test holds the stack's grants
 ```
 
 Live, after a deploy: call the tenant's number and follow the session log.
@@ -78,7 +79,7 @@ Live, after a deploy: call the tenant's number and follow the session log.
 aws logs tail /aws/lambda/wnk-dev-session --follow
 ```
 
-- The accept workflow's log group shows the state path per call (no payloads); an unknown called number fails the execution and alarms.
+- Accept's log group (`/aws/lambda/wnk-dev-accept`) shows the outcome per call (no payloads); an unknown called number throws, which the function's error alarm pages on.
 - The call row in the Calls table is the audit: `transcript`, `toolCalls` (each tool with its arguments), and a `done:<key>` attribute per consumer that succeeded.
 - `npx tsx scripts/check-tenant.ts <tenantId>` reports config drift, secrets, and the owner's connected accounts.
 - `npx tsx scripts/test-crm-workflows.mts <tenantId> <phone>` proves the CRM workflows with real events; `scripts/test-lead-email.mts` does the same for the lead email.

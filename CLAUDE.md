@@ -37,8 +37,8 @@ should live.
   tenant row, a tenant-named secret, or a vault keyed by tenant id. Never in CDK,
   env vars, or `?? 'wnk'` fallbacks.
 - Tenant behavior (which automations a tenant runs, and in what shape) belongs in
-  that tenant's file, `tenants/<id>.ts`: a list of workflows from the worker's
-  catalog, each with that tenant's options, deployed as that tenant's own stack
+  that tenant's file, `tenants/<id>.ts`: a list of workflows from the registry
+  in the contracts (`packages/shared/src/contracts.ts`), each with that tenant's options, deployed as that tenant's own stack
   of rules filtered on its id. A variation for one tenant is an option the
   workflow reads with today's behavior as the default, or a workflow under its
   own name, in that order. Never a check of the tenant id inside a workflow
@@ -68,6 +68,10 @@ should live.
   the trigger list. Don't pre-build membership models, per-tenant KMS keys, or
   config lineage. A task queue per tenant is deferred the same way: its trigger
   is a tenant that needs isolated capacity or a pinned build.
+- A foundation move is worth making before its trigger when it shapes what every
+  future addition imports or names: the contracts package, the stack layering,
+  the names, a search attribute. Not when it multiplies operational surface with
+  one instance today: a task queue, namespace, or key per tenant.
 - Measure a proposal by lines of custom code added, not features shipped.
   Deleting a single-tenant default counts as progress.
 

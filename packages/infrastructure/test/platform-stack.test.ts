@@ -12,9 +12,9 @@ const app = new cdk.App();
 const template = Template.fromStack(new PlatformStack(app, 'p-platform-test', { prefix: 'p', env: { account: '123456789012', region: 'us-west-2' } }));
 
 describe('platform stack', () => {
-  it('runs nothing of ours: no named function (CDK adds one to set the log group policy), no queue, no state machine', () => {
+  it('runs nothing of ours: no named function (CDK adds one to set the log group policy), no queue', () => {
     for (const f of Object.values(template.findResources('AWS::Lambda::Function'))) expect(f.Properties.FunctionName).toBeUndefined();
-    for (const type of ['AWS::SQS::Queue', 'AWS::StepFunctions::StateMachine']) expect(Object.keys(template.findResources(type))).toHaveLength(0);
+    expect(Object.keys(template.findResources('AWS::SQS::Queue'))).toHaveLength(0);
   });
   it('names the bus, the topic and the API from the prefix; the tables take generated names', () => {
     template.hasResourceProperties('AWS::Events::EventBus', { Name: 'p-events' });

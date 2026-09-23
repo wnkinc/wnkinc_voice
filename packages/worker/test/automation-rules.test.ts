@@ -1,4 +1,4 @@
-/** The automations' pure rules, with the tests the Step Functions expressions had. */
+/** The automations' pure rules. */
 import { describe, expect, it } from 'vitest';
 import { expectedToolkits, missingToolkits, nextBusinessMorning, splitName } from '../src/rules/automations.js';
 import type { TenantRow } from '@wnk/shared/contracts';

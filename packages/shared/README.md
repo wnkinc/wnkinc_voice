@@ -1,7 +1,8 @@
 # shared
 
-The code every Lambda imports: types, persistence, events, config, and the adapters to the
-rented services. Nothing here runs on its own.
+What more than one deployable shares: the contracts, the rows, one client each to the rented
+services, the config. Nothing here runs on its own. The worker's image installs this package
+and its dependencies, so nothing heavy belongs here.
 
 ## What lives here
 
@@ -21,7 +22,7 @@ rented services. Nothing here runs on its own.
 
 - Composio SDK and tool slugs: https://docs.composio.dev
 - AgentCore Memory: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/memory.html
-- DynamoDB condition expressions (behind the accept workflow's Claim and the once-marker states): https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.ConditionExpressions.html
+- DynamoDB condition expressions (behind the claim, the once-markers, the ledger's locks): https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.ConditionExpressions.html
 
 ## How to verify
 
