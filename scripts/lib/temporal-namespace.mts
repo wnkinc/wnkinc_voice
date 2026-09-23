@@ -11,11 +11,19 @@
 import { execFileSync } from 'node:child_process';
 import { SEARCH_ATTRIBUTES } from '../../packages/worker/src/search-attributes.js';
 
+/** `temporal cloud ...` is a plugin, a `temporal-cloud` binary the CLI finds on PATH; without it the CLI prints its root help and exits 1. */
+function requireCloudPlugin(): void {
+  try { execFileSync('temporal-cloud', ['--version'], { stdio: 'ignore' }); } catch {
+    throw new Error('the Temporal Cloud plugin (temporal-cloud) is not on PATH: `brew install temporalio/brew/temporal-cloud` (CI installs it from github.com/temporalio/cloud-cli)');
+  }
+}
+
 /** The CLI's spelling of the SDK's type name: KEYWORD -> Keyword, KEYWORD_LIST -> KeywordList. */
 export const cliType = (t: string) => t.toLowerCase().split('_').map((w) => w[0]!.toUpperCase() + w.slice(1)).join('');
 
 /** The search attributes the worker sets that the namespace lacks, with the command that creates each. */
 export function missingSearchAttributes(namespace: string, env: NodeJS.ProcessEnv): { name: string; command: string }[] {
+  requireCloudPlugin();
   const out = execFileSync('temporal', ['cloud', 'namespace', 'search-attribute', 'list', '--namespace', namespace, '-o', 'json'], { encoding: 'utf8', env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'inherit'] });
   const listed = JSON.parse(out) as { SearchAttributes?: { name: string; type: string }[] | null };
   const have = new Set((listed.SearchAttributes ?? []).map((a) => a.name));

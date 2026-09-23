@@ -54,11 +54,20 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::539247450358:role/wnkinc-voice-github-deploy
           aws-region: us-west-2
-      # Pinned: the action's "latest" gave a CLI without the `cloud` subcommand the
-      # namespace check needs. Move it with the version validated locally.
       - uses: temporalio/setup-temporal@v0
         with:
           version: v1.9.1
+      # `temporal cloud ...` is a plugin: a `temporal-cloud` binary the CLI finds on PATH
+      # (github.com/temporalio/cloud-cli). The namespace check needs it. Pinned and
+      # checksummed; linux_arm64 because the runner is. Move both with what is validated locally.
+      - name: install the Temporal Cloud plugin
+        run: |
+          set -euo pipefail
+          v=0.1.0; f=temporal_cloud_cli_${v}_linux_arm64.tar.gz
+          curl -fsSLO https://github.com/temporalio/cloud-cli/releases/download/v${v}/${f}
+          curl -fsSL https://github.com/temporalio/cloud-cli/releases/download/v${v}/checksums.txt | grep " ${f}$" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/temporal-cloud" && tar xzf "$f" -C "$RUNNER_TEMP/temporal-cloud" temporal-cloud
+          echo "$RUNNER_TEMP/temporal-cloud" >> "$GITHUB_PATH"
       # The namespace must have the configuration the build depends on (the search
       # attributes it sets) before any function that sets one is live. A person creates
       # a missing one (ops/README.md); this fails the deploy until then.

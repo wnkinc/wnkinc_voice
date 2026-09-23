@@ -27,7 +27,8 @@ The agent may propose a change to this file. A person applies it.
 
 Two APIs, two doors. Workflows, schedules, and worker builds go to the namespace's own
 frontend (`temporal workflow ...`, `temporal worker ...`, `temporal schedule ...`). The
-namespace's configuration goes to the Cloud control plane (`temporal cloud namespace ...`).
+namespace's configuration goes to the Cloud control plane (`temporal cloud namespace ...`, a
+plugin: `brew install temporalio/brew/temporal-cloud`; CI installs it from its release).
 The worker's API key is a namespace service account: it may do everything on the first door
 and read on the second, and it may not change the namespace. A frontend command for a
 control-plane job answers "Request unauthorized": the wrong door, not the wrong key.
