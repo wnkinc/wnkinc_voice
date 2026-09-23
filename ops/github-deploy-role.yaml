@@ -1,0 +1,90 @@
+# The role GitHub Actions assumes to deploy (ci.yml), through GitHub's OIDC
+# provider: no long-lived keys anywhere. It trusts only this repository's main
+# branch, and may only assume CDK's bootstrap roles (which do the deploying)
+# and run the worker release. Applied once from the admin profile:
+#
+#   AWS_PROFILE=wnk-admin aws cloudformation deploy --region us-west-2 \
+#     --stack-name wnkinc-voice-github-deploy --template-file ops/github-deploy-role.yaml \
+#     --capabilities CAPABILITY_NAMED_IAM
+#
+# If the account already has GitHub's OIDC provider, add
+# `--parameter-overrides CreateOidcProvider=false`.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: The role GitHub Actions assumes to deploy wnkinc_voice from main
+
+Parameters:
+  Repository:
+    Type: String
+    Default: wnkinc/wnkinc_voice
+  Branch:
+    Type: String
+    Default: main
+  CreateOidcProvider:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOidcProvider, 'true']
+
+Resources:
+  GitHubOidc:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: wnkinc-voice-github-deploy
+      Description: GitHub Actions deploys wnkinc_voice from main through this role
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateProvider
+                - !Ref GitHubOidc
+                - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${Repository}:ref:refs/heads/${Branch}
+      Policies:
+        - PolicyName: deploy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # CDK deploys by assuming its own bootstrap roles; this is all a deploy needs.
+              - Sid: CdkBootstrapRoles
+                Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/cdk-hnb659fds-*-role-${AWS::AccountId}-${AWS::Region}
+              - Sid: CdkBootstrapVersion
+                Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters]
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cdk-bootstrap/*
+              # The release (scripts/temporal-release.mts): the stack's outputs, the
+              # Temporal secret, a Lambda version per build.
+              - Sid: Release
+                Effect: Allow
+                Action: [cloudformation:DescribeStacks]
+                Resource: '*'
+              - Sid: ReleaseSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:wnkinc-voice-dev/temporal-*
+              - Sid: ReleaseLambda
+                Effect: Allow
+                Action: [lambda:ListVersionsByFunction, lambda:PublishVersion, lambda:GetFunction]
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:wnkinc-voice-dev-worker
+
+Outputs:
+  RoleArn:
+    Value: !GetAtt DeployRole.Arn

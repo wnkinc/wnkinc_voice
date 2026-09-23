@@ -4,7 +4,8 @@
  *
  *   npx tsx scripts/temporal-release.mts
  *
- * Runs after `npm run deploy -- wnk-worker-dev`. In order: publish an
+ * Runs after `npm run deploy -- wnk-worker-dev` (or by CI after a merge to
+ * main). In order: publish an
  * immutable Lambda version of what was deployed; create the Worker Deployment
  * Version pointing at that qualified ARN, which makes Temporal invoke it once
  * to validate; check that invocation bound the task queue (if not, stop: the
