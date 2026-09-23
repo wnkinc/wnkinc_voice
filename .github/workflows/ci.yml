@@ -54,7 +54,11 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::539247450358:role/wnkinc-voice-github-deploy
           aws-region: us-west-2
+      # Pinned: the action's "latest" gave a CLI without the `cloud` subcommand the
+      # namespace check needs. Move it with the version validated locally.
       - uses: temporalio/setup-temporal@v0
+        with:
+          version: v1.9.1
       # The namespace must have the configuration the build depends on (the search
       # attributes it sets) before any function that sets one is live. A person creates
       # a missing one (ops/README.md); this fails the deploy until then.
