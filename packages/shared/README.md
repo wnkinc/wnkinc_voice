@@ -9,10 +9,12 @@ rented services. Nothing here runs on its own.
 |---|---|---|
 | `contracts.ts` | What more than one deployable must agree on: the tool and approval names, the rows as read back (`TenantRow`, `PersonRecord`, `DraftRow`), `Lead` and the `VoiceEvent` union, the automation registries, the tenant file's type. No runtime import: the workflow bundle and the CDK stacks take it with nothing behind it (`test/contracts.test.ts` holds that). Exported as `@wnk/shared/contracts`. | One spelling of every shared name; the worker and the stacks import it, never each other. |
 | `types.ts` | `TenantConfigSchema` (zod) and the call record | Tenant data lives in the row, validated on write. |
-| `store.ts` | `Store` interface over DynamoDB (Tenants, Calls, People) plus an in-memory version for tests: what the code still persists (the session's call row, the seed's writes). Claiming a call, once-markers, and the People lookup are workflow states now. | No leads table: the CRM holds the lead, the call row is the audit. |
+| `store.ts` | `Store` over DynamoDB (Tenants, Calls, People) plus an in-memory version for tests: the tenant and people reads every side makes (the receptionist, the worker's identity activities, the scripts), the seed's writes, the session's call row. What one side alone writes (once-markers, the ledger, the browser window) stays in that side's activities. | One read of a row, validated: a row that no longer parses fails closed. No leads table: the CRM holds the lead, the call row is the audit. |
+| `composio-api.ts` | Composio's HTTP API, the one client: run a tool, list a tenant's accounts, the proxy; every call names the tenant, and takes a deadline. The worker's activities and accept use it. | The tenant is an argument from the resolved row, never a model's or a caller's word. |
+| `memory.ts` | The callers' memory (AgentCore Memory), the one client: retrieve by relevance, a session's history, write an event. | Actor ids start with the tenant id: isolation is structural. |
+| `secrets.ts` | A JSON secret by ARN, read once per process | Missing config fails closed at the caller. |
 | `events.ts` | EventBridge publisher | Carries the X-Ray trace header so consumers join the call's trace. |
-| `config.ts` | Env vars, Secrets Manager, OpenAI client, JSON logger | |
-| `composio.ts` | Composio SDK for the scripts: consent links, the owner's Gmail address, the harness's meta-tools session | The only file that may import `@composio/core`. Nothing at runtime imports it; the workflows call Composio's HTTP API with the tenant id as `user_id`. |
+| `config.ts` | Env vars, the OpenAI secret, JSON logger | |
 | `phone.ts`, `trace.ts` | E.164 normalizing; X-Ray header helpers | |
 
 ## References

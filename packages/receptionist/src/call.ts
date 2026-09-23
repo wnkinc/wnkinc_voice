@@ -1,6 +1,7 @@
 import { OpenAIRealtimeSIP, RealtimeSession } from '@openai/agents/realtime';
 import { buildAgent, greeting, sessionOptions, type CallContext } from './agent.js';
-import { createOpenAI, type Logger, type OpenAISecrets } from '@wnk/shared';
+import { type Logger, type OpenAISecrets } from '@wnk/shared';
+import { createOpenAI } from './openai.js';
 import type { EventPublisher } from '@wnk/shared';
 import type { Store } from '@wnk/shared';
 import type { CallStatus, SessionJob, TranscriptEntry } from '@wnk/shared';

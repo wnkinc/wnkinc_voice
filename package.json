@@ -2,7 +2,7 @@
   "name": "wnkinc-voice",
   "version": "0.1.0",
   "private": true,
-  "description": "Agent platform for a small business: OpenAI Realtime phone receptionist + Bedrock AgentCore (Twilio SIP -> OpenAI -> AWS)",
+  "description": "A multi-tenant platform: the phone receptionist, the business assistant, the automations (Temporal, AgentCore, Twilio, OpenAI)",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -22,22 +22,8 @@
     "release": "tsx scripts/temporal-release.mts",
     "temporal": "tsx scripts/temporal.mts"
   },
-  "dependencies": {
-    "@aws-sdk/client-bedrock-agentcore": "^3.1117.0",
-    "@aws-sdk/client-dynamodb": "^3.1116.0",
-    "@aws-sdk/client-eventbridge": "^3.1116.0",
-    "@aws-sdk/client-lambda": "^3.1116.0",
-    "@aws-sdk/client-secrets-manager": "^3.1116.0",
-    "@aws-sdk/client-sqs": "^3.1116.0",
-    "@aws-sdk/lib-dynamodb": "^3.1116.0",
-    "@composio/core": "^0.18.0",
-    "@openai/agents": "^0.17.0",
-    "aws-cdk-lib": "^2.266.0",
-    "constructs": "^10.4.0",
-    "openai": "^7.5.0",
-    "zod": "^4.0.0"
-  },
   "devDependencies": {
+    "@composio/core": "^0.18.0",
     "@types/aws-lambda": "^8.10.0",
     "@types/node": "^22.0.0",
     "aws-cdk": "^2.1100.0",

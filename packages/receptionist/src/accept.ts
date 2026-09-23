@@ -156,26 +156,24 @@ async function recognize(deps: AcceptDeps, tenantId: string, from: string): Prom
 }
 
 // ---- Production wiring ------------------------------------------------------
+// The same clients the worker's activities use (@wnk/shared): the store for
+// the tenant row, Composio's HTTP API for the CRM, the callers' memory; each
+// lookup on the ringing path carries its deadline in the signal.
 
-import { BedrockAgentCoreClient, RetrieveMemoryRecordsCommand } from '@aws-sdk/client-bedrock-agentcore';
 import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
-import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { env, getOpenAISecrets } from '@wnk/shared';
+import { callerMemory, composioApi, dynamoStore, env, getOpenAISecrets, secretValue } from '@wnk/shared';
 
 const need = (name: string): string => { const v = process.env[name]; if (!v) throw new Error(`${name} not set`); return v; };
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
+const store = dynamoStore(ddb);
 const sqs = new SQSClient({});
-const memory = new BedrockAgentCoreClient({});
-let composioKey: Promise<string> | undefined;
-const composioApiKey = () => (composioKey ??= new SecretsManagerClient({}).send(new GetSecretValueCommand({ SecretId: need('COMPOSIO_SECRET_ARN') }))
-  .then((r) => { const k = (JSON.parse(r.SecretString ?? '{}') as { COMPOSIO_API_KEY?: string }).COMPOSIO_API_KEY; if (!k) throw new Error('COMPOSIO_API_KEY missing from the secret'); return k; })
-  .catch((err) => { composioKey = undefined; throw err; }));
-const COMPOSIO_API = 'https://backend.composio.dev/api/v3.1/';
+const composio = composioApi(() => secretValue(need('COMPOSIO_SECRET_ARN'), 'COMPOSIO_API_KEY'));
+const memory = callerMemory(process.env.MEMORY_ID);
 
 export const handler = createAccept({
-  lookupTenant: async (phoneNumber) => (await ddb.send(new GetCommand({ TableName: env.tenantsTable, Key: { phoneNumber } }))).Item as TenantConfig | undefined,
+  lookupTenant: (phoneNumber) => store.getTenant(phoneNumber),
   claim: async (row) => {
     try {
       await ddb.send(new PutCommand({
@@ -193,26 +191,10 @@ export const handler = createAccept({
     }));
   },
   crm: {
-    account: async (tenantId, signal) => {
-      const res = await fetch(`${COMPOSIO_API}connected_accounts?${new URLSearchParams({ user_ids: tenantId, toolkit_slugs: 'hubspot', statuses: 'ACTIVE' })}`, { headers: { 'x-api-key': await composioApiKey() }, signal });
-      if (!res.ok) throw new Error(`Composio accounts ${res.status}`);
-      return ((await res.json()) as { items?: { id: string }[] }).items?.[0]?.id;
-    },
-    proxy: async (tenantId, accountId, endpoint, body, signal) => {
-      const res = await fetch(`${COMPOSIO_API}tools/execute/proxy`, {
-        method: 'POST', headers: { 'x-api-key': await composioApiKey(), 'content-type': 'application/json' }, signal,
-        body: JSON.stringify({ endpoint, method: 'POST', connected_account_id: accountId, body }),
-      });
-      if (!res.ok) throw new Error(`Composio proxy ${res.status}`);
-      return ((await res.json()) as { data?: { results?: Record<string, any>[] } }).data ?? {};
-    },
+    account: async (tenantId, signal) => (await composio.accounts(tenantId, { toolkit: 'hubspot', signal }))[0]?.id,
+    proxy: async (tenantId, accountId, endpoint, body, signal) => (await composio.proxy(tenantId, accountId, 'POST', endpoint, body, signal)).data ?? {},
   },
-  recallMemory: async (actorId, signal) => {
-    const memoryId = process.env.MEMORY_ID;
-    if (!memoryId) return [];
-    const r = await memory.send(new RetrieveMemoryRecordsCommand({ memoryId, namespacePath: `/callers/${actorId}`, searchCriteria: { searchQuery: 'who this caller is, their jobs, and their preferences', topK: 6 } }), { abortSignal: signal });
-    return (r.memoryRecordSummaries ?? []).flatMap((m) => (m.content?.text ? [m.content.text] : []));
-  },
+  recallMemory: (actorId, signal) => memory.retrieve(actorId, '', 'who this caller is, their jobs, and their preferences', 6, signal),
   openai: async (callId, action, body) => {
     const { OPENAI_API_KEY } = await getOpenAISecrets();
     const res = await fetch(`https://api.openai.com/v1/realtime/calls/${encodeURIComponent(callId)}/${action}`, {

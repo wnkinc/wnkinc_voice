@@ -1,15 +1,13 @@
-import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import OpenAI from 'openai';
+import { jsonSecret } from './secrets.js';
 import { traceIdOf } from './trace.js';
 
 // ---- Environment ------------------------------------------------------------
 
-/** Set by infra/index.ts on the Lambdas and the worker. Read lazily so tests can override. */
+/** What the stacks set on the receptionist's Lambdas and the scripts. Read lazily so tests can override. */
 export const env = {
   get tenantsTable() { return process.env.TENANTS_TABLE ?? ''; },
   get callsTable() { return process.env.CALLS_TABLE ?? ''; },
   get peopleTable() { return process.env.PEOPLE_TABLE ?? ''; },
-  get usageTable() { return process.env.USAGE_TABLE ?? ''; },
   get eventBusName() { return process.env.EVENT_BUS_NAME ?? ''; },
   get eventSource() { return process.env.EVENT_SOURCE ?? 'wnkinc.voice'; },
   get openaiSecretArn() { return process.env.OPENAI_SECRET_ARN ?? ''; },
@@ -38,17 +36,12 @@ async function loadSecrets(): Promise<OpenAISecrets> {
   const secret = process.env.OPENAI_WEBHOOK_SECRET;
   if (key && secret) return { OPENAI_API_KEY: key, OPENAI_WEBHOOK_SECRET: secret };
   if (!env.openaiSecretArn) throw new Error('OPENAI_SECRET_ARN is not set');
-  const res = await new SecretsManagerClient({}).send(new GetSecretValueCommand({ SecretId: env.openaiSecretArn }));
-  const parsed = JSON.parse(res.SecretString ?? '{}') as Partial<OpenAISecrets>;
+  const parsed = await jsonSecret(env.openaiSecretArn) as Partial<OpenAISecrets>;
   if (!parsed.OPENAI_API_KEY || !parsed.OPENAI_WEBHOOK_SECRET) throw new Error('secret must contain OPENAI_API_KEY and OPENAI_WEBHOOK_SECRET');
   if (parsed.OPENAI_API_KEY.startsWith('REPLACE')) throw new Error('OpenAI secret still has placeholder values (see README "Configure secrets")');
   return { OPENAI_API_KEY: parsed.OPENAI_API_KEY, OPENAI_WEBHOOK_SECRET: parsed.OPENAI_WEBHOOK_SECRET };
 }
 
-
-export function createOpenAI(s: OpenAISecrets): OpenAI {
-  return new OpenAI({ apiKey: s.OPENAI_API_KEY, webhookSecret: s.OPENAI_WEBHOOK_SECRET, maxRetries: 1, timeout: 8_000 });
-}
 
 // ---- Logging ----------------------------------------------------------------
 
