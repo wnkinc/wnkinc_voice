@@ -55,9 +55,9 @@ const qualifiedArn = versions[0] ?? sh('aws', ['lambda', 'publish-version', '--f
 console.log(`lambda version: ${qualifiedArn}`);
 
 // 2. The Worker Deployment Version. Creating it triggers one validation invocation.
-const deployments = temporal(['worker', 'deployment', 'list', '-o', 'json']);
-if (!deployments.includes(`"name": "${DEPLOYMENT_NAME}"`)) temporal(['worker', 'deployment', 'create', '--name', DEPLOYMENT_NAME]);
-const existing = temporal(['worker', 'deployment', 'describe', '--name', DEPLOYMENT_NAME, '-o', 'json']);
+// Describe, not list: a list can lag or page, and a create against an existing deployment fails the release.
+const existing = (() => { try { return temporal(['worker', 'deployment', 'describe', '--name', DEPLOYMENT_NAME, '-o', 'json']); } catch { return undefined; } })()
+  ?? (temporal(['worker', 'deployment', 'create', '--name', DEPLOYMENT_NAME]), temporal(['worker', 'deployment', 'describe', '--name', DEPLOYMENT_NAME, '-o', 'json']));
 if (!existing.includes(`"BuildID": "${BUILD_ID}"`)) {
   temporal(['worker', 'deployment', 'create-version', '--deployment-name', DEPLOYMENT_NAME, '--build-id', BUILD_ID,
     '--aws-lambda-function-arn', qualifiedArn, '--aws-lambda-assume-role-arn', invokeRoleArn, '--aws-lambda-assume-role-external-id', secret.EXTERNAL_ID!]);
