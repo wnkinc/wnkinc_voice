@@ -167,6 +167,14 @@ export const TenantConfigSchema = z.object({
      * the assistant answers from the prompt and memory alone.
      */
     tools: z.array(z.enum(ASSISTANT_TOOL_NAMES)).default([]),
+    /**
+     * The Composio toolkits this tenant's assistant reaches over MCP, each with
+     * the tool slugs it may use: `{ googlecalendar: ['GOOGLECALENDAR_FIND_EVENT', ...] }`.
+     * The worker mints a Tool Router session per turn for this tenant with
+     * exactly these, and OpenAI calls the tools itself; the connection canary
+     * expects each toolkit ACTIVE. The consent is the same connect script.
+     */
+    mcp: z.record(z.string().min(1), z.array(z.string().min(1)).min(1)).default({}),
   }).prefault({}),
 
   /**

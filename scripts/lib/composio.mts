@@ -79,7 +79,7 @@ async function ownerEmail(tenantId: string): Promise<string> {
   return email;
 }
 
-export const COMPOSIO_TOOLKITS = ['gmail', 'hubspot', 'facebook'] as const;
+export const COMPOSIO_TOOLKITS = ['gmail', 'hubspot', 'facebook', 'googlecalendar'] as const;
 export type ComposioToolkit = (typeof COMPOSIO_TOOLKITS)[number];
 
 /** Mint the OAuth connect link a tenant owner clicks once at onboarding, per toolkit. */

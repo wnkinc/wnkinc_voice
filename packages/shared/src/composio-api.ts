@@ -22,6 +22,14 @@ export interface ComposioApi {
   executeTool(tenantId: string, slug: string, args: Record<string, unknown>, opts?: { version?: string; signal?: AbortSignal }): Promise<ComposioResult>;
   /** The tenant's ACTIVE connected accounts, for one toolkit or all. */
   accounts(tenantId: string, opts?: { toolkit?: string; signal?: AbortSignal }): Promise<ComposioAccount[]>;
+  /**
+   * A Tool Router session for the tenant: an MCP URL over exactly the toolkits
+   * and tools given, the tenant id as Composio's user id, no connection-management
+   * or code-sandbox helpers. The URL is called with the project key as bearer
+   * (Composio requires it), so whoever calls it must hold the key: the model
+   * activity does, per turn. `timezone` shapes the dates the server's own hints use.
+   */
+  mcpSession(tenantId: string, tools: Record<string, string[]>, timezone?: string, signal?: AbortSignal): Promise<string>;
   /** The toolkit's own REST API on one of the tenant's accounts (`accountId` from `accounts`), for what no tool covers. */
   proxy(tenantId: string, accountId: string, method: 'GET' | 'POST', endpoint: string, body?: Record<string, unknown>, signal?: AbortSignal): Promise<ComposioResult>;
 }
@@ -43,6 +51,18 @@ export function composioApi(apiKey: () => Promise<string>): ComposioApi {
       const q = new URLSearchParams({ user_ids: tenantId, statuses: 'ACTIVE', ...(opts.toolkit ? { toolkit_slugs: opts.toolkit } : {}) });
       const body = await call(`connected_accounts?${q}`, { signal: opts.signal }, 'connected_accounts') as { items?: { id: string; toolkit?: { slug?: string } }[] };
       return (body.items ?? []).map((i) => ({ id: i.id, toolkit: i.toolkit?.slug ?? '' }));
+    },
+    async mcpSession(tenantId, tools, timezone, signal) {
+      const toolkits = Object.keys(tools);
+      if (!tenantId || toolkits.length === 0) throw new Error('mcpSession: no tenant or no toolkits');
+      const body = await call('tool_router/session', { method: 'POST', signal, body: JSON.stringify({
+        user_id: tenantId, toolkits: { enable: toolkits }, tools: Object.fromEntries(toolkits.map((t) => [t, { enable: tools[t] }])),
+        manage_connections: { enable: false }, workbench: { enable: false }, preload: { tools: toolkits.flatMap((t) => tools[t]!) },
+        ...(timezone ? { experimental: { assistive_prompt_config: { user_timezone: timezone } } } : {}),
+      }) }, 'tool router session') as { mcp?: { url?: string } };
+      const url = body.mcp?.url;
+      if (!url?.startsWith('https://')) throw new Error('Composio returned no MCP url for the session');
+      return url;
     },
     async proxy(tenantId, accountId, method, endpoint, body, signal) {
       if (!tenantId || !accountId) throw new Error('composioProxy: no tenant or account');

@@ -15,6 +15,9 @@ export const executeTool = (tenantId: string, slug: string, args: Record<string,
 /** The tenant's ACTIVE connected accounts, for one toolkit or all. */
 export const composioAccounts = (tenantId: string, toolkit?: string): Promise<ComposioAccount[]> => composio.accounts(tenantId, { toolkit });
 
+/** An MCP session for this turn over the toolkits and tools the row lists (assistant.mcp); the model activity calls it with the key. */
+export const mcpSession = (tenantId: string, tools: Record<string, string[]>, timezone?: string): Promise<string> => composio.mcpSession(tenantId, tools, timezone);
+
 /** The toolkit's own REST API on one of the tenant's accounts (`accountId` from composioAccounts), for what no tool covers. */
 export const composioProxy = (tenantId: string, accountId: string, method: 'GET' | 'POST', endpoint: string, body?: Record<string, unknown>): Promise<ComposioResult> =>
   composio.proxy(tenantId, accountId, method, endpoint, body);

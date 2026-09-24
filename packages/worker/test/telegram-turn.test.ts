@@ -2,7 +2,7 @@
 import type { TestWorkflowEnvironment } from '@temporalio/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { telegramTurn } from '../src/workflows/index.js';
-import { fakes, person, run as runWorkflow, tenant, type Fakes, testEnv } from './fakes.js';
+import { answer, fakes, person, run as runWorkflow, tenant, type Fakes, testEnv } from './fakes.js';
 
 const update = (text: string, extra: Record<string, unknown> = {}) => ({ update_id: Math.floor(Math.random() * 1e9), message: { text, from: { id: 777 }, chat: { id: 777, type: 'private' }, ...extra } });
 let env: TestWorkflowEnvironment;
@@ -24,7 +24,7 @@ describe('telegram turn', () => {
 
   it('a ledger tool asked for on Telegram is refused: no approver on this channel', async () => {
     const f = fakes();
-    f.callModel.mockResolvedValueOnce({ responseId: 'r', calls: [{ call_id: 'c', name: 'draft_facebook_post', arguments: '{"caption":"x","photos":"none"}' }], reply: '', tokens: 1, inputTokens: 1, outputTokens: 0 }).mockResolvedValueOnce({ responseId: 'r2', calls: [], reply: 'Ok.', tokens: 1, inputTokens: 1, outputTokens: 0 });
+    f.callModel.mockResolvedValueOnce({ responseId: 'r', mcpCalls: [], calls: [{ call_id: 'c', name: 'draft_facebook_post', arguments: '{"caption":"x","photos":"none"}' }], reply: '', tokens: 1, inputTokens: 1, outputTokens: 0 }).mockResolvedValueOnce({ responseId: 'r2', mcpCalls: [], calls: [], reply: 'Ok.', tokens: 1, inputTokens: 1, outputTokens: 0 });
     await run(f, update('post it'));
     expect(f.createDraft).not.toHaveBeenCalled();
     const outputs = f.callModel.mock.calls[1]?.[0].input as { output: string }[];
@@ -55,4 +55,25 @@ describe('telegram turn', () => {
     expect(await run(f, update('hi'))).toBe('unknown-sender');
     expect(f.sendTelegram).not.toHaveBeenCalled();
   }, 60_000);
+});
+
+describe('MCP toolkits on the row', () => {
+  it('mints one session for this turn over the row\'s toolkits and tools, hands its URL to the model activity beside the function tools, and tells the model the time', async () => {
+    const f = fakes();
+    const mcp = { googlecalendar: ['GOOGLECALENDAR_FIND_EVENT', 'GOOGLECALENDAR_CREATE_EVENT'] };
+    f.lookupTenant.mockResolvedValue({ ...tenant, business: { name: 'Deck Co', timezone: 'America/Chicago' }, assistant: { enabled: true, tools: ['search_contacts'], mcp } });
+    f.callModel.mockResolvedValue({ ...answer('Thursday is free.'), mcpCalls: [{ server: 'composio', name: 'GOOGLECALENDAR_FIND_EVENT', arguments: '{}' }] });
+    expect(await runWorkflow(env, f, telegramTurn, [update('what do I have Thursday')])).toBe('replied');
+    expect(f.mcpSession).toHaveBeenCalledWith('deck', mcp, 'America/Chicago');
+    const req = f.callModel.mock.calls[0]![0];
+    expect(req.mcpUrl).toBe('https://mcp.example/tool_router/tok/mcp');
+    expect((req.tools as { name: string }[]).map((t) => t.name)).toEqual(['search_contacts']);
+    expect(req.instructions).toMatch(/The time now is \d{4}-\d{2}-\d{2}T.*America\/Chicago/);
+  });
+  it('mints no session when the row lists no toolkit', async () => {
+    const f = fakes();
+    await runWorkflow(env, f, telegramTurn, [update('hi')]);
+    expect(f.mcpSession).not.toHaveBeenCalled();
+    expect(f.callModel.mock.calls[0]![0].mcpUrl).toBeUndefined();
+  });
 });

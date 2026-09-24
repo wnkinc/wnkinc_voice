@@ -9,14 +9,13 @@ Pick the shape by WHO chooses the tool.
 
 ## An open-ended model needs a SaaS (My Assistant)
 
-Composio brokers the credential; the model sees a slim tool of ours, and what runs is a Composio slug as the tenant. A tool is one catalog entry plus its name.
+Two shapes. **Raw, first**: the tenant row lists the Composio toolkit and the tool slugs under `assistant.mcp`, the worker mints a Tool Router session per turn over exactly those, and OpenAI calls the tools itself (their descriptions and schemas are Composio's). No code. **The catalog, when the raw shape bites**: a slim tool of ours in `ASSISTANT_TOOLS` (`packages/worker/src/rules/assistant.ts`) plus its name in `ASSISTANT_TOOL_NAMES` (the contracts), with the Composio slug, `args` (the slug's arguments from the model's, with what we fill or forbid), `shape` (what the model reads back), and a pinned version; the tool's name on the row's `assistant.tools`. The catalog is the narrowing: use it when an argument must be filled or forbidden (attendees on an invitation), a result must be bounded, or a release pinned. Note the raw shape's cost: the session URL is called with the Composio project key as bearer, which the model activity hands OpenAI on each turn (`ops/README.md`, rotation).
 
-1. Confirm Composio has the toolkit (`composio.dev/toolkits/<slug>`); spike the slug with curl to learn its argument and result shapes.
-2. Owner consent: `npx tsx scripts/connect-composio.mts <tenantId> <toolkit>`; add the toolkit to `expectedToolkits` in `packages/worker/src/rules/automations.ts` (one line: the row flag that implies it) so the daily canary alarms when the connection lapses (the adapter's `connectLink` creates a managed auth config on first use).
-3. The tool: its name in `ASSISTANT_TOOL_NAMES` (`packages/shared/src/contracts.ts`), and its entry in `ASSISTANT_TOOLS` (`packages/worker/src/rules/assistant.ts`): the description and slim schema the model sees, the Composio slug, `args` (the slug's arguments from the model's), `shape` (what the model reads from a result). The compiler holds that the catalog defines exactly the names. Bump `BUILD_ID`.
-4. The allow-list: the tool's name in `assistant.tools` on each tenant row that gets it; re-seed. A tenant without it never sees it.
-5. If the model needs guidance the toolkit's schemas do not give (formats, ids), add one sentence to the channel line in `packages/worker/src/rules/assistant.ts` (`CHANNEL`, `systemPrompt`) — data, not code.
-6. Prove with `npx tsx scripts/test-assistant.mts "<a question that needs it>" <tenantId>`.
+1. Confirm Composio has the toolkit (`composio.dev/toolkits/<slug>`); list its tools and read their schemas from `GET /api/v3/tools?toolkit_slug=<slug>` with the platform key.
+2. Owner consent: `npx tsx scripts/connect-composio.mts <tenantId> <toolkit>` (add the toolkit to `COMPOSIO_TOOLKITS` in `scripts/lib/composio.mts` if new). The daily canary expects every toolkit under `assistant.mcp`, and the ones the row's flags imply (`expectedToolkits`).
+3. Raw: `"assistant": { "mcp": { "<toolkit>": ["<TOOL_SLUG>", ...] } }` in the tenant file; re-seed. Nothing deploys. Catalog: the entry and the name, bump `BUILD_ID`, then the name in `assistant.tools`; re-seed.
+4. If the model needs guidance the toolkit's schemas do not give (formats, ids), add one sentence to the channel line in `packages/worker/src/rules/assistant.ts` (`CHANNEL`, `systemPrompt`) — data, not code. The prompt already carries the time and the business's timezone.
+5. Prove with `npx tsx scripts/test-assistant.mts "<a question that needs it>" <tenantId>`; the workflow history shows every MCP call the model made.
 
 ## The action reaches a customer irreversibly, or costs money (a post, an email, a refund)
 
