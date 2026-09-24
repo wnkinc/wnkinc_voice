@@ -31,12 +31,12 @@ export const ASSISTANT_TOOLS = {
   // publish tool and there must never be one: the person's POST publishes,
   // matched by the workflow before the model runs.
   draft_facebook_post: {
-    description: 'Create or change the draft of a post for the business Facebook Page. This never publishes. The system texts the exact draft to the person, and only their reply POST publishes it. Call it again to change the caption or the photos.',
+    description: 'Create or change the draft of a post for the business Facebook Page. This never publishes. The system texts the exact draft to the person, and only their reply POST publishes it. Call it again to change the caption or the photos; each call replaces the whole draft.',
     parameters: {
       type: 'object',
       properties: {
         caption: { type: 'string', description: 'The full text of the post, as it should appear on the Page' },
-        photos: { type: 'string', enum: ['keep', 'use_new', 'add_new', 'none'], description: 'keep: the photos already on the draft. use_new: only the photos the person sent, with this message or a recent one. add_new: the photos on the draft plus the ones they sent. none: a post with no photos. The result says how many photos the draft has; tell the person if it is zero.' },
+        photos: { type: 'array', items: { type: 'string' }, description: 'The photos the post carries, by label from the photo list in your instructions (for example ["p2", "p3"]); [] for a post with no photos. The whole list, not a change: name every photo the draft should have. The result names the photos on the draft; tell the person if there are none.' },
       },
       required: ['caption', 'photos'], additionalProperties: false,
     },

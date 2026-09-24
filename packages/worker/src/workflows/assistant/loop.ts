@@ -13,9 +13,9 @@
 import { proxyActivities } from '@temporalio/workflow';
 import type * as activities from '../../activities/index.js';
 import type { ComposioToolSchema } from '@wnk/shared/composio-api';
-import type { Photo } from '@wnk/shared/contracts';
+import type { PhotoRow } from '@wnk/shared/contracts';
 import { ASSISTANT_TOOLS, FALLBACK_REPLY, MAX_ROUNDS, boundedResult, instructions, toolDefs } from '../../rules/assistant.js';
-import { MAX_CAPTION_CHARS, draftedNote, nextMedia } from '../../rules/facebook.js';
+import { MAX_CAPTION_CHARS, draftedNote, resolvePhotos } from '../../rules/facebook.js';
 import { orElse } from '../common.js';
 
 type Activities = typeof activities;
@@ -37,9 +37,9 @@ export interface LoopInput {
   content: string | unknown[];
   actorId: string;
   sessionId: string;
-  /** For the ledger tools: who may approve, and the photos in hand. Absent on channels without them. */
+  /** For the ledger tools: who may approve, and the photos the model was shown (labels resolve against this list, in this order). Absent on channels without them. */
   approver?: string;
-  photos?: Photo[];
+  photos?: PhotoRow[];
   /** Composio's definitions of the tools the row lists natively (assistant.composioTools): the model sees them as function tools; each call runs as an activity, as the tenant. */
   composioTools?: readonly ComposioToolSchema[];
 }
@@ -94,15 +94,16 @@ async function runTool(name: string, rawArgs: string, ctx: LoopInput): Promise<s
     if (name === 'draft_facebook_post') {
       const caption = typeof a.caption === 'string' ? a.caption : '';
       if (caption.trim().length === 0 || caption.length > MAX_CAPTION_CHARS) return JSON.stringify({ error: `The caption must be 1 to ${MAX_CAPTION_CHARS} characters so the draft fits in one text message.` });
+      const photos = resolvePhotos(a.photos, ctx.photos ?? []);
+      if ('error' in photos) return JSON.stringify({ error: photos.error });
       // Asked again inside the turn, not read from the earlier lookup: the model may draft twice in one turn.
       const row = await ledger.findPending(ctx.tenantId, ctx.approver);
-      const next = nextMedia(String(a.photos), row?.payload.media ?? [], ctx.photos ?? []);
       if (row) {
-        if (!await ledger.reviseDraft(ctx.tenantId, row.sk, row.revision, caption, next)) return failed;
+        if (!await ledger.reviseDraft(ctx.tenantId, row.sk, row.revision, caption, photos.refs)) return failed;
       } else {
-        await ledger.createDraft(ctx.tenantId, ctx.approver, caption, next);
+        await ledger.createDraft(ctx.tenantId, ctx.approver, caption, photos.refs);
       }
-      return draftedNote(next.length);
+      return draftedNote(photos.refs);
     }
     if (name === 'cancel_facebook_draft') {
       const row = await ledger.findPending(ctx.tenantId, ctx.approver);

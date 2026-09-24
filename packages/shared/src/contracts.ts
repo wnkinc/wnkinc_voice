@@ -60,10 +60,42 @@ export interface TranscriptEntry {
   at: string;
 }
 
-/** A texted photo by its Twilio ids; links are minted when needed, never stored. */
-export interface Photo {
+/** A photo on an inbound text, before it is stored: Twilio's ids and the type. */
+export interface InboundPhoto {
   messageSid: string;
   mediaSid: string;
+  contentType: string;
+}
+
+/**
+ * A photo a person texted, as a row in the Actions table
+ * (`<approver>#photo#<receivedAt>#<mediaSid>`): where its bytes are (the
+ * media bucket, under the tenant), what it shows, and which post it went
+ * into. The model sees these as a labeled list and names them in a draft; a
+ * posted one is marked so it is not picked again unasked.
+ */
+export interface PhotoRow {
+  tenantId: string;
+  sk: string;
+  approver: string;
+  channel: 'sms';
+  /** The object key in the media bucket: `<tenantId>/<messageSid>/<mediaSid>.<ext>`. */
+  key: string;
+  contentType: string;
+  receivedAt: string;
+  /** One line from a vision call at arrival; absent until it lands. */
+  description?: string;
+  /** The action row this photo went out in, once it did. */
+  postedIn?: string;
+  postedAt?: string;
+  expiresAt: number;
+}
+
+/** A photo as a draft carries it: the row, its bytes, and the description the person approves it by. */
+export interface PhotoRef {
+  sk: string;
+  key: string;
+  description: string;
 }
 
 /** An Actions-table row for a Facebook post draft: the fields the workflow reads. */

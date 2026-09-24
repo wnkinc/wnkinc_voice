@@ -44,6 +44,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
@@ -71,6 +72,8 @@ export interface WorkerStackProps extends cdk.StackProps {
   readonly peopleTable: dynamodb.ITable;
   readonly actionsTable: dynamodb.ITable;
   readonly usageTable: dynamodb.ITable;
+  /** Texted photos, copied in and handed out by the worker's media activities. */
+  readonly mediaBucket: s3.IBucket;
   readonly openaiSecret: secretsmanager.ISecret;
   readonly composioSecret: secretsmanager.ISecret;
   /** The Browserbase project id: cdk.json context, not a secret. */
@@ -130,6 +133,7 @@ export class WorkerStack extends cdk.Stack {
       PEOPLE_TABLE: props.peopleTable.tableName,
       TENANTS_TABLE: props.tenantsTable.tableName,
       ACTIONS_TABLE: props.actionsTable.tableName,
+      MEDIA_BUCKET: props.mediaBucket.bucketName,
       CALLS_TABLE: props.callsTable.tableName,
       USAGE_TABLE: props.usageTable.tableName,
       OPENAI_SECRET_ARN: props.openaiSecret.secretArn,
@@ -153,6 +157,9 @@ export class WorkerStack extends cdk.Stack {
       // Read for every turn; written by the login handoff (its window and the saved browser's id).
       props.tenantsTable.grantReadWriteData(role);
       props.actionsTable.grantReadWriteData(role);
+      // Put and get on objects only (the activity builds every key under the tenant); no list, no delete.
+      props.mediaBucket.grantPut(role);
+      props.mediaBucket.grantRead(role, '*');
       props.callsTable.grantReadWriteData(role);
       props.usageTable.grantWriteData(role);
       if (props.callerMemory) {

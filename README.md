@@ -147,10 +147,14 @@ the workflow id is the update id or the MessageSid.
 Prove it end to end: `npx tsx scripts/test-assistant.mts "who is Sarah?" <tenantId>` starts the
 Telegram turn as the tenant's owner; the reply lands on their Telegram and is printed.
 
-**Facebook posts over SMS.** For a tenant with `facebookPosts` on, a texted photo reaches the
-model, the model drafts through the Actions ledger, the workflow texts the draft word for word
-from the row under the model's line, and the person's reply POST publishes it without the model
-(`packages/worker/src/rules/facebook.ts`; the split is held by `packages/worker/test/sms-turn.test.ts`).
+**Facebook posts over SMS.** For a tenant with `facebookPosts` on, a texted photo is copied into
+the media bucket under the tenant, described once by a vision call, and kept as a row the model can
+name (a labeled list of the person's recent photos, what each shows, whether it went out: what a
+human assistant would know of the thread). The model drafts through the Actions ledger naming
+photos by label, the workflow texts the draft word for word from the row under the model's line,
+photos named by what they show, and the person's reply POST publishes it without the model, the
+photos handed to Facebook as presigned links (`packages/worker/src/rules/facebook.ts`,
+`activities/media.ts`; the split is held by `packages/worker/test/sms-turn.test.ts`).
 
 **Saved browser: `/login`.** A business signs into the sites it uses once, and the platform keeps
 that browser. The owner sends `/login <site>` to the bot; the Telegram turn starts the

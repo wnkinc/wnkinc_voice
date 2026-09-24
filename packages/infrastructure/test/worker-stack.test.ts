@@ -5,6 +5,7 @@
  * same image with a different handler, reaches only the Temporal secret.
  */
 import * as cdk from 'aws-cdk-lib';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Template } from 'aws-cdk-lib/assertions';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -23,6 +24,7 @@ const secret = (id: string) => new secretsmanager.Secret(platform, id);
 const stack = new WorkerStack(app, 'wnk-worker-test', {
   prefix: 'p', env, alarmTopic: new sns.Topic(platform, 'Alarms'),
   tenantsTable: table('Tenants'), callsTable: table('Calls'), peopleTable: table('People'), actionsTable: table('Actions'), usageTable: table('Usage'),
+  mediaBucket: new s3.Bucket(platform, 'Media'),
   openaiSecret: secret('OpenAI'), composioSecret: secret('Composio'), browserbaseProjectId: 'proj',
   callerMemory: { memoryId: 'mem', memoryArn: 'arn:aws:bedrock-agentcore:us-west-2:123456789012:memory/mem' },
   api: new apigwv2.HttpApi(platform, 'Api'), bus: new events.EventBus(platform, 'Bus'),
@@ -68,7 +70,7 @@ describe('worker stack', () => {
     for (const own of Object.keys(template.findResources('AWS::SecretsManager::Secret'))) expect(resources.some((r) => r.includes('"Ref":"' + own))).toBe(true);
     for (const imported of ['OpenAI', 'Composio']) expect(resources.some((r) => r.includes(imported))).toBe(true);
     const envVars = worker.Properties.Environment.Variables;
-    for (const key of ['PEOPLE_TABLE', 'TENANTS_TABLE', 'ACTIONS_TABLE', 'CALLS_TABLE', 'USAGE_TABLE', 'OPENAI_SECRET_ARN', 'COMPOSIO_SECRET_ARN', 'TWILIO_SECRET_ARN', 'TELEGRAM_SECRET_ARN', 'BROWSERBASE_SECRET_ARN', 'BROWSERBASE_PROJECT_ID', 'MEMORY_ID', 'TEMPORAL_SECRET_ARN']) expect(envVars[key]).toBeDefined();
+    for (const key of ['PEOPLE_TABLE', 'TENANTS_TABLE', 'ACTIONS_TABLE', 'MEDIA_BUCKET', 'CALLS_TABLE', 'USAGE_TABLE', 'OPENAI_SECRET_ARN', 'COMPOSIO_SECRET_ARN', 'TWILIO_SECRET_ARN', 'TELEGRAM_SECRET_ARN', 'BROWSERBASE_SECRET_ARN', 'BROWSERBASE_PROJECT_ID', 'MEMORY_ID', 'TEMPORAL_SECRET_ARN']) expect(envVars[key]).toBeDefined();
     expect(envVars.TEMPORAL_API_KEY).toBeUndefined();
   });
 

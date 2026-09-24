@@ -2,7 +2,7 @@
  * Twilio's inbound post, as the starter parses it and the workflow reads it.
  * Pure: shared by the starter Lambda, the workflow bundle, and the tests.
  */
-import type { Photo } from '@wnk/shared/contracts';
+import type { InboundPhoto } from '@wnk/shared/contracts';
 
 /** Twilio's form fields (From, To, Body, AccountSid, MessageSid, NumMedia, MediaUrl<n>, ...). */
 export type Sms = Record<string, string>;
@@ -31,15 +31,15 @@ export function isRoutable(sms: Sms): boolean {
 }
 
 /** The photos on an inbound post, images only; the media id is the last segment of the URL. */
-export function mediaFromSms(sms: Sms): Photo[] {
+export function mediaFromSms(sms: Sms): InboundPhoto[] {
   const n = sms.NumMedia ? Number(sms.NumMedia) : 0;
-  const out: Photo[] = [];
+  const out: InboundPhoto[] = [];
   for (let i = 0; i < n; i++) {
-    const type = sms[`MediaContentType${i}`] ?? '';
+    const contentType = sms[`MediaContentType${i}`] ?? '';
     const url = sms[`MediaUrl${i}`] ?? '';
-    if (!type.startsWith('image/') || !sms.MessageSid) continue;
+    if (!contentType.startsWith('image/') || !sms.MessageSid) continue;
     const mediaSid = url.split('/').at(-1) ?? '';
-    if (mediaSid) out.push({ messageSid: sms.MessageSid, mediaSid });
+    if (mediaSid) out.push({ messageSid: sms.MessageSid, mediaSid, contentType });
   }
   return out;
 }

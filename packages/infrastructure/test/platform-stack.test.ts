@@ -1,7 +1,8 @@
 /**
  * What the platform stack guarantees: it runs nothing (data and the bus only,
  * so a deploy of it never changes behavior), every platform event is
- * recorded, and the approval ledger outlives the stack.
+ * recorded, the approval ledger outlives the stack, and the media bucket is
+ * private and forgets.
  */
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -27,6 +28,16 @@ describe('platform stack', () => {
     expect(rules).toHaveLength(1);
     expect(rules[0]?.Properties.EventPattern).toEqual({ source: [EVENT_SOURCE] });
     template.hasResourceProperties('AWS::Logs::LogGroup', { LogGroupName: '/p/activity', RetentionInDays: 90 });
+  });
+  it('the media bucket is private, encrypted, TLS only, and expires objects a day after the photo rows', () => {
+    const [id, bucket] = Object.entries(template.findResources('AWS::S3::Bucket'))[0]!;
+    expect(id).toMatch(/^Media/);
+    expect(bucket.Properties.PublicAccessBlockConfiguration).toEqual({ BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true });
+    expect(bucket.Properties.BucketEncryption.ServerSideEncryptionConfiguration[0].ServerSideEncryptionByDefault.SSEAlgorithm).toBe('AES256');
+    expect(bucket.Properties.LifecycleConfiguration.Rules).toEqual([{ ExpirationInDays: 31, Status: 'Enabled' }]);
+    expect(bucket.DeletionPolicy).toBe('Retain');
+    const policy = Object.values(template.findResources('AWS::S3::BucketPolicy'))[0]!;
+    expect(JSON.stringify(policy.Properties.PolicyDocument)).toContain('"aws:SecureTransport":"false"');
   });
   it('keeps the approval ledger when the stack goes; the dev tables go with it', () => {
     const tables = template.findResources('AWS::DynamoDB::Table');

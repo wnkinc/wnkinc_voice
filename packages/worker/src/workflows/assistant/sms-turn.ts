@@ -7,19 +7,20 @@
  * tokens metered.
  *
  * For a tenant with Facebook posts on, the turn also carries the Actions
- * ledger (rules/facebook.ts): a texted photo reaches the model, the model
- * drafts, the workflow texts the draft from the ledger row, and the person's
- * POST publishes it without the model. The publish call is never retried: a
- * lost answer leaves the row `executing` with a note, for a person to
- * reconcile against the Page. A second post is worse than a missing one.
+ * ledger (rules/facebook.ts): a texted photo is stored and described and
+ * becomes a row the model can name, the model drafts, the workflow texts the
+ * draft from the ledger row, and the person's POST publishes it without the
+ * model. The publish call is never retried: a lost answer leaves the row
+ * `executing` with a note, for a person to reconcile against the Page. A
+ * second post is worse than a missing one.
  *
  * Deterministic: every side effect is an activity; the workflow decides.
  */
 import { proxyActivities, upsertSearchAttributes } from '@temporalio/workflow';
 import type * as activities from '../../activities/index.js';
-import type { Photo } from '@wnk/shared/contracts';
+import type { PhotoRef, PhotoRow } from '@wnk/shared/contracts';
 import { systemPrompt } from '../../rules/assistant.js';
-import { APPROVAL_WORD, FACEBOOK_VERSION, allowedTools, draftMessage, facebookOn, facebookPrompt, isApproval, modelContent, postId, postLink } from '../../rules/facebook.js';
+import { APPROVAL_WORD, FACEBOOK_VERSION, allowedTools, draftMessage, facebookOn, facebookPrompt, isApproval, modelContent, photoRow, postId, postLink } from '../../rules/facebook.js';
 import { mediaFromSms, textOrPhotos, type Sms } from '../../rules/sms.js';
 import { TENANT_ID } from '../../search-attributes.js';
 import { orElse } from '../common.js';
@@ -57,22 +58,35 @@ export async function smsTurn({ sms }: SmsTurnInput): Promise<SmsTurnOutcome> {
   // ---- Before the model: is this message the approval? ------------------------
   const fbOn = facebookOn(tenant);
   const inboundText = sms.Body;
-  let draft = fbOn ? await ledger.findPending(tenantId, approver) : undefined;
-  let photos = media;
-  let mediaIsRecent = false;
+  const now = new Date().toISOString();
+  const draft = fbOn ? await ledger.findPending(tenantId, approver) : undefined;
+  let photos: PhotoRow[] = [];
   let imageLinks: string[] = [];
+  let described = { tokens: 0, inputTokens: 0, outputTokens: 0 };
   if (fbOn) {
     if (isApproval(inboundText, draft) && await ledger.lockDraft(tenantId, draft!.sk, draft!.revision, approver, inboundText)) {
-      return publishDraft(tenantId, tenant.phoneNumber, tenant.facebookPosts!.pageId!, tenant.facebookPosts!.pageName!, draft!, send);
+      return publishDraft(tenantId, tenant.facebookPosts!.pageId!, tenant.facebookPosts!.pageName!, draft!, send);
     }
+    // This text's photos become rows the model can name: stored under the
+    // tenant, described once by a vision call, shown to the model as links so
+    // it can caption them. Each step is best effort: without it the turn
+    // still runs, and a photo without a description is still "photo".
     if (media.length > 0) {
-      await orElse(bestEffort.rememberMedia(tenantId, approver, media), undefined);
-      // The model sees the photos it is asked to caption. Without the links the turn still runs, on the text alone.
-      imageLinks = await orElse(bestEffort.mintLinks(tenant.phoneNumber, media), []);
-    } else {
-      const recent = await orElse(bestEffort.recentMedia(tenantId, approver), []);
-      if (recent.length > 0) { photos = recent; mediaIsRecent = true; }
+      const stored = await orElse(tools.storePhotos(tenantId, tenant.phoneNumber, media), []);
+      if (stored.length > 0) {
+        const rows = stored.map((p) => photoRow(tenantId, approver, p, now, Math.floor(Date.parse(now) / 1000)));
+        await orElse(ledger.putPhotos(rows), undefined);
+        imageLinks = await orElse(bestEffort.presign(rows.map((r) => r.key)), []);
+        if (imageLinks.length === rows.length) {
+          const d = await orElse(tools.describeImages(imageLinks), undefined);
+          if (d) {
+            described = d;
+            await orElse(bestEffort.describePhotoRows(tenantId, rows.map((r) => r.sk), d.descriptions), undefined);
+          }
+        }
+      }
     }
+    photos = await orElse(bestEffort.listPhotos(tenantId, approver), []);
   }
 
   // ---- The agent loop --------------------------------------------------------------
@@ -83,9 +97,10 @@ export async function smsTurn({ sms }: SmsTurnInput): Promise<SmsTurnOutcome> {
   const sessionId = `sms-chat-${digits}-${sessionDay(tenant.sessionDayOffsetMinutes)}`;
   const slugs = Object.values(tenant.assistant?.composioTools ?? {}).flat();
   const composioTools = slugs.length > 0 ? await reads.composioToolDefs(slugs) : [];
+  const tz = tenant.business.timezone ?? 'America/Los_Angeles';
   const turn = await runAssistantLoop({
     tenantId, allowed, text, actorId, sessionId, approver, photos, composioTools,
-    prompt: systemPrompt(tenant, person, 'sms', fbOn ? facebookPrompt(draft, photos, mediaIsRecent) : '', new Date().toISOString()),
+    prompt: systemPrompt(tenant, person, 'sms', fbOn ? facebookPrompt(draft, photos, tz, now) : '', now),
     content: modelContent(text, imageLinks),
   });
   const reply = turn.reply;
@@ -103,16 +118,16 @@ export async function smsTurn({ sms }: SmsTurnInput): Promise<SmsTurnOutcome> {
     await send(reply);
   }
   await orElse(bestEffort.saveTurn(actorId, sessionId, text, reply), undefined);
-  await reads.recordUsage(tenantId, approver, turn.tokens, turn.inputTokens, turn.outputTokens);
+  await reads.recordUsage(tenantId, approver, turn.tokens + described.tokens, turn.inputTokens + described.inputTokens, turn.outputTokens + described.outputTokens);
   return 'replied';
 }
 
-/** The row is locked (`executing`) on the revision the person approved: mint the photo links, post once, record the outcome, tell them. */
-async function publishDraft(tenantId: string, tenantPhone: string, pageId: string, pageName: string, draft: { sk: string; payload: { caption: string; media: Photo[] } }, send: (body: string) => Promise<void>): Promise<SmsTurnOutcome> {
+/** The row is locked (`executing`) on the revision the person approved: presign the photo links, post once, record the outcome, tell them. */
+async function publishDraft(tenantId: string, pageId: string, pageName: string, draft: { sk: string; payload: { caption: string; media: PhotoRef[] } }, send: (body: string) => Promise<void>): Promise<SmsTurnOutcome> {
   // Nothing has been sent to Facebook yet, so a failure here is a clean one.
   let links: string[];
   try {
-    links = await tools.mintLinks(tenantPhone, draft.payload.media);
+    links = await tools.presign(draft.payload.media.map((p) => p.key));
   } catch {
     await ledger.markFailed(tenantId, draft.sk, 'could not fetch the photos');
     await send('Facebook did not accept that post, so nothing was published. Send it again to start a new draft.');
@@ -134,6 +149,7 @@ async function publishDraft(tenantId: string, tenantPhone: string, pageId: strin
   if (posted.successful === true) {
     const id = postId(posted) ?? '';
     await ledger.markCompleted(tenantId, draft.sk, id);
+    await orElse(bestEffort.markPhotosPosted(tenantId, draft.payload.media.map((p) => p.sk), draft.sk), undefined);
     await send(`Posted to ${pageName}: ${postLink(pageId, id)}`);
     return 'posted';
   }
