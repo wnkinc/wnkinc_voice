@@ -15,6 +15,8 @@ export function reachesTheWorker(path: string): boolean {
   if (path.startsWith('packages/worker/test/')) return false;
   // Build output: the image builds its own from src; a stray commit of it changes nothing that runs.
   if (path.startsWith('packages/worker/lib/')) return false;
+  // Git's, not the image's (.dockerignore is the image's, above).
+  if (path.endsWith('.gitignore')) return false;
   return !path.endsWith('.md');
 }
 
