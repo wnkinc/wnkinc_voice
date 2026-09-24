@@ -5,10 +5,10 @@
  * argument; none reads it from anywhere else.
  */
 export { lookupPerson, lookupTenant } from './identity.js';
-export { cancelDraft, createDraft, findPending, lockDraft, markCompleted, markFailed, markShown, markUnconfirmed, recentMedia, rememberMedia, reviseDraft } from './ledger.js';
+export { cancelDraft, createDraft, describePhotoRows, findPending, listPhotos, lockDraft, markCompleted, markFailed, markPhotosPosted, markShown, markUnconfirmed, putPhotos, reviseDraft } from './ledger.js';
 export { sendText } from './twilio.js';
-export { mintLinks } from './media.js';
-export { callModel } from './model.js';
+export { presign, storePhotos } from './media.js';
+export { callModel, describeImages } from './model.js';
 export { composioAccounts, composioProxy, composioToolDefs, executeTool } from './composio.js';
 export { loadHistory, recall, recallPreferences, rememberCall, saveTurn } from './memory.js';
 export { recordMeter, recordUsage } from './usage.js';

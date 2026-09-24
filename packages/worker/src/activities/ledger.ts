@@ -3,12 +3,16 @@
  * so the table is also the log of what was proposed, who approved it, and
  * what came of it. Every write that must happen once is conditional and
  * answers false when the condition failed; nothing here retries a lock.
+ *
+ * Beside the drafts, one row per photo a person texted (PhotoRow): what a
+ * human assistant would remember of the thread. A draft names photos by row;
+ * a post marks the rows it used.
  */
 import { randomUUID } from 'node:crypto';
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
-import { ACTION_TYPE, APPROVAL_HOURS, LOG_DAYS, RECENT_MEDIA_HOURS } from '../rules/facebook.js';
-import type { DraftRow, Photo } from '@wnk/shared/contracts';
+import { PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { ACTION_TYPE, APPROVAL_HOURS, LOG_DAYS, PHOTO_LIST_DAYS, PHOTO_LIST_MAX } from '../rules/facebook.js';
+import type { DraftRow, PhotoRef, PhotoRow } from '@wnk/shared/contracts';
 import { env, epoch, now } from './config.js';
 import { ddb } from './clients.js';
 
@@ -33,7 +37,7 @@ export async function findPending(tenantId: string, approver: string): Promise<D
   return r.Items?.[0] as DraftRow | undefined;
 }
 
-export async function createDraft(tenantId: string, approver: string, caption: string, media: Photo[]): Promise<{ sk: string }> {
+export async function createDraft(tenantId: string, approver: string, caption: string, media: PhotoRef[]): Promise<{ sk: string }> {
   const at = now();
   const sk = `${approver}#${ACTION_TYPE}#${at}#${randomUUID().slice(0, 8)}`;
   await ddb.send(new PutCommand({
@@ -48,7 +52,7 @@ export async function createDraft(tenantId: string, approver: string, caption: s
 }
 
 /** A change is a new revision the person has not seen: the approval window restarts with it. */
-export function reviseDraft(tenantId: string, sk: string, revision: number, caption: string, media: Photo[]): Promise<boolean> {
+export function reviseDraft(tenantId: string, sk: string, revision: number, caption: string, media: PhotoRef[]): Promise<boolean> {
   return conditional(() => ddb.send(new UpdateCommand({
     TableName: table(), Key: { tenantId, sk },
     UpdateExpression: 'SET payload = :payload, revision = revision + :one, approveBy = :by, updatedAt = :now',
@@ -121,14 +125,37 @@ export async function markUnconfirmed(tenantId: string, sk: string): Promise<voi
   }));
 }
 
-/** This message's photos, kept for the texts that follow: one row per person, overwritten, not an action. */
-export async function rememberMedia(tenantId: string, approver: string, media: Photo[]): Promise<void> {
-  await ddb.send(new PutCommand({ TableName: table(), Item: { tenantId, sk: `${approver}#media`, media, updatedAt: now(), expiresAt: epoch() + RECENT_MEDIA_HOURS * 3600 } }));
+// ---- The photos a person texted -------------------------------------------------
+
+/** The rows for this text's photos, as the workflow built them (the key from the store, the time the workflow's). A retry writes the same rows. */
+export async function putPhotos(rows: PhotoRow[]): Promise<void> {
+  for (const row of rows) await ddb.send(new PutCommand({ TableName: table(), Item: row }));
 }
 
-/** The photos from a recent text, if any (the TTL deletes the row late; check the time). */
-export async function recentMedia(tenantId: string, approver: string): Promise<Photo[]> {
-  const r = await ddb.send(new GetCommand({ TableName: table(), Key: { tenantId, sk: `${approver}#media` } }));
-  const item = r.Item as { media?: Photo[]; expiresAt?: number } | undefined;
-  return item && (item.expiresAt ?? 0) > epoch() ? (item.media ?? []) : [];
+/** The person's photos of the last PHOTO_LIST_DAYS, oldest first, at most PHOTO_LIST_MAX (the newest). */
+export async function listPhotos(tenantId: string, approver: string): Promise<PhotoRow[]> {
+  const since = new Date(Date.now() - PHOTO_LIST_DAYS * 86400_000).toISOString();
+  const r = await ddb.send(new QueryCommand({
+    TableName: table(),
+    KeyConditionExpression: 'tenantId = :t AND sk BETWEEN :from AND :to',
+    ExpressionAttributeValues: { ':t': tenantId, ':from': `${approver}#photo#${since}`, ':to': `${approver}#photo#~` },
+    ScanIndexForward: false, Limit: PHOTO_LIST_MAX,
+  }));
+  return ((r.Items ?? []) as PhotoRow[]).reverse();
+}
+
+/** What a vision call said each photo shows, one line per row, in order. */
+export async function describePhotoRows(tenantId: string, sks: string[], descriptions: string[]): Promise<void> {
+  for (const [i, sk] of sks.entries()) {
+    const description = descriptions[i];
+    if (!description) continue;
+    await ddb.send(new UpdateCommand({ TableName: table(), Key: { tenantId, sk }, UpdateExpression: 'SET description = :d', ExpressionAttributeValues: { ':d': description } }));
+  }
+}
+
+/** The photos a post went out with, marked with the action row, so the model sees them as used. */
+export async function markPhotosPosted(tenantId: string, sks: string[], actionSk: string): Promise<void> {
+  for (const sk of sks) {
+    await ddb.send(new UpdateCommand({ TableName: table(), Key: { tenantId, sk }, UpdateExpression: 'SET postedIn = :a, postedAt = :now', ExpressionAttributeValues: { ':a': actionSk, ':now': now() } }));
+  }
 }

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ACTION_APPROVAL_WORDS, ACTION_STATUSES, ASSISTANT_TOOL_NAMES, type ActionType, type CallStatus, type Photo, type TranscriptEntry } from './contracts.js';
+import { ACTION_APPROVAL_WORDS, ACTION_STATUSES, ASSISTANT_TOOL_NAMES, type ActionType, type CallStatus, type PhotoRef, type TranscriptEntry } from './contracts.js';
 
 /** E.164 phone number, e.g. +15555550100 */
 export const E164 = z.string().regex(/^\+[1-9]\d{6,14}$/, 'must be E.164 (+15555550100)');
@@ -15,8 +15,8 @@ export const E164 = z.string().regex(/^\+[1-9]\d{6,14}$/, 'must be E.164 (+15555
 // A row stuck in `executing` means the outcome is unknown: a person reconciles
 // it, nothing retries it.
 
-/** A texted photo, as the ledger stores it. */
-export const PhotoSchema = z.object({ messageSid: z.string(), mediaSid: z.string() }) satisfies z.ZodType<Photo>;
+/** A photo on a draft: its row, its bytes, and the description the person approves it by. */
+export const PhotoRefSchema = z.object({ sk: z.string(), key: z.string(), description: z.string() }) satisfies z.ZodType<PhotoRef>;
 
 /** An Actions row as the workflows write it (plain values; the table holds the DynamoDB-typed form). */
 export const ActionSchema = z.object({
@@ -36,8 +36,8 @@ export const ActionSchema = z.object({
   approveBy: z.number().int().positive(),
   payload: z.object({
     caption: z.string(),
-    /** Texted photos by Twilio id; links are minted when needed, never stored. */
-    media: z.array(PhotoSchema),
+    /** The photos it goes out with, by row; their links are presigned when needed, never stored. */
+    media: z.array(PhotoRefSchema),
   }),
   createdAt: z.string(),
   updatedAt: z.string(),

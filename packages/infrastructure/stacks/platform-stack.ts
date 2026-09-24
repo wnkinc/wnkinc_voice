@@ -2,7 +2,8 @@
  * The platform: what every other stack builds on and every tenant shares.
  * Data and the bus, nothing that runs. The tables, the event bus, the HTTP
  * API the front doors add their routes to, the alarm topic every alarm
- * pages, the two platform secrets (OpenAI, Composio), and the activity log.
+ * pages, the two platform secrets (OpenAI, Composio), the media bucket, and
+ * the activity log.
  * It changes rarely; the layers above it (receptionist, worker, a tenant)
  * change often and take these as handles.
  */
@@ -12,6 +13,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import type { Construct } from 'constructs';
@@ -35,6 +37,8 @@ export class PlatformStack extends cdk.Stack {
   readonly usageTable: dynamodb.Table;
   /** The approval ledger (@wnk/shared ActionSchema): one row per action that reaches a customer irreversibly, kept as the log. */
   readonly actionsTable: dynamodb.Table;
+  /** Photos people text, under `<tenantId>/`, for the days a draft may still use them; handed out only as presigned links. */
+  readonly mediaBucket: s3.Bucket;
   readonly bus: events.EventBus;
   /** Every alarm in every stack pages this topic. */
   readonly alarmTopic: sns.Topic;
@@ -102,6 +106,20 @@ export class PlatformStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    // ---- Media -----------------------------------------------------------------------
+    // The worker copies a texted photo here (activities/media.ts) so the model and
+    // Facebook can fetch it by a presigned link; nothing is public. Objects go
+    // with the photo rows (PHOTO_DAYS in the worker's rules); a version of the
+    // rule here and one there is one more day than the rows, so a row never
+    // outlives its bytes.
+    this.mediaBucket = new s3.Bucket(this, 'Media', {
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      lifecycleRules: [{ expiration: cdk.Duration.days(31) }],
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
     // ---- The bus, the alarm topic, the API ------------------------------------------
     this.bus = new events.EventBus(this, 'Events', { eventBusName: `${prefix}-events` });
 
@@ -145,6 +163,7 @@ export class PlatformStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'peopleTableName', { value: this.peopleTable.tableName });
     new cdk.CfnOutput(this, 'callsTableName', { value: this.callsTable.tableName });
     new cdk.CfnOutput(this, 'actionsTableName', { value: this.actionsTable.tableName });
+    new cdk.CfnOutput(this, 'mediaBucketName', { value: this.mediaBucket.bucketName });
     new cdk.CfnOutput(this, 'eventBusName', { value: this.bus.eventBusName });
     /** Subscribe an address here once; no deploy touches the subscribers. */
     new cdk.CfnOutput(this, 'alarmTopicArn', { value: this.alarmTopic.topicArn });

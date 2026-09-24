@@ -39,7 +39,7 @@ new ReceptionistStack(app, STACKS.receptionist, {
 const worker = new WorkerStack(app, STACKS.worker, {
   prefix, env, callerMemory,
   alarmTopic: platform.alarmTopic, tenantsTable: platform.tenantsTable, callsTable: platform.callsTable, usageTable: platform.usageTable,
-  peopleTable: platform.peopleTable, actionsTable: platform.actionsTable, api: platform.api, bus: platform.bus,
+  peopleTable: platform.peopleTable, actionsTable: platform.actionsTable, mediaBucket: platform.mediaBucket, api: platform.api, bus: platform.bus,
   openaiSecret: platform.openaiSecret, composioSecret: platform.composioSecret,
   browserbaseProjectId: app.node.tryGetContext('browserbaseProjectId') as string,
 });
