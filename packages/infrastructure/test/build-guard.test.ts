@@ -7,7 +7,7 @@ const v = (id: string) => `export const BUILD_ID = '${id}';`;
 describe('build guard', () => {
   it('knows what reaches the worker: its source, its image, the contracts it bundles, the stack that sets its environment; not tests or docs', () => {
     for (const p of ['packages/worker/src/workflows/assistant/loop.ts', 'packages/worker/Dockerfile', 'packages/worker/package.json', 'packages/infrastructure/stacks/worker-stack.ts', 'packages/shared/src/contracts.ts', '.dockerignore']) expect(reachesTheWorker(p)).toBe(true);
-    for (const p of ['packages/worker/test/sms-turn.test.ts', 'packages/worker/README.md', 'packages/infrastructure/stacks/platform-stack.ts', 'README.md', 'scripts/temporal-release.mts', 'packages/shared/test/contracts.test.ts']) expect(reachesTheWorker(p)).toBe(false);
+    for (const p of ['packages/worker/test/sms-turn.test.ts', 'packages/worker/lib/workflow-bundle.js', 'packages/worker/README.md', 'packages/infrastructure/stacks/platform-stack.ts', 'README.md', 'scripts/temporal-release.mts', 'packages/shared/test/contracts.test.ts']) expect(reachesTheWorker(p)).toBe(false);
   });
   it('passes a change that bumps, or one that touches nothing the worker runs', () => {
     expect(buildGuard(['packages/worker/src/activities/twilio.ts'], v('build-8'), v('build-9')).ok).toBe(true);

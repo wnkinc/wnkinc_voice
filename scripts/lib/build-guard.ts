@@ -13,6 +13,8 @@ export function reachesTheWorker(path: string): boolean {
   if (path.startsWith('packages/shared/src/')) return true;
   if (!path.startsWith('packages/worker/')) return false;
   if (path.startsWith('packages/worker/test/')) return false;
+  // Build output: the image builds its own from src; a stray commit of it changes nothing that runs.
+  if (path.startsWith('packages/worker/lib/')) return false;
   return !path.endsWith('.md');
 }
 
