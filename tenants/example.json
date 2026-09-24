@@ -36,7 +36,7 @@
   },
 
   "emailResponder": { "enabled": true },
-  "assistant": { "enabled": false, "tools": ["search_contacts", "add_note"] },
+  "assistant": { "enabled": false, "tools": [], "composioTools": { "hubspot": ["HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA", "HUBSPOT_CREATE_NOTE"] } },
   "facebookPosts": { "enabled": false },
   "browser": { "enabled": false }
 }

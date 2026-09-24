@@ -17,8 +17,14 @@ import type { Action, TenantConfigInput } from './types.js';
 
 // ---- Names every side must spell the same -----------------------------------
 
-/** The assistant's tools by name; a tenant row lists which its assistant may use, and the worker's catalog defines each. */
-export const ASSISTANT_TOOL_NAMES = ['search_contacts', 'add_note', 'draft_facebook_post', 'cancel_facebook_draft'] as const;
+/**
+ * The assistant's own tools by name: the ones that carry a rule the model
+ * cannot be trusted to keep (today, the Facebook ledger's draft and cancel).
+ * A tenant row lists which its assistant may use, and the worker's catalog
+ * defines each. Everything else the assistant reaches is Composio's own tool,
+ * listed on the row under assistant.composioTools.
+ */
+export const ASSISTANT_TOOL_NAMES = ['draft_facebook_post', 'cancel_facebook_draft'] as const;
 export type AssistantToolName = (typeof ASSISTANT_TOOL_NAMES)[number];
 
 /** Each action type and the exact word (any case, nothing else in the message) that approves it. It names the action so a YES meant for something else approves nothing. */

@@ -14,7 +14,7 @@ import { proxyActivities } from '@temporalio/workflow';
 import type * as activities from '../../activities/index.js';
 import type { ComposioToolSchema } from '@wnk/shared/composio-api';
 import type { Photo } from '@wnk/shared/contracts';
-import { ASSISTANT_TOOLS, FALLBACK_REPLY, MAX_ROUNDS, instructions, isComposioTool, shapeToolResult, toolDefs, type ToolName } from '../../rules/assistant.js';
+import { ASSISTANT_TOOLS, FALLBACK_REPLY, MAX_ROUNDS, boundedResult, instructions, toolDefs } from '../../rules/assistant.js';
 import { MAX_CAPTION_CHARS, draftedNote, nextMedia } from '../../rules/facebook.js';
 import { orElse } from '../common.js';
 
@@ -89,11 +89,7 @@ async function runTool(name: string, rawArgs: string, ctx: LoopInput): Promise<s
   try { a = JSON.parse(rawArgs) as Record<string, unknown>; } catch { return failed; }
   try {
     // Composio's own tool, as the tenant, the newest release pinned; the result as Composio shaped it, bounded.
-    if (native) return shapeToolResult(await tools.executeTool(ctx.tenantId, name, a, native.version), (d) => d);
-    const tool = ASSISTANT_TOOLS[name as ToolName];
-    if (isComposioTool(tool)) {
-      return shapeToolResult(await tools.executeTool(ctx.tenantId, tool.slug, tool.args(a, new Date().toISOString())), tool.shape);
-    }
+    if (native) return boundedResult(await tools.executeTool(ctx.tenantId, name, a, native.version));
     if (!ctx.approver) return 'This tool is not available for this business.';
     if (name === 'draft_facebook_post') {
       const caption = typeof a.caption === 'string' ? a.caption : '';

@@ -68,6 +68,11 @@ should live.
   the trigger list. Don't pre-build membership models, per-tenant KMS keys, or
   config lineage. A task queue per tenant is deferred the same way: its trigger
   is a tenant that needs isolated capacity or a pinned build.
+- The assistant reaches a SaaS through Composio's own tool: the row lists the
+  toolkit and the tool slugs, the model sees Composio's description and schema,
+  the loop runs each call as an activity. A wrapper of ours (the catalog) is
+  only for a rule the model cannot be trusted to keep: a ledger, a forbidden
+  argument. Never for help or shaping; guidance is a sentence in the prompt.
 - A foundation move is worth making before its trigger when it shapes what every
   future addition imports or names: the contracts package, the stack layering,
   the names, a search attribute. Not when it multiplies operational surface with

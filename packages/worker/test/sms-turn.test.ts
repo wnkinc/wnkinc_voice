@@ -96,17 +96,17 @@ describe('the model', () => {
     expect(outputs.map((o) => o.output)).toEqual(['This tool is not available for this business.', 'This tool is not available for this business.']);
   }, 60_000);
 
-  it('runs a CRM tool through Composio naming the tenant, and hands the model the shaped result', async () => {
+  it('runs a CRM tool of Composio\'s as the tenant with the model\'s own arguments, and hands the model Composio\'s result', async () => {
     const f = fakes();
     f.callModel
-      .mockResolvedValueOnce(answer('', [{ call_id: 'c1', name: 'search_contacts', arguments: JSON.stringify({ query: 'Sarah' }) }]))
+      .mockResolvedValueOnce(answer('', [{ call_id: 'c1', name: 'HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', arguments: JSON.stringify({ query: 'Sarah', limit: 5 }) }]))
       .mockResolvedValueOnce(answer('Found Sarah.'));
-    f.executeTool.mockResolvedValue({ successful: true, data: { total: 1, results: [{ id: '9', properties: { firstname: 'Sarah', lastname: 'K', email: 's@x.com' } }] } });
+    f.executeTool.mockResolvedValue({ successful: true, data: { total: 1, results: [{ id: '9', properties: { firstname: 'Sarah' } }] } });
     await run(f, text('who is Sarah?'));
-    // No release pinned for HubSpot (the oldest works there); a trailing undefined is dropped on the wire.
-    expect(f.executeTool).toHaveBeenCalledWith('deck', 'HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', expect.objectContaining({ query: 'Sarah', limit: 5 }));
+    expect(f.executeTool).toHaveBeenCalledWith('deck', 'HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', { query: 'Sarah', limit: 5 }, '20260915_00');
     const outputs = f.callModel.mock.calls[1]?.[0].input as { output: string }[];
-    expect(JSON.parse(outputs[0]!.output)).toEqual({ total: 1, contacts: [{ id: '9', name: 'Sarah K', email: 's@x.com' }] });
+    expect(JSON.parse(outputs[0]!.output)).toEqual({ total: 1, results: [{ id: '9', properties: { firstname: 'Sarah' } }] });
+    expect(f.callModel.mock.calls[0]?.[0].instructions).toContain('Added by My Assistant');
   }, 60_000);
 
   it('a tenant without the service sees no Facebook tools, and the reply goes out plain', async () => {
@@ -114,13 +114,13 @@ describe('the model', () => {
     f.lookupTenant.mockResolvedValue({ ...tenant, facebookPosts: { enabled: false } });
     await run(f, text('hello'));
     expect(f.findPending).not.toHaveBeenCalled();
-    expect((f.callModel.mock.calls[0]?.[0].tools as { name: string }[]).map((t) => t.name)).toEqual(['search_contacts']);
+    expect((f.callModel.mock.calls[0]?.[0].tools as { name: string }[]).map((t) => t.name)).toEqual(['HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', 'HUBSPOT_CREATE_NOTE']);
     expect(sent(f)).toEqual(['Sure.']);
   }, 60_000);
 
   it('gives up after the round cap and after an empty answer', async () => {
     const f = fakes();
-    f.callModel.mockResolvedValue(answer('', [{ call_id: 'c', name: 'search_contacts', arguments: '{}' }]));
+    f.callModel.mockResolvedValue(answer('', [{ call_id: 'c', name: 'HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', arguments: '{}' }]));
     await run(f, text('loop'));
     expect(f.callModel).toHaveBeenCalledTimes(7);
     expect(sent(f)).toEqual(['Sorry, I could not finish that. Try asking in a simpler way.']);
