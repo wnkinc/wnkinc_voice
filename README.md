@@ -123,7 +123,11 @@ bounded, rounds are capped at six, and each call is an activity in the workflow 
 inside one turn chain with OpenAI's `previous_response_id`, so a later round sends only the tool
 results. Tools are a catalog (`packages/worker/src/rules/assistant.ts`): what the model sees is a
 slim schema (`search_contacts(query)`), what runs is a Composio slug with defaults. Adding a tool is
-one catalog entry and a name on the rows that get it.
+one catalog entry and a name on the rows that get it. A toolkit the assistant reaches raw is data alone:
+the row lists it and its tool slugs under `assistant.mcp`, the worker mints a Composio Tool Router
+session per turn over exactly those, and OpenAI calls the tools itself, every call in the workflow
+history. The catalog is the narrowing, for when an argument must be filled or forbidden or a result
+bounded; the raw shape is the first try.
 
 Memory is the platform Memory instance: at the start of a turn the loop reads this session's earlier
 turns and retrieves what the service has extracted about the person (facts, preferences, summaries);

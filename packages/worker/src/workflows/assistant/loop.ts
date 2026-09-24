@@ -39,6 +39,8 @@ export interface LoopInput {
   /** For the ledger tools: who may approve, and the photos in hand. Absent on channels without them. */
   approver?: string;
   photos?: Photo[];
+  /** The tenant's MCP session URL for this turn (assistant.mcp on the row, minted for the tenant): OpenAI calls the tools itself; the calls come back in the result for the history. */
+  mcpUrl?: string;
 }
 
 export interface LoopResult {
@@ -60,7 +62,7 @@ export async function runAssistantLoop(input: LoopInput): Promise<LoopResult> {
   const count = (r: { tokens: number; inputTokens: number; outputTokens: number }) => {
     usage = { tokens: usage.tokens + r.tokens, inputTokens: usage.inputTokens + r.inputTokens, outputTokens: usage.outputTokens + r.outputTokens };
   };
-  let res = await model.callModel({ instructions: prompt, tools: defs, input: [...history, { role: 'user', content: input.content }] });
+  let res = await model.callModel({ instructions: prompt, tools: defs, mcpUrl: input.mcpUrl, input: [...history, { role: 'user', content: input.content }] });
   count(res);
   let round = 0;
   while (res.calls.length > 0 && round < MAX_ROUNDS) {
@@ -69,7 +71,7 @@ export async function runAssistantLoop(input: LoopInput): Promise<LoopResult> {
       type: 'function_call_output', call_id: call.call_id, output: await runTool(call.name, call.arguments, input),
     })));
     round += 1;
-    res = await model.callModel({ instructions: prompt, tools: defs, previousResponseId: res.responseId, input: outputs });
+    res = await model.callModel({ instructions: prompt, tools: defs, mcpUrl: input.mcpUrl, previousResponseId: res.responseId, input: outputs });
     count(res);
   }
   const gaveUp = res.calls.length > 0 || res.reply.trim().length === 0;

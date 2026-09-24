@@ -49,3 +49,14 @@ live ahead of it. Cloud does not delete a custom search attribute, so a name in 
 for good.
 
 List a tenant's workflows: `npm run temporal -- workflow list --query 'TenantId="<id>"'`.
+
+## The Composio key
+
+The platform's Composio project key reaches two places: the worker's activities, and OpenAI,
+as the bearer on a tenant's MCP session for a turn (Composio requires it on the URL; the
+model activity adds it, per turn, for a session limited to that tenant's toolkits and tools
+under `assistant.mcp`). It is one secret, so a rotation is one put: regenerate the key in
+Composio's dashboard, then
+`aws secretsmanager put-secret-value --secret-id <composioSecretArn> --secret-string '{"COMPOSIO_API_KEY":"<new>"}'`.
+The worker reads it once per container, so a rotation reaches it within minutes; nothing
+else changes.

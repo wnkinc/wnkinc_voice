@@ -113,9 +113,10 @@ export const CHANNEL = {
   chat: { verb: 'chatting', line: 'This is a chat: be brief and plain, no markdown. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 3000 characters.' },
 } as const;
 
-/** The system prompt for a conversation with one of the tenant's people; `extra` is what a channel appends. */
-export function systemPrompt(tenant: TenantRow, person: PersonRecord, channel: keyof typeof CHANNEL, extra = ''): string {
+/** The system prompt for a conversation with one of the tenant's people; `extra` is what a channel appends; `now` is the workflow's clock, so dates the model states or uses are in the business's timezone. */
+export function systemPrompt(tenant: TenantRow, person: PersonRecord, channel: keyof typeof CHANNEL, extra = '', now?: string): string {
   const b = tenant.business;
+  const tz = b.timezone ?? 'America/Los_Angeles';
   return [
     `You are My Assistant for ${b.name}, ${CHANNEL[channel].verb} with ${person.name} (${person.role}) who works there. `,
     b.description ? `About the business: ${b.description} ` : '',
@@ -125,6 +126,7 @@ export function systemPrompt(tenant: TenantRow, person: PersonRecord, channel: k
       ? 'Your tools reach the business systems the owner connected. Use them to look things up or record things; say what you did and what you found. Never invent records. '
       : 'You have no tools connected for this business. ',
     CHANNEL[channel].line,
+    now ? ` The time now is ${now}; the business is in the ${tz} timezone, and every date or time you state or use is in it.` : '',
     extra,
   ].join('');
 }
