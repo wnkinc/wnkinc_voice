@@ -52,11 +52,7 @@ List a tenant's workflows: `npm run temporal -- workflow list --query 'TenantId=
 
 ## The Composio key
 
-The platform's Composio project key reaches two places: the worker's activities, and OpenAI,
-as the bearer on a tenant's MCP session for a turn (Composio requires it on the URL; the
-model activity adds it, per turn, for a session limited to that tenant's toolkits and tools
-under `assistant.mcp`). It is one secret, so a rotation is one put: regenerate the key in
-Composio's dashboard, then
+The platform's Composio project key is read by the worker's activities and by accept, and
+leaves nowhere else. A rotation is one put: regenerate the key in Composio's dashboard, then
 `aws secretsmanager put-secret-value --secret-id <composioSecretArn> --secret-string '{"COMPOSIO_API_KEY":"<new>"}'`.
-The worker reads it once per container, so a rotation reaches it within minutes; nothing
-else changes.
+The worker reads it once per container, so a rotation reaches it within minutes.

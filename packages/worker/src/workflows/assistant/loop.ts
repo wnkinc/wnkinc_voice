@@ -12,6 +12,7 @@
  */
 import { proxyActivities } from '@temporalio/workflow';
 import type * as activities from '../../activities/index.js';
+import type { ComposioToolSchema } from '@wnk/shared/composio-api';
 import type { Photo } from '@wnk/shared/contracts';
 import { ASSISTANT_TOOLS, FALLBACK_REPLY, MAX_ROUNDS, instructions, isComposioTool, shapeToolResult, toolDefs, type ToolName } from '../../rules/assistant.js';
 import { MAX_CAPTION_CHARS, draftedNote, nextMedia } from '../../rules/facebook.js';
@@ -39,8 +40,8 @@ export interface LoopInput {
   /** For the ledger tools: who may approve, and the photos in hand. Absent on channels without them. */
   approver?: string;
   photos?: Photo[];
-  /** The tenant's MCP session URL for this turn (assistant.mcp on the row, minted for the tenant): OpenAI calls the tools itself; the calls come back in the result for the history. */
-  mcpUrl?: string;
+  /** Composio's definitions of the tools the row lists natively (assistant.composioTools): the model sees them as function tools; each call runs as an activity, as the tenant. */
+  composioTools?: readonly ComposioToolSchema[];
 }
 
 export interface LoopResult {
@@ -56,13 +57,14 @@ export async function runAssistantLoop(input: LoopInput): Promise<LoopResult> {
   const history = await orElse(memory.loadHistory(input.actorId, input.sessionId), []);
   const memories = await orElse(memory.recall(input.actorId, input.text), []);
   const prompt = instructions(input.prompt, memories);
-  const defs = toolDefs(input.allowed);
+  const native = input.composioTools ?? [];
+  const defs = [...toolDefs(input.allowed), ...native.map((t) => ({ type: 'function', name: t.slug, description: t.description, parameters: t.parameters, strict: false }))];
 
   let usage = { tokens: 0, inputTokens: 0, outputTokens: 0 };
   const count = (r: { tokens: number; inputTokens: number; outputTokens: number }) => {
     usage = { tokens: usage.tokens + r.tokens, inputTokens: usage.inputTokens + r.inputTokens, outputTokens: usage.outputTokens + r.outputTokens };
   };
-  let res = await model.callModel({ instructions: prompt, tools: defs, mcpUrl: input.mcpUrl, input: [...history, { role: 'user', content: input.content }] });
+  let res = await model.callModel({ instructions: prompt, tools: defs, input: [...history, { role: 'user', content: input.content }] });
   count(res);
   let round = 0;
   while (res.calls.length > 0 && round < MAX_ROUNDS) {
@@ -71,20 +73,23 @@ export async function runAssistantLoop(input: LoopInput): Promise<LoopResult> {
       type: 'function_call_output', call_id: call.call_id, output: await runTool(call.name, call.arguments, input),
     })));
     round += 1;
-    res = await model.callModel({ instructions: prompt, tools: defs, mcpUrl: input.mcpUrl, previousResponseId: res.responseId, input: outputs });
+    res = await model.callModel({ instructions: prompt, tools: defs, previousResponseId: res.responseId, input: outputs });
     count(res);
   }
   const gaveUp = res.calls.length > 0 || res.reply.trim().length === 0;
   return { reply: gaveUp ? FALLBACK_REPLY : res.reply, gaveUp, ...usage };
 }
 
-/** One tool call from the model: the allow-list is the gate; the two ledger tools write drafts and nothing else. */
+/** One tool call from the model: the allow-list is the gate (the catalog's names on the row, or a Composio tool the row lists); the two ledger tools write drafts and nothing else. */
 async function runTool(name: string, rawArgs: string, ctx: LoopInput): Promise<string> {
-  if (!ctx.allowed.includes(name) || !(name in ASSISTANT_TOOLS)) return 'This tool is not available for this business.';
+  const native = (ctx.composioTools ?? []).find((t) => t.slug === name);
+  if (!native && (!ctx.allowed.includes(name) || !(name in ASSISTANT_TOOLS))) return 'This tool is not available for this business.';
   const failed = 'The tool failed. Tell the person you could not complete that part.';
   let a: Record<string, unknown>;
   try { a = JSON.parse(rawArgs) as Record<string, unknown>; } catch { return failed; }
   try {
+    // Composio's own tool, as the tenant, the newest release pinned; the result as Composio shaped it, bounded.
+    if (native) return shapeToolResult(await tools.executeTool(ctx.tenantId, name, a, native.version), (d) => d);
     const tool = ASSISTANT_TOOLS[name as ToolName];
     if (isComposioTool(tool)) {
       return shapeToolResult(await tools.executeTool(ctx.tenantId, tool.slug, tool.args(a, new Date().toISOString())), tool.shape);

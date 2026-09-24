@@ -31,7 +31,7 @@ export const person: PersonRecord = { channelId: 'sms:+15550002222', tenantId: '
 export const photo = { messageSid: 'MM1', mediaSid: 'ME1' };
 export const draft = (revision: number, shown: number): DraftRow =>
   ({ tenantId: 'deck', sk: 'sms:+15550002222#facebook_post#t#1', status: 'pending', revision, shownRevision: shown, approveBy: 9e9, payload: { caption: 'Cedar deck, finished today.', media: [photo] } });
-export const answer = (reply: string, calls: ModelResult['calls'] = []): ModelResult => ({ responseId: 'r', calls, mcpCalls: [], reply, tokens: 3, inputTokens: 2, outputTokens: 1 });
+export const answer = (reply: string, calls: ModelResult['calls'] = []): ModelResult => ({ responseId: 'r', calls, reply, tokens: 3, inputTokens: 2, outputTokens: 1 });
 
 export function fakes(): Fakes {
   return {
@@ -45,7 +45,7 @@ export function fakes(): Fakes {
     claimLoginWindow: vi.fn(async () => true), clearLoginWindow: vi.fn(async () => undefined), saveBrowserContext: vi.fn(async () => undefined),
     createBrowserContext: vi.fn(async () => 'ctx-new'), startBrowserSession: vi.fn(async () => 'sess-1'), browserLiveView: vi.fn(async () => 'https://live/1'), releaseBrowserSession: vi.fn(async () => undefined),
     readCall: vi.fn(async () => ({ done: false, transcript: [] })), markDone: vi.fn(async () => true), rememberCall: vi.fn(async () => undefined),
-    composioAccounts: vi.fn(async () => []), mcpSession: vi.fn(async () => 'https://mcp.example/tool_router/tok/mcp'), composioProxy: vi.fn(async () => ({ successful: true, data: {} })), recallPreferences: vi.fn(async () => []), recordMeter: vi.fn(async () => undefined),
+    composioAccounts: vi.fn(async () => []), composioToolDefs: vi.fn(async (slugs: string[]) => slugs.map((slug) => ({ slug, description: `${slug} does a thing`, parameters: { type: 'object', properties: { query: { type: 'string' } } }, version: '20260915_00' }))), composioProxy: vi.fn(async () => ({ successful: true, data: {} })), recallPreferences: vi.fn(async () => []), recordMeter: vi.fn(async () => undefined),
     echo: vi.fn(async (n: string) => `pong: ${n}`),
   };
 }

@@ -24,7 +24,7 @@ describe('telegram turn', () => {
 
   it('a ledger tool asked for on Telegram is refused: no approver on this channel', async () => {
     const f = fakes();
-    f.callModel.mockResolvedValueOnce({ responseId: 'r', mcpCalls: [], calls: [{ call_id: 'c', name: 'draft_facebook_post', arguments: '{"caption":"x","photos":"none"}' }], reply: '', tokens: 1, inputTokens: 1, outputTokens: 0 }).mockResolvedValueOnce({ responseId: 'r2', mcpCalls: [], calls: [], reply: 'Ok.', tokens: 1, inputTokens: 1, outputTokens: 0 });
+    f.callModel.mockResolvedValueOnce({ responseId: 'r', calls: [{ call_id: 'c', name: 'draft_facebook_post', arguments: '{"caption":"x","photos":"none"}' }], reply: '', tokens: 1, inputTokens: 1, outputTokens: 0 }).mockResolvedValueOnce({ responseId: 'r2', calls: [], reply: 'Ok.', tokens: 1, inputTokens: 1, outputTokens: 0 });
     await run(f, update('post it'));
     expect(f.createDraft).not.toHaveBeenCalled();
     const outputs = f.callModel.mock.calls[1]?.[0].input as { output: string }[];
@@ -57,23 +57,29 @@ describe('telegram turn', () => {
   }, 60_000);
 });
 
-describe('MCP toolkits on the row', () => {
-  it('mints one session for this turn over the row\'s toolkits and tools, hands its URL to the model activity beside the function tools, and tells the model the time', async () => {
+describe('Composio tools on the row', () => {
+  it('shows the model Composio\'s own definitions beside the catalog\'s, runs a call as the tenant with the newest release pinned, and tells the model the time', async () => {
     const f = fakes();
-    const mcp = { googlecalendar: ['GOOGLECALENDAR_FIND_EVENT', 'GOOGLECALENDAR_CREATE_EVENT'] };
-    f.lookupTenant.mockResolvedValue({ ...tenant, business: { name: 'Deck Co', timezone: 'America/Chicago' }, assistant: { enabled: true, tools: ['search_contacts'], mcp } });
-    f.callModel.mockResolvedValue({ ...answer('Thursday is free.'), mcpCalls: [{ server: 'composio', name: 'GOOGLECALENDAR_FIND_EVENT', arguments: '{}' }] });
+    f.lookupTenant.mockResolvedValue({ ...tenant, business: { name: 'Deck Co', timezone: 'America/Chicago' }, assistant: { enabled: true, tools: ['search_contacts'], composioTools: { googlecalendar: ['GOOGLECALENDAR_FIND_EVENT'] } } });
+    f.callModel.mockResolvedValueOnce(answer('', [{ call_id: 'c1', name: 'GOOGLECALENDAR_FIND_EVENT', arguments: '{"query":"Thursday"}' }])).mockResolvedValueOnce(answer('Thursday is free.'));
+    f.executeTool.mockResolvedValueOnce({ successful: true, data: { event_data: { event_data: [] } } });
     expect(await runWorkflow(env, f, telegramTurn, [update('what do I have Thursday')])).toBe('replied');
-    expect(f.mcpSession).toHaveBeenCalledWith('deck', mcp, 'America/Chicago');
+    expect(f.composioToolDefs).toHaveBeenCalledWith(['GOOGLECALENDAR_FIND_EVENT']);
     const req = f.callModel.mock.calls[0]![0];
-    expect(req.mcpUrl).toBe('https://mcp.example/tool_router/tok/mcp');
-    expect((req.tools as { name: string }[]).map((t) => t.name)).toEqual(['search_contacts']);
+    expect((req.tools as { name: string }[]).map((t) => t.name)).toEqual(['search_contacts', 'GOOGLECALENDAR_FIND_EVENT']);
+    expect((req.tools as { description?: string }[])[1]!.description).toBe('GOOGLECALENDAR_FIND_EVENT does a thing');
     expect(req.instructions).toMatch(/The time now is \d{4}-\d{2}-\d{2}T.*America\/Chicago/);
+    expect(f.executeTool).toHaveBeenCalledWith('deck', 'GOOGLECALENDAR_FIND_EVENT', { query: 'Thursday' }, '20260915_00');
+    const outputs = f.callModel.mock.calls[1]![0].input as { output: string }[];
+    expect(JSON.parse(outputs[0]!.output)).toEqual({ event_data: { event_data: [] } });
   });
-  it('mints no session when the row lists no toolkit', async () => {
+  it('refuses a Composio tool the row does not list, and fetches no definitions when it lists none', async () => {
     const f = fakes();
-    await runWorkflow(env, f, telegramTurn, [update('hi')]);
-    expect(f.mcpSession).not.toHaveBeenCalled();
-    expect(f.callModel.mock.calls[0]![0].mcpUrl).toBeUndefined();
+    f.callModel.mockResolvedValueOnce(answer('', [{ call_id: 'c1', name: 'GOOGLECALENDAR_DELETE_EVENT', arguments: '{"event_id":"x"}' }])).mockResolvedValueOnce(answer('I cannot do that.'));
+    await runWorkflow(env, f, telegramTurn, [update('delete my 2pm')]);
+    expect(f.composioToolDefs).not.toHaveBeenCalled();
+    expect(f.executeTool).not.toHaveBeenCalled();
+    const outputs = f.callModel.mock.calls[1]![0].input as { output: string }[];
+    expect(outputs[0]!.output).toContain('not available');
   });
 });
