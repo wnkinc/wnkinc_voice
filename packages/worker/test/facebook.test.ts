@@ -85,9 +85,9 @@ describe('the draft', () => {
 });
 
 describe('the tenant\'s allow-list', () => {
-  const tools = ['search_contacts', 'draft_facebook_post', 'cancel_facebook_draft'] as const;
+  const tools = ['draft_facebook_post', 'cancel_facebook_draft'] as const;
   it('hides the Facebook tools from a tenant that lists them without the service on', () => {
-    expect(allowedTools(tools, false)).toEqual(['search_contacts']);
+    expect(allowedTools(tools, false)).toEqual([]);
     expect(allowedTools(tools, true)).toEqual(tools);
     expect(allowedTools(['draft_facebook_post'], false)).toEqual([]);
   });
@@ -95,6 +95,6 @@ describe('the tenant\'s allow-list', () => {
     const tenant = (enabled: boolean, t: AssistantToolName[]) => ({ tenantId: 't', phoneNumber: '+1', business: { name: 'x' }, assistant: { enabled: true, tools: t }, facebookPosts: { enabled, pageId: '1', pageName: 'P' } });
     expect(facebookOn(tenant(true, [...tools]))).toBe(true);
     expect(facebookOn(tenant(false, [...tools]))).toBe(false);
-    expect(facebookOn(tenant(true, ['search_contacts']))).toBe(false);
+    expect(facebookOn(tenant(true, []))).toBe(false);
   });
 });

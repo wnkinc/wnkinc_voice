@@ -23,7 +23,7 @@ export type Fakes = { [K in keyof Activities]: ReturnType<typeof vi.fn<Activitie
 
 export const tenant: TenantRow = {
   tenantId: 'deck', phoneNumber: '+15550001111', business: { name: 'Deck Co' },
-  assistant: { enabled: true, tools: ['search_contacts', 'draft_facebook_post', 'cancel_facebook_draft'] },
+  assistant: { enabled: true, tools: ['draft_facebook_post', 'cancel_facebook_draft'], composioTools: { hubspot: ['HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', 'HUBSPOT_CREATE_NOTE'] } },
   facebookPosts: { enabled: true, pageId: '42', pageName: 'Deck Co' },
   browser: { enabled: true },
 };

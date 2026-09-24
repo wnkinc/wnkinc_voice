@@ -54,9 +54,9 @@ if (cfg?.crm) {
   else ok('CRM', 'hubspot via composio (prove with scripts/test-crm-workflows.mts)');
 } else ok('CRM', 'not configured (crm: none)');
 if (cfg?.assistant.enabled) {
-  const crmTools = cfg.assistant.tools.filter((t) => t === 'search_contacts' || t === 'add_note');
-  if (crmTools.length && cfg.crm?.via !== 'composio') bad('Assistant tools', `${crmTools.join(', ')} need crm: { type: "hubspot", via: "composio" } and a HubSpot connection`);
-  else ok('Assistant tools', cfg.assistant.tools.length ? cfg.assistant.tools.join(', ') : 'none: answers from the prompt and memory only');
+  const toolkits = Object.keys(cfg.assistant.composioTools);
+  if (toolkits.includes('hubspot') && cfg.crm?.via !== 'composio') bad('Assistant tools', 'the HubSpot tools need crm: { type: "hubspot", via: "composio" } and a HubSpot connection');
+  else { const all = [...cfg.assistant.tools, ...toolkits.map((t) => `${t}: ${cfg.assistant.composioTools[t]!.join(', ')}`)]; ok('Assistant tools', all.length ? all.join('; ') : 'none: answers from the prompt and memory only'); }
 }
 
 // 4. Services this tenant has turned on

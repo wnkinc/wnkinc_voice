@@ -121,14 +121,14 @@ stop. The steps between its decisions are the seam the platform controls: the to
 tenant row's `assistant.tools` list, every Composio call names the tenant, tool results are
 bounded, rounds are capped at six, and each call is an activity in the workflow history. Rounds
 inside one turn chain with OpenAI's `previous_response_id`, so a later round sends only the tool
-results. Tools are a catalog (`packages/worker/src/rules/assistant.ts`): what the model sees is a
-slim schema (`search_contacts(query)`), what runs is a Composio slug with defaults. Adding a tool is
-one catalog entry and a name on the rows that get it. A toolkit the assistant reaches as Composio's own
-tools is data alone: the row lists it and its tool slugs under `assistant.composioTools`, the worker
-reads Composio's description and schema for each and shows them to the model as function tools, and
-each call runs as the same activity, as the tenant, the newest release pinned, every call in the
-workflow history. The catalog is the narrowing, for when an argument must be filled or forbidden or a
-result shaped smaller; Composio's own tool is the first try.
+results. A SaaS the assistant reaches is Composio's own tool: the row lists the toolkit and its tool
+slugs under `assistant.composioTools`, the worker reads Composio's description and schema for each and
+shows them to the model as function tools, and each call runs as the same activity, as the tenant, the
+newest release pinned, every call in the workflow history. Guidance a schema does not give (a phone
+format, a note's sign-off) is a sentence per toolkit in the prompt. The platform's own tools
+(`packages/worker/src/rules/assistant.ts`, named on the row's `assistant.tools`) exist only for a rule
+the model cannot be trusted to keep: today the Facebook draft and cancel, whose point is that the
+model never publishes.
 
 Memory is the platform Memory instance: at the start of a turn the loop reads this session's earlier
 turns and retrieves what the service has extracted about the person (facts, preferences, summaries);
@@ -227,7 +227,7 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `receptionist.maxCallSeconds` (default 600, max 840) | Ours, not OpenAI's: the agent is asked to wrap up, then the call is hung up |
 | `crm` | `{ "type": "hubspot", "via": "composio" }` enables caller recognition, CRM sync, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
 | `emailResponder` | `{ enabled }`: owner follow-up email per lead, from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default off; the workflow refuses a tenant whose flag is off. |
-| `assistant` | `{ enabled, tools }`: the chat assistant for the tenant's people. `tools` is the allow-list, by name from the catalog in `packages/worker/src/rules/assistant.ts` (`search_contacts`, `add_note`; both need the HubSpot consent). Empty means it answers from the prompt and memory alone. |
+| `assistant` | `{ enabled, composioTools, tools }`: the chat assistant for the tenant's people. `composioTools` lists the Composio toolkits it reaches and their tool slugs (`hubspot` needs the HubSpot consent, `googlecalendar` its own); `tools` names the platform's own rule-carrying tools (the Facebook draft and cancel). Both empty means it answers from the prompt and memory alone. |
 | `browser` | `{ enabled, contextId }`: the tenant's saved browser in Browserbase (cookies, logins). The browser-login workflow creates the context on the owner's first `/login` and writes it to the row; copy it into the file when the reply says so, or a re-seed starts a fresh browser. |
 
 ### The automations menu

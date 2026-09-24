@@ -1,7 +1,7 @@
 /**
  * Assistant health canary: on a schedule, prove each tenant's assistant can
  * still complete a turn, before one of its people finds out it cannot. It
- * runs the same loop the channels run, with search_contacts as its one tool,
+ * runs the same loop the channels run, with the tenant's own Composio tools,
  * and reads without writing: it asks after a phone number no contact has.
  * What it asserts is thin on purpose: the loop produced text. Asserting on
  * what the model said would make the canary flaky, and a flaky canary only
@@ -29,7 +29,9 @@ export async function assistantHealth(): Promise<{ probed: string[] }> {
     // Its own actor, and a session per day, so the canary's turns never land in a real person's memory.
     const actorId = `${tenant.tenantId}_canary`;
     const sessionId = `canary-${tenant.tenantId}-${day}`;
-    const turn = await runAssistantLoop({ tenantId: tenant.tenantId, allowed: ['search_contacts'], text: PROBE_TEXT, content: PROBE_TEXT, actorId, sessionId, prompt: PROBE_PROMPT });
+    const slugs = Object.values(tenant.assistant?.composioTools ?? {}).flat();
+    const composioTools = slugs.length > 0 ? await reads.composioToolDefs(slugs) : [];
+    const turn = await runAssistantLoop({ tenantId: tenant.tenantId, allowed: [], composioTools, text: PROBE_TEXT, content: PROBE_TEXT, actorId, sessionId, prompt: PROBE_PROMPT });
     if (turn.gaveUp) silent.push(tenant.tenantId);
     else await orElse(memory.saveTurn(actorId, sessionId, PROBE_TEXT, turn.reply), undefined);
   }

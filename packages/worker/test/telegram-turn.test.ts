@@ -18,7 +18,7 @@ describe('telegram turn', () => {
     expect(f.sendTelegram).toHaveBeenCalledWith(777, 'Sure.');
     expect(f.saveTurn).toHaveBeenCalledWith('deck_telegram_777', expect.stringMatching(/^telegram-chat-777-\d{8}$/), 'who is Sarah?', 'Sure.');
     expect(f.recordUsage).toHaveBeenCalledWith('deck', 'telegram:777', 3, 2, 1);
-    expect((f.callModel.mock.calls[0]?.[0].tools as { name: string }[]).map((t) => t.name)).toEqual(['search_contacts', 'draft_facebook_post', 'cancel_facebook_draft']);
+    expect((f.callModel.mock.calls[0]?.[0].tools as { name: string }[]).map((t) => t.name)).toEqual(['draft_facebook_post', 'cancel_facebook_draft', 'HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', 'HUBSPOT_CREATE_NOTE']);
     expect(f.callModel.mock.calls[0]?.[0].instructions).toContain('This is a chat');
   }, 60_000);
 
@@ -60,14 +60,14 @@ describe('telegram turn', () => {
 describe('Composio tools on the row', () => {
   it('shows the model Composio\'s own definitions beside the catalog\'s, runs a call as the tenant with the newest release pinned, and tells the model the time', async () => {
     const f = fakes();
-    f.lookupTenant.mockResolvedValue({ ...tenant, business: { name: 'Deck Co', timezone: 'America/Chicago' }, assistant: { enabled: true, tools: ['search_contacts'], composioTools: { googlecalendar: ['GOOGLECALENDAR_FIND_EVENT'] } } });
+    f.lookupTenant.mockResolvedValue({ ...tenant, business: { name: 'Deck Co', timezone: 'America/Chicago' }, assistant: { enabled: true, tools: [], composioTools: { googlecalendar: ['GOOGLECALENDAR_FIND_EVENT'] } } });
     f.callModel.mockResolvedValueOnce(answer('', [{ call_id: 'c1', name: 'GOOGLECALENDAR_FIND_EVENT', arguments: '{"query":"Thursday"}' }])).mockResolvedValueOnce(answer('Thursday is free.'));
     f.executeTool.mockResolvedValueOnce({ successful: true, data: { event_data: { event_data: [] } } });
     expect(await runWorkflow(env, f, telegramTurn, [update('what do I have Thursday')])).toBe('replied');
     expect(f.composioToolDefs).toHaveBeenCalledWith(['GOOGLECALENDAR_FIND_EVENT']);
     const req = f.callModel.mock.calls[0]![0];
-    expect((req.tools as { name: string }[]).map((t) => t.name)).toEqual(['search_contacts', 'GOOGLECALENDAR_FIND_EVENT']);
-    expect((req.tools as { description?: string }[])[1]!.description).toBe('GOOGLECALENDAR_FIND_EVENT does a thing');
+    expect((req.tools as { name: string }[]).map((t) => t.name)).toEqual(['GOOGLECALENDAR_FIND_EVENT']);
+    expect((req.tools as { description?: string }[])[0]!.description).toBe('GOOGLECALENDAR_FIND_EVENT does a thing');
     expect(req.instructions).toMatch(/The time now is \d{4}-\d{2}-\d{2}T.*America\/Chicago/);
     expect(f.executeTool).toHaveBeenCalledWith('deck', 'GOOGLECALENDAR_FIND_EVENT', { query: 'Thursday' }, '20260915_00');
     const outputs = f.callModel.mock.calls[1]![0].input as { output: string }[];
@@ -75,6 +75,7 @@ describe('Composio tools on the row', () => {
   });
   it('refuses a Composio tool the row does not list, and fetches no definitions when it lists none', async () => {
     const f = fakes();
+    f.lookupTenant.mockResolvedValue({ ...tenant, assistant: { enabled: true, tools: [] } });
     f.callModel.mockResolvedValueOnce(answer('', [{ call_id: 'c1', name: 'GOOGLECALENDAR_DELETE_EVENT', arguments: '{"event_id":"x"}' }])).mockResolvedValueOnce(answer('I cannot do that.'));
     await runWorkflow(env, f, telegramTurn, [update('delete my 2pm')]);
     expect(f.composioToolDefs).not.toHaveBeenCalled();
