@@ -45,6 +45,15 @@
       "Resource": "*"
     },
     {
+      "Sid": "MediaBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::wnk-dev-platform-media*/*"
+    },
+    {
       "Sid": "Bus",
       "Effect": "Allow",
       "Action": [
