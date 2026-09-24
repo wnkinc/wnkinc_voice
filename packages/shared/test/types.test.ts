@@ -8,7 +8,7 @@ describe('TenantConfigSchema service blocks', () => {
   it('defaults every service to off (fail closed)', () => {
     const t = TenantConfigSchema.parse(minimal);
     expect(t.emailResponder).toEqual({ enabled: false });
-    expect(t.assistant).toEqual({ enabled: false, tools: [], mcp: {} });
+    expect(t.assistant).toEqual({ enabled: false, tools: [], composioTools: {} });
     expect(t.browser).toEqual({ enabled: false });
   });
 

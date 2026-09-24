@@ -28,6 +28,19 @@ describe('composio api', () => {
     expect(JSON.parse(calls[1]!.init.body as string)).toEqual({ endpoint: '/crm/v3/objects/contacts/search', method: 'POST', connected_account_id: 'acc-1', body: { limit: 1 } });
     expect(calls[1]!.init.signal).toBe(signal);
   });
+  it('reads each listed tool\'s definition, pinning the newest dated release and never the sentinel; a slug Composio lacks fails', async () => {
+    vi.stubGlobal('fetch', respond({ items: [
+      { slug: 'B', description: 'b', input_parameters: { type: 'object', properties: { x: { type: 'string' } } }, available_versions: ['00000000_00', '20260101_00', '20260915_00'] },
+      { slug: 'A', description: 'a', input_parameters: { type: 'object', properties: {} }, available_versions: ['00000000_00'] },
+    ] }));
+    expect(await api.toolSchemas(['A', 'B'])).toEqual([
+      { slug: 'A', description: 'a', parameters: { type: 'object', properties: {} } },
+      { slug: 'B', description: 'b', parameters: { type: 'object', properties: { x: { type: 'string' } } }, version: '20260915_00' },
+    ]);
+    expect(calls[0]?.url).toBe(`${COMPOSIO_API}tools?tool_slugs=A%2CB`);
+    vi.stubGlobal('fetch', respond({ items: [] }));
+    await expect(api.toolSchemas(['NOPE'])).rejects.toThrow('no tool NOPE');
+  });
   it('refuses a call that names no tenant, and reports a failed response with its status', async () => {
     await expect(api.executeTool('', 'X', {})).rejects.toThrow('no tenant');
     vi.stubGlobal('fetch', respond({ error: 'nope' }, false));

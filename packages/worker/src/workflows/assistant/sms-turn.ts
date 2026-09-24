@@ -81,10 +81,10 @@ export async function smsTurn({ sms }: SmsTurnInput): Promise<SmsTurnOutcome> {
   const digits = sms.From.replace(/[^0-9]/g, '');
   const actorId = `${tenantId}_sms_${digits}`;
   const sessionId = `sms-chat-${digits}-${sessionDay(tenant.sessionDayOffsetMinutes)}`;
-  const mcpTools = tenant.assistant?.mcp ?? {};
-  const mcpUrl = Object.keys(mcpTools).length > 0 ? await reads.mcpSession(tenantId, mcpTools, tenant.business.timezone) : undefined;
+  const slugs = Object.values(tenant.assistant?.composioTools ?? {}).flat();
+  const composioTools = slugs.length > 0 ? await reads.composioToolDefs(slugs) : [];
   const turn = await runAssistantLoop({
-    tenantId, allowed, text, actorId, sessionId, approver, photos, mcpUrl,
+    tenantId, allowed, text, actorId, sessionId, approver, photos, composioTools,
     prompt: systemPrompt(tenant, person, 'sms', fbOn ? facebookPrompt(draft, photos, mediaIsRecent) : '', new Date().toISOString()),
     content: modelContent(text, imageLinks),
   });

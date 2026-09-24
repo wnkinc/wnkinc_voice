@@ -53,10 +53,10 @@ export async function telegramTurn(update: TelegramUpdate): Promise<TelegramTurn
   const tenantId = tenant.tenantId;
   const actorId = `${tenantId}_telegram_${m.from.id}`;
   const sessionId = `telegram-chat-${chatId}-${sessionDay(tenant.sessionDayOffsetMinutes)}`;
-  const mcpTools = tenant.assistant?.mcp ?? {};
-  const mcpUrl = Object.keys(mcpTools).length > 0 ? await reads.mcpSession(tenantId, mcpTools, tenant.business.timezone) : undefined;
+  const slugs = Object.values(tenant.assistant?.composioTools ?? {}).flat();
+  const composioTools = slugs.length > 0 ? await reads.composioToolDefs(slugs) : [];
   const turn = await runAssistantLoop({
-    tenantId, allowed: tenant.assistant?.tools ?? [], text: m.text, content: m.text, actorId, sessionId, mcpUrl,
+    tenantId, allowed: tenant.assistant?.tools ?? [], text: m.text, content: m.text, actorId, sessionId, composioTools,
     prompt: systemPrompt(tenant, person, 'chat', '', new Date().toISOString()),
   });
   await replies.sendTelegram(chatId, turn.reply);

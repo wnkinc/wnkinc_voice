@@ -168,13 +168,15 @@ export const TenantConfigSchema = z.object({
      */
     tools: z.array(z.enum(ASSISTANT_TOOL_NAMES)).default([]),
     /**
-     * The Composio toolkits this tenant's assistant reaches over MCP, each with
+     * The Composio toolkits this tenant's assistant reaches natively, each with
      * the tool slugs it may use: `{ googlecalendar: ['GOOGLECALENDAR_FIND_EVENT', ...] }`.
-     * The worker mints a Tool Router session per turn for this tenant with
-     * exactly these, and OpenAI calls the tools itself; the connection canary
-     * expects each toolkit ACTIVE. The consent is the same connect script.
+     * The model sees Composio's own descriptions and schemas for exactly these;
+     * each call the model makes runs as the worker's own activity, as the tenant.
+     * The connection canary expects each toolkit ACTIVE; the consent is the same
+     * connect script. The catalog (`tools` above) is for a tool that needs our
+     * own shaping.
      */
-    mcp: z.record(z.string().min(1), z.array(z.string().min(1)).min(1)).default({}),
+    composioTools: z.record(z.string().min(1), z.array(z.string().min(1)).min(1)).default({}),
   }).prefault({}),
 
   /**

@@ -27,8 +27,8 @@ describe('expected toolkits', () => {
     expect(expectedToolkits(row(false, false, true))).toEqual(['facebook']);
     expect(expectedToolkits({ tenantId: 't', phoneNumber: '+1', business: { name: 'x' }, emailResponder: { enabled: true } })).toEqual(['gmail']);
   });
-  it('expects each MCP toolkit the row lists, once', () => {
-    expect(expectedToolkits({ tenantId: 't', phoneNumber: '+1', business: { name: 'x' }, emailResponder: { enabled: true }, assistant: { mcp: { googlecalendar: ['GOOGLECALENDAR_FIND_EVENT'], gmail: ['GMAIL_SEND_EMAIL'] } } })).toEqual(['gmail', 'googlecalendar']);
+  it('expects each Composio toolkit the row lists natively, once', () => {
+    expect(expectedToolkits({ tenantId: 't', phoneNumber: '+1', business: { name: 'x' }, emailResponder: { enabled: true }, assistant: { composioTools: { googlecalendar: ['GOOGLECALENDAR_FIND_EVENT'], gmail: ['GMAIL_SEND_EMAIL'] } } })).toEqual(['gmail', 'googlecalendar']);
   });
   it('reports the expected toolkits Composio does not list as active', () => {
     expect(missingToolkits(['hubspot', 'gmail'], ['gmail'])).toEqual(['hubspot']);

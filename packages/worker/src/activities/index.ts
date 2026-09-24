@@ -9,7 +9,7 @@ export { cancelDraft, createDraft, findPending, lockDraft, markCompleted, markFa
 export { sendText } from './twilio.js';
 export { mintLinks } from './media.js';
 export { callModel } from './model.js';
-export { composioAccounts, composioProxy, executeTool, mcpSession } from './composio.js';
+export { composioAccounts, composioProxy, composioToolDefs, executeTool } from './composio.js';
 export { loadHistory, recall, recallPreferences, rememberCall, saveTurn } from './memory.js';
 export { recordMeter, recordUsage } from './usage.js';
 export { markDone, readCall } from './calls.js';
