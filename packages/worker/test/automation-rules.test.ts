@@ -27,6 +27,10 @@ describe('expected toolkits', () => {
     expect(expectedToolkits(row(false, false, true))).toEqual(['facebook']);
     expect(expectedToolkits({ tenantId: 't', phoneNumber: '+1', business: { name: 'x' }, emailResponder: { enabled: true } })).toEqual(['gmail']);
   });
+  it('expects googlecalendar for a tenant whose receptionist books', () => {
+    expect(expectedToolkits({ tenantId: 't', phoneNumber: '+1', business: { name: 'x' }, calendar: { enabled: true } })).toEqual(['googlecalendar']);
+    expect(expectedToolkits({ tenantId: 't', phoneNumber: '+1', business: { name: 'x' }, calendar: { enabled: false } })).toEqual([]);
+  });
   it('expects each Composio toolkit the row lists natively, once', () => {
     expect(expectedToolkits({ tenantId: 't', phoneNumber: '+1', business: { name: 'x' }, emailResponder: { enabled: true }, assistant: { composioTools: { googlecalendar: ['GOOGLECALENDAR_FIND_EVENT'], gmail: ['GMAIL_SEND_EMAIL'] } } })).toEqual(['gmail', 'googlecalendar']);
   });

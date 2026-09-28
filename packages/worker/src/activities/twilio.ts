@@ -10,11 +10,10 @@ export async function twilioCredentials(): Promise<{ accountSid: string; authTok
   return { accountSid: s.TWILIO_ACCOUNT_SID, authToken: s.TWILIO_AUTH_TOKEN };
 }
 
-/** A text to the person: From is the tenant's number, To the person's. A body over Twilio's 1600 characters is rejected and fails the activity. */
-
-export async function sendText(accountSid: string, from: string, to: string, body: string): Promise<void> {
+/** A text to the person: From is the tenant's number, To the person's. `accountSid` is the inbound text's when replying to one; absent, our own. A body over Twilio's 1600 characters is rejected and fails the activity. */
+export async function sendText(accountSid: string | undefined, from: string, to: string, body: string): Promise<void> {
   const c = await twilioCredentials();
-  const res = await fetch(`${TWILIO_API}Accounts/${accountSid}/Messages.json`, {
+  const res = await fetch(`${TWILIO_API}Accounts/${accountSid ?? c.accountSid}/Messages.json`, {
     method: 'POST',
     headers: { authorization: `Basic ${Buffer.from(`${c.accountSid}:${c.authToken}`).toString('base64')}`, 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ To: to, From: from, Body: body }),

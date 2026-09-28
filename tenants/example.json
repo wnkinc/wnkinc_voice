@@ -36,6 +36,7 @@
   },
 
   "emailResponder": { "enabled": true },
+  "calendar": { "enabled": false, "calendarId": "primary", "slotMinutes": 30, "horizonDays": 30, "open": { "start": "09:00", "end": "17:00", "days": [1, 2, 3, 4, 5] } },
   "assistant": { "enabled": false, "tools": [], "composioTools": { "hubspot": ["HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA", "HUBSPOT_CREATE_NOTE"] } },
   "facebookPosts": { "enabled": false },
   "browser": { "enabled": false }

@@ -5,9 +5,15 @@ import { z } from 'zod';
 import type { Logger } from '@wnk/shared';
 import type { EventPublisher } from '@wnk/shared';
 import { normalizePhone } from '@wnk/shared';
+import { dayLabel, dayWindow, openSlots, slotAt, type Busy } from '@wnk/shared';
 import { buildInstructions } from './prompt.js';
 import type { Store } from '@wnk/shared';
-import type { CallExtras, CallParty, Lead, TenantConfig } from '@wnk/shared';
+import type { Appointment, CallExtras, CallParty, Lead, TenantConfig } from '@wnk/shared';
+
+/** The one calendar read a call may make: busy intervals, nothing else, for the tenant the call resolved. Given a deadline by whoever builds it. */
+export interface CalendarReads {
+  busy(tenantId: string, calendarId: string, timeMin: string, timeMax: string): Promise<Busy[]>;
+}
 
 /** Everything a tool may touch during a call. Passed as the RealtimeSession context. */
 export interface CallContext {
@@ -17,8 +23,11 @@ export interface CallContext {
   store: Store;
   events: EventPublisher;
   log: Logger;
+  /** Absent when the session has no calendar access; the booking tools then answer that booking is unavailable. */
+  calendar?: CalendarReads;
   /** Ask the session to hang up once the current response finishes. */
   requestHangup(): void;
+  now?: () => Date;
 }
 
 type Ctx = RealtimeContextData<CallContext>;
@@ -41,6 +50,19 @@ export const NotifyOwnerArgs = z.object({
 export const EndCallArgs = z.object({
   reason: z.enum(['completed', 'caller_requested', 'spam', 'abusive', 'no_response']).default('completed'),
 });
+export const CheckAvailabilityArgs = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("The day the caller asked about, as YYYY-MM-DD in the business's timezone"),
+});
+export const BookAppointmentArgs = z.object({
+  start: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).describe('The chosen slot\'s `start`, exactly as check_availability listed it'),
+  caller_name: z.string().min(1).describe("The caller's name as they gave it"),
+  phone: z.string().optional().describe('Callback number in digits, confirmed with the caller. Omit to use the number they are calling from.'),
+  email: z.string().email().optional().describe('Only if the caller asked for an email confirmation and spelled the address out'),
+  reason: z.string().min(1).describe('One sentence on what the appointment is for'),
+});
+
+/** What the booking tools answer when the calendar cannot be used: the model falls back to taking details. */
+const NO_BOOKING = { ok: false as const, reason: "Booking is not available right now. Take the caller's name, number, and preferred time so the owner can confirm." };
 
 // The tools run in-process: each is one publish, and the tenant comes from the
 // call context the webhook built from the signed called number — the model
@@ -84,6 +106,42 @@ export const handlers = {
     ctx.requestHangup();
     return { ok: true };
   },
+  // The calendar reaches the call as busy intervals only, and the model sees
+  // the open slots computed from them: nothing another customer's event holds
+  // can be read out. The booking itself is a publish; the workflow re-checks
+  // the slot, writes the event, and texts the caller.
+  async check_availability(args: z.infer<typeof CheckAvailabilityArgs>, ctx: CallContext) {
+    const cal = ctx.tenant.calendar;
+    if (!cal.enabled || !ctx.calendar) return NO_BOOKING;
+    const tz = ctx.tenant.business.timezone;
+    let busy: Busy[];
+    try {
+      const { timeMin, timeMax } = dayWindow(args.date, tz);
+      busy = await ctx.calendar.busy(ctx.tenant.tenantId, cal.calendarId, timeMin, timeMax);
+    } catch (err) {
+      ctx.log.error('free/busy failed', { err, date: args.date });
+      return NO_BOOKING;
+    }
+    const slots = openSlots(args.date, busy, cal, tz, ctx.now?.() ?? new Date());
+    ctx.log.info('availability checked', { date: args.date, open: slots.length });
+    return { ok: true, day: dayLabel(args.date), slots: slots.map((s) => ({ start: s.local, time: s.label })) };
+  },
+  async book_appointment(args: z.infer<typeof BookAppointmentArgs>, ctx: CallContext) {
+    const cal = ctx.tenant.calendar;
+    if (!cal.enabled || !ctx.calendar) return NO_BOOKING;
+    const tz = ctx.tenant.business.timezone;
+    const slot = slotAt(args.start, cal, tz, ctx.now?.() ?? new Date());
+    if (!slot) return { ok: false as const, reason: 'That time is not one that can be booked. Offer a time from check_availability.' };
+    const phone = normalizePhone(args.phone) ?? ctx.party.from;
+    const appointment: Appointment = {
+      tenantId: ctx.tenant.tenantId, appointmentId: randomUUID(), callId: ctx.callId, createdAt: new Date().toISOString(),
+      callerName: args.caller_name, phone, email: args.email, reason: args.reason,
+      startsAt: slot.startsAt, endsAt: slot.endsAt, local: slot.local, timezone: tz, durationMinutes: cal.slotMinutes,
+    };
+    await ctx.events.publish({ type: 'appointment.requested', tenantId: ctx.tenant.tenantId, tenantPhoneNumber: ctx.tenant.phoneNumber, callId: ctx.callId, appointment });
+    ctx.log.info('appointment requested', { appointmentId: appointment.appointmentId, local: slot.local });
+    return { ok: true, appointment_id: appointment.appointmentId, when: `${dayLabel(slot.local.slice(0, 10))} at ${slot.label}`, confirmation: phone ? 'a text will confirm it' : 'none' };
+  },
 };
 
 function ctxOf(rc?: RunContext<Ctx>): CallContext {
@@ -109,6 +167,18 @@ export const TOOLS = {
     description: 'Hang up the phone call. Only call this after you have said goodbye.',
     parameters: EndCallArgs,
     execute: async (args, rc) => JSON.stringify(await handlers.end_call(args, ctxOf(rc))),
+  }),
+  check_availability: tool<typeof CheckAvailabilityArgs, Ctx>({
+    name: 'check_availability',
+    description: 'The open appointment times on one day. Call it for the day the caller asks about before offering any time; offer only times it returns.',
+    parameters: CheckAvailabilityArgs,
+    execute: async (args, rc) => JSON.stringify(await handlers.check_availability(args, ctxOf(rc))),
+  }),
+  book_appointment: tool<typeof BookAppointmentArgs, Ctx>({
+    name: 'book_appointment',
+    description: "Book the caller into a slot check_availability listed, once they have chosen it and confirmed their name and number. The business texts them a confirmation.",
+    parameters: BookAppointmentArgs,
+    execute: async (args, rc) => JSON.stringify(await handlers.book_appointment(args, ctxOf(rc))),
   }),
 };
 export type ToolName = keyof typeof TOOLS;

@@ -29,6 +29,7 @@ describe('tenant stack', () => {
       workflow: JSON.parse(r.Properties.Targets[0].InputTransformer.InputTemplate.replace(/<detail>|<id>/g, '{}')).workflow,
     })).sort((a, b) => a.workflow.localeCompare(b.workflow));
     expect(table).toEqual([
+      { on: ['appointment.requested'], tenant: ['wnk'], workflow: 'bookAppointment' },
       { on: ['call.ended'], tenant: ['wnk'], workflow: 'crmCall' },
       { on: ['lead.recorded'], tenant: ['wnk'], workflow: 'crmLead' },
       { on: ['lead.recorded'], tenant: ['wnk'], workflow: 'leadEmail' },

@@ -45,10 +45,11 @@ describe('receptionist stack', () => {
     expect(a.some((x) => x.startsWith('events:'))).toBe(false);
     expect(fnByName('p-accept').Properties.DeadLetterConfig).toBeDefined();
   });
-  it('the session reads the tenant, writes the call, and publishes to the bus; it reaches no queue and no memory', () => {
+  it('the session reads the tenant, writes the call, publishes to the bus, and reads free/busy through Composio; it reaches no queue and no memory', () => {
     const a = actionsOf('p-session');
-    for (const need of ['dynamodb:GetItem', 'dynamodb:PutItem', 'events:PutEvents']) expect(a).toContain(need);
+    for (const need of ['dynamodb:GetItem', 'dynamodb:PutItem', 'events:PutEvents', 'secretsmanager:GetSecretValue']) expect(a).toContain(need);
     expect(a.some((x) => x.startsWith('bedrock-agentcore:') || x === 'sqs:SendMessage')).toBe(false);
+    expect(fnByName('p-session').Properties.Environment.Variables.COMPOSIO_SECRET_ARN).toBeDefined();
     template.hasResourceProperties('AWS::Lambda::EventSourceMapping', { BatchSize: 1, FunctionResponseTypes: ['ReportBatchItemFailures'] });
     template.hasResourceProperties('AWS::SQS::Queue', { VisibilityTimeout: 960 });
   });

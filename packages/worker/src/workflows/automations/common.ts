@@ -1,7 +1,8 @@
 /** What the tenant automations share: the outcome type, and the HubSpot bits two of them repeat. */
 import { ApplicationFailure } from '@temporalio/workflow';
 
-export type AutomationOutcome = 'skipped' | 'done';
+/** `conflict`: the booking found its slot taken and told the people instead. */
+export type AutomationOutcome = 'skipped' | 'done' | 'conflict';
 
 /** A HubSpot contact search by either phone property. */
 export const phoneFilters = (phone: string) => [

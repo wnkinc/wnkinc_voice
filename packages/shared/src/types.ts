@@ -156,6 +156,27 @@ export const TenantConfigSchema = z.object({
   /** Owner follow-up email per lead, sent from the owner's Gmail through Composio. */
   emailResponder: z.object({ enabled: z.boolean().default(false) }).prefault({}),
 
+  /**
+   * Appointments on the owner's Google Calendar, booked by the receptionist:
+   * the calendar the platform reads free/busy from and writes to, the slot
+   * length it offers, and the hours it may offer them in (`HH:MM` on the
+   * business's wall clock, `days` with Sunday 0). Needs the Google Calendar
+   * consent (`scripts/connect-composio.mts <id> googlecalendar`) and the
+   * `check_availability` and `book_appointment` receptionist tools.
+   */
+  calendar: z.object({
+    enabled: z.boolean().default(false),
+    calendarId: z.string().min(1).default('primary'),
+    slotMinutes: z.number().int().positive().max(240).default(30),
+    /** How far ahead a caller may book. */
+    horizonDays: z.number().int().positive().max(90).default(30),
+    open: z.object({
+      start: z.string().regex(/^\d{2}:\d{2}$/).default('09:00'),
+      end: z.string().regex(/^\d{2}:\d{2}$/).default('17:00'),
+      days: z.array(z.number().int().min(0).max(6)).default([1, 2, 3, 4, 5]),
+    }).prefault({}),
+  }).prefault({}),
+
   /** Chat assistant for the tenant's own people, over Telegram and SMS. */
   assistant: z.object({
     enabled: z.boolean().default(false),

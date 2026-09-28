@@ -15,6 +15,7 @@ export { leadEmail } from './automations/lead-email.js';
 export { crmLead } from './automations/crm-lead.js';
 export { crmCall } from './automations/crm-call.js';
 export { ownerAlert } from './automations/owner-alert.js';
+export { bookAppointment } from './automations/book-appointment.js';
 // The platform's own: every tenant identically, by the worker stack's rule or a schedule.
 export { callEnded } from './platform/call-ended.js';
 export { assistantHealth } from './platform/assistant-health.js';

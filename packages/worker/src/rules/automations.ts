@@ -70,7 +70,7 @@ export function leadEmailBody(tenant: TenantRow, event: LeadRecorded, contact: C
 /** Toolkit slugs a tenant row must have ACTIVE in Composio, read from its own flags. A new toolkit is one more line. */
 export function expectedToolkits(t: TenantRow): string[] {
   const fromServers = Object.keys(t.assistant?.composioTools ?? {});
-  return [...new Set([...(hasCrm(t) ? ['hubspot'] : []), ...(t.emailResponder?.enabled === true ? ['gmail'] : []), ...(t.facebookPosts?.enabled === true ? ['facebook'] : []), ...fromServers])];
+  return [...new Set([...(hasCrm(t) ? ['hubspot'] : []), ...(t.emailResponder?.enabled === true ? ['gmail'] : []), ...(t.facebookPosts?.enabled === true ? ['facebook'] : []), ...(t.calendar?.enabled === true ? ['googlecalendar'] : []), ...fromServers])];
 }
 /** Of `expected`, those Composio does not report ACTIVE. */
 export const missingToolkits = (expected: string[], active: string[]) => expected.filter((t) => !active.includes(t));
