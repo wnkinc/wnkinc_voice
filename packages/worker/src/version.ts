@@ -10,7 +10,7 @@
  * stage's: the worker stack sets them from its prefix
  * (packages/infrastructure/names.ts), and a missing one fails closed.
  */
-export const BUILD_ID = 'build-23';
+export const BUILD_ID = 'build-24';
 
 const fromStack = (name: string): string => {
   const v = process.env[name];

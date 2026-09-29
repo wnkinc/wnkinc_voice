@@ -76,8 +76,12 @@ export const CHANNEL = {
   chat: { verb: 'chatting', line: 'This is a chat: be brief and plain, no markdown. If a request needs a tool you do not have, say so in one sentence. When they tell you something about the business or how they like things done, acknowledge it briefly; it is remembered. Keep replies under 3000 characters.' },
 } as const;
 
-/** The system prompt for a conversation with one of the tenant's people; `extra` is what a channel appends; `now` is the workflow's clock, so dates the model states or uses are in the business's timezone. */
-export function systemPrompt(tenant: TenantRow, person: PersonRecord, channel: keyof typeof CHANNEL, extra = '', now?: string): string {
+/**
+ * The system prompt for a conversation with one of the tenant's people; `extra` is what a channel appends.
+ * The same text turn after turn, so OpenAI's prompt cache can reuse it: what changes each turn (the
+ * time, timeNote) is an item of the turn's input, and what changes often (`extra`, memories) comes last.
+ */
+export function systemPrompt(tenant: TenantRow, person: PersonRecord, channel: keyof typeof CHANNEL, extra = ''): string {
   const b = tenant.business;
   const tz = b.timezone ?? 'America/Los_Angeles';
   return [
@@ -90,10 +94,13 @@ export function systemPrompt(tenant: TenantRow, person: PersonRecord, channel: k
       : 'You have no tools connected for this business. ',
     ...Object.keys(tenant.assistant?.composioTools ?? {}).map((k) => (TOOLKIT_HINTS[k] ? `${TOOLKIT_HINTS[k]} ` : '')),
     CHANNEL[channel].line,
-    now ? ` The time now is ${now}; the business is in the ${tz} timezone, and every date or time you state or use is in it.` : '',
+    ` The business is in the ${tz} timezone, and every date or time you state or use is in it.`,
     extra,
   ].join('');
 }
+
+/** The workflow's clock for the model, as an item ahead of the person's message. */
+export const timeNote = (now: string) => ({ role: 'developer', content: `The time now is ${now}.` });
 
 /** The system prompt with what memory recalled appended. */
 export function instructions(prompt: string, memories: string[]): string {
