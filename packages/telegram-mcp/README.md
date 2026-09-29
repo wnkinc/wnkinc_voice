@@ -39,7 +39,7 @@ a 429; a cold start of about 6s on the first call after idle.
 
 ## Onboard a tenant
 
-1. `tenants/<id>.ts` with `telegramMcp: true` (see `tenants/meg.ts`), listed in `tenants/index.ts`.
+1. In the deployment's directory (`deployments/wnk-platform/`): `tenants/<id>.ts` with `telegramMcp: true` (see `tenants/meg.ts`), listed in `tenants/index.ts`.
 2. The tenant creates an API ID and hash at https://my.telegram.org (their own, so a flag on their account never lands on ours).
 3. Session string, with the tenant on a call scanning the QR code (Telegram → Settings → Devices → Link Desktop Device):
    `docker build --platform linux/arm64 -t telegram-mcp packages/telegram-mcp`, then

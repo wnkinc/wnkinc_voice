@@ -1,6 +1,6 @@
 /**
  * Which deployment this is: deployment.json in the directory the command runs
- * from (or the file DEPLOYMENT_FILE names). The CDK app and the scripts read
+ * from, a deployment's own (deployments/<name>/), or the file DEPLOYMENT_FILE names. The CDK app and the scripts read
  * their names and region from here; the stacks and their tests take a prefix
  * and never read it. A missing or malformed file fails before anything is named.
  */

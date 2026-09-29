@@ -1,6 +1,8 @@
 # ops
 
 Operator data that lives outside the stacks: what a person applies by hand, from the admin profile.
+It is this deployment's (its account, its stage); commands run from the deployment's directory,
+`deployments/wnk-platform/`.
 
 ## `wnk-operate-policy.json`
 

@@ -1,0 +1,17 @@
+{
+  "name": "wnk-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The wnk deployment of the platform: its stage, its tenants, its operator data. Commands run from this directory.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run --root ../..",
+    "seed": "tsx ../../scripts/seed-tenant.ts",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy",
+    "diff": "cdk diff",
+    "predeploy": "vitest run --root ../..",
+    "release": "tsx ../../scripts/temporal-release.mts",
+    "temporal": "tsx ../../scripts/temporal.mts"
+  }
+}

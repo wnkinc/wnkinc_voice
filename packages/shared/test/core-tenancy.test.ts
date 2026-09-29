@@ -2,13 +2,12 @@
  * Core names no tenant. A workflow, an activity, a handler or a stack that
  * compares a tenant id to a literal is a behavior one tenant gets inside code
  * another runs on: the variation belongs in an option or a workflow of its
- * own. The second check is the deployment's: none of its tenant ids is a
- * literal in core.
+ * own. A deployment checks the other half, that none of its tenant ids is a
+ * literal here (deployments/<name>/test).
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { tenants } from '../../../tenants/index.js';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
 const CORE = ['packages/shared/src', 'packages/receptionist/src', 'packages/worker/src', 'packages/infrastructure/stacks', 'packages/infrastructure/infra_utils', 'packages/infrastructure/platform.ts', 'packages/infrastructure/names.ts', 'packages/telegram-mcp', 'scripts'];
@@ -26,9 +25,5 @@ describe('core names no tenant', () => {
     expect(found(new RegExp(`tenant_?id\\s*(===?|!==?)\\s*${quote}`, 'i'))).toEqual([]);
     expect(found(new RegExp(`${quote}\\s*(===?|!==?)\\s*[\\w.]*tenant_?id\\b`, 'i'))).toEqual([]);
     expect(found(/switch\s*\(\s*[\w.]*tenant_?id\s*\)/i)).toEqual([]);
-  });
-
-  it('holds none of this deployment\'s tenant ids as a literal', () => {
-    for (const { tenantId } of tenants) expect(found(new RegExp(`['"]${tenantId}['"]`)), tenantId).toEqual([]);
   });
 });

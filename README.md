@@ -340,15 +340,24 @@ config drift between file and row, secrets, services, owner alert channel, Gmail
 
 ### Deploy
 
+The repository is two things. **Core** is `packages/` and `scripts/`: the code, which names no
+stage, no account and no tenant. **A deployment** is a directory under `deployments/`: which
+stage this is (`deployment.json`), its settings (`cdk.json`), its tenants (`tenants/`), its
+operator data (`ops/`), and the CDK app that hands them to core (`app.ts`). There is one,
+`deployments/wnk-platform/`. Every command below that deploys, seeds, releases or reads a tenant
+file runs from that directory, and every `tenants/`, `ops/`, `cdk.json` and `deployment.json` in
+this README is a path inside it. The gate (`npx tsc --noEmit`, `npm test`) runs from the root.
+
 ```bash
 npm install
 npm test
+cd deployments/wnk-platform
 npx cdk bootstrap                           # once per account/region
 npm run deploy
 ```
 
 IaC is AWS CDK (TypeScript, `packages/infrastructure/`); Lambdas are bundled by `NodejsFunction`
-(esbuild) at deploy time. Stacks: memory, voice, worker, then one per tenant (`bin/app.ts` builds one platform object and feeds it to
+(esbuild) at deploy time. Stacks: memory, voice, worker, then one per tenant (`definePlatform` in `packages/infrastructure/platform.ts` builds one platform object and feeds it to
 the worker; a tenant stack takes only the bus, the alarm topic, and the worker's automation starter).
 
 The alarm topic is created by the stack; **who it pages is not** — subscribe once, out of band,
@@ -530,9 +539,9 @@ do, and how to verify it. Start there when changing one. The `new-tenant`, `new-
 | `packages/infrastructure/stacks/platform-stack.ts` | What every stack builds on and every tenant shares: the tables, the bus, the HTTP API the front doors add routes to, the alarm topic, the OpenAI and Composio secrets, the activity log. Data and the bus, nothing that runs |
 | `packages/infrastructure/stacks/receptionist-stack.ts` | The call path: the verifier, accept and session Lambdas, the session queue, the OpenAI webhook route on the platform API |
 | `packages/infrastructure/stacks/memory-stack.ts` | Caller memory (AgentCore Memory) |
-| `deployment.json` | Which deployment this is: the project, the stage, the region. Every name and every script follows it |
+| `deployments/wnk-platform/` | The deployment: `deployment.json` (the project, the stage, the region; every name and every script follows it), `cdk.json`, `app.ts` (the CDK app: hands `definePlatform` its prefix, region and tenants), `tenants/`, `ops/`, `test/` (what its tenants get, and that core names none of them), and the `package.json` whose scripts are the deploy, seed and release commands |
 | `packages/infrastructure/names.ts`, `platform.ts`, `infra_utils/` | The names, each a function of the prefix (`wnk-dev-<layer>` stacks, `wnk-dev-<resource>` physical names); the stack wiring, bottom up, for the tenants it is handed (`definePlatform`); alarm presets |
-| `packages/infrastructure/deployment.ts`, `bin/app.ts` | This deployment: the reader of `deployment.json`, and the CDK app that hands `definePlatform` its prefix, region and tenants |
+| `packages/infrastructure/deployment.ts` | The reader of `deployment.json`, from the directory the command runs in |
 | `packages/shared/src/` | `contracts.ts` (what more than one deployable must agree on, pure), `types.ts` (the `TenantConfig` zod schema), `store.ts` (the rows behind one `Store`: the reads every side makes, the seed's writes, the session's call row; an in-memory version for tests), `composio-api.ts` (Composio's HTTP API, the one client), `memory.ts` (the callers' memory, the one client), `secrets.ts` (a JSON secret, read once), `events.ts` (EventBridge publisher), `config.ts` (env, the OpenAI secret, logger) |
 | `scripts/` | `seed-tenant.ts` (row upsert), `check-tenant.ts` (pre-flight), `connect-composio.mts` (consent links), `telegram-webhook.mts` and `twilio-webhook.mts` (point each channel at the platform), and the `test-*.mts` provers |
 | `tenants/example.json` | Example tenant config |
