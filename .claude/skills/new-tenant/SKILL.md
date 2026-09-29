@@ -7,6 +7,8 @@ description: Onboard a new business (tenant) onto the platform — config row, s
 
 A tenant is a config row keyed by their phone number, their credentials under tenant-named keys, and a short file naming the automations they run. The row and secrets never touch a deploy; the automations file is the one deploy, and it deploys that tenant's stack alone (no platform stack, policy, or env change; if a step below seems to need one, something is misfiled). The tenant id threads everything — pick it once, lowercase, short (like `wnk`).
 
+Every path under `tenants/` and every `npm run` below is in the deployment's directory (`deployments/wnk-platform/`); run the commands from there.
+
 ## Steps
 
 1. **Number + trunk**: buy/assign the Twilio number and attach it to the Elastic SIP trunk (Origination `sip:proj_…@sip.api.openai.com;transport=tls`). The webhook routes by CALLED number, so this is what makes calls reach the right tenant.

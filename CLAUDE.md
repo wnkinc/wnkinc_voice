@@ -49,10 +49,14 @@ should live.
   configuration: no conditions, expressions, or templates of steps in a tenant
   file or a row, and no rules engine to read them. An option no tenant sets is
   deleted.
-- Which deployment this is comes from `deployment.json` (project, stage,
-  region); the tenants are handed to `definePlatform`
-  (`packages/infrastructure/platform.ts`). The packages name no stage, no
-  account, and no tenant.
+- Core is `packages/` and `scripts/`: it names no stage, no account, and no
+  tenant. A deployment is a directory under `deployments/` (one today,
+  `deployments/wnk-platform/`): `deployment.json` (project, stage, region),
+  `cdk.json`, `tenants/`, `ops/`, and the `app.ts` that hands them to
+  `definePlatform` (`packages/infrastructure/platform.ts`). Deploy, seed and
+  release commands run from the deployment's directory; the `tenants/` and
+  `ops/` paths in this file are inside it. A deployment holds configuration
+  only: a change in behavior goes to core.
 - Every change that should reach the worker, code or configuration, is a new
   `BUILD_ID` in `packages/worker/src/version.ts`: a published Lambda version is
   immutable, so nothing changes under a running workflow, and rollback is one

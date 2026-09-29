@@ -3,6 +3,7 @@
 # branch, and may only assume CDK's bootstrap roles (which do the deploying)
 # and run the worker release. Applied once from the admin profile:
 #
+#   (from deployments/wnk-platform)
 #   AWS_PROFILE=wnk-admin aws cloudformation deploy --region us-west-2 \
 #     --stack-name wnkinc-voice-github-deploy --template-file ops/github-deploy-role.yaml \
 #     --capabilities CAPABILITY_NAMED_IAM

@@ -13,14 +13,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "seed": "tsx scripts/seed-tenant.ts",
-    "synth": "cdk synth",
-    "deploy": "cdk deploy",
-    "diff": "cdk diff",
-    "predeploy": "vitest run",
-    "release": "tsx scripts/temporal-release.mts",
-    "temporal": "tsx scripts/temporal.mts"
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "@composio/core": "^0.18.0",

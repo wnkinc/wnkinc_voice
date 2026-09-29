@@ -11,13 +11,19 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import { describe, expect, it } from 'vitest';
 import { TenantStack } from '../stacks/tenant-stack.js';
-import { wnk } from '../../../tenants/wnk.js';
+import type { TenantAutomations } from '@wnk/shared/contracts';
+
+/** A tenant file, as a deployment would write one. */
+const acme: TenantAutomations = {
+  tenantId: 'acme',
+  automations: [{ workflow: 'leadEmail' }, { workflow: 'crmLead' }, { workflow: 'crmCall' }, { workflow: 'ownerAlert' }, { workflow: 'bookAppointment' }],
+};
 
 const app = new cdk.App();
 const env = { account: '123456789012', region: 'us-west-2' };
 const platform = new cdk.Stack(app, 'platform-test', { env });
 const starter = new lambda.Function(platform, 'Starter', { runtime: lambda.Runtime.NODEJS_22_X, handler: 'index.handler', code: lambda.Code.fromInline('exports.handler = async () => ({})') });
-const stack = new TenantStack(app, 'wnk-tenant-wnk-test', { ...wnk, prefix: 'p', env, bus: new events.EventBus(platform, 'Bus'), alarmTopic: new sns.Topic(platform, 'Alarms'), automationStarter: starter });
+const stack = new TenantStack(app, 'tenant-acme-test', { ...acme, prefix: 'p', env, bus: new events.EventBus(platform, 'Bus'), alarmTopic: new sns.Topic(platform, 'Alarms'), automationStarter: starter });
 const template = Template.fromStack(stack);
 
 describe('tenant stack', () => {
@@ -29,11 +35,11 @@ describe('tenant stack', () => {
       workflow: JSON.parse(r.Properties.Targets[0].InputTransformer.InputTemplate.replace(/<detail>|<id>/g, '{}')).workflow,
     })).sort((a, b) => a.workflow.localeCompare(b.workflow));
     expect(table).toEqual([
-      { on: ['appointment.requested'], tenant: ['wnk'], workflow: 'bookAppointment' },
-      { on: ['call.ended'], tenant: ['wnk'], workflow: 'crmCall' },
-      { on: ['lead.recorded'], tenant: ['wnk'], workflow: 'crmLead' },
-      { on: ['lead.recorded'], tenant: ['wnk'], workflow: 'leadEmail' },
-      { on: ['owner.notify'], tenant: ['wnk'], workflow: 'ownerAlert' },
+      { on: ['appointment.requested'], tenant: ['acme'], workflow: 'bookAppointment' },
+      { on: ['call.ended'], tenant: ['acme'], workflow: 'crmCall' },
+      { on: ['lead.recorded'], tenant: ['acme'], workflow: 'crmLead' },
+      { on: ['lead.recorded'], tenant: ['acme'], workflow: 'leadEmail' },
+      { on: ['owner.notify'], tenant: ['acme'], workflow: 'ownerAlert' },
     ]);
   });
 
