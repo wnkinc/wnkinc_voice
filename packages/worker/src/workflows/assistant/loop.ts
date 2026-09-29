@@ -69,9 +69,14 @@ export async function runAssistantLoop(input: LoopInput): Promise<LoopResult> {
   let round = 0;
   while (res.calls.length > 0 && round < MAX_ROUNDS) {
     // Each call the model made, gated and run. A refused or failed tool is a result the model reads, not a failed turn.
-    const outputs = await Promise.all(res.calls.map(async (call) => ({
-      type: 'function_call_output', call_id: call.call_id, output: await runTool(call.name, call.arguments, input),
-    })));
+    // Composio's run together; the ledger's one at a time in the model's order, since each reads the pending row
+    // before it writes: two drafts in one response would otherwise both find none and write two.
+    let ledgerTurn: Promise<unknown> = Promise.resolve();
+    const outputs = await Promise.all(res.calls.map(async (call) => {
+      const run = () => runTool(call.name, call.arguments, input);
+      const output = call.name in ASSISTANT_TOOLS ? await (ledgerTurn = ledgerTurn.then(run)) : await run();
+      return { type: 'function_call_output', call_id: call.call_id, output };
+    }));
     round += 1;
     res = await model.callModel({ instructions: prompt, tools: defs, previousResponseId: res.responseId, input: outputs });
     count(res);

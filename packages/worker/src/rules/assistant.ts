@@ -57,10 +57,12 @@ export function toolDefs(allowed: readonly string[]) {
   }));
 }
 
-/** A Composio tool's result for the model: its data on success, the error otherwise, as a bounded string. */
+/** A Composio tool's result for the model: its data on success, the error otherwise, as a bounded string. Over the bound it keeps both ends, since an error or a total often comes last. */
 export function boundedResult(body: { successful?: boolean; data?: Record<string, any>; error?: unknown }): string {
   const s = JSON.stringify(body.successful === true ? body.data ?? {} : { error: body.error ?? 'tool failed' });
-  return s.length > MAX_TOOL_OUTPUT_CHARS ? `${s.slice(0, MAX_TOOL_OUTPUT_CHARS)}...[truncated]` : s;
+  if (s.length <= MAX_TOOL_OUTPUT_CHARS) return s;
+  const half = MAX_TOOL_OUTPUT_CHARS / 2;
+  return `${s.slice(0, half)}...[${s.length - MAX_TOOL_OUTPUT_CHARS} chars truncated]...${s.slice(-half)}`;
 }
 
 /** What the model is told about a toolkit it reaches, beyond what Composio's schemas say: data, one sentence each. */
