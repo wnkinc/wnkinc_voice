@@ -1,10 +1,11 @@
 /**
- * Register the deployed worker with Temporal Cloud as the version named in
- * packages/worker/src/version.ts, and route new workflows to it.
+ * Register the deployed worker with Temporal Cloud as this deployment's worker
+ * (deployment.json) at the build id in packages/worker/src/version.ts, and
+ * route new workflows to it.
  *
  *   npx tsx scripts/temporal-release.mts
  *
- * Runs after `npm run deploy -- wnk-dev-worker` (or by CI after a merge to
+ * Runs after `npm run deploy -- <prefix>-worker` (or by CI after a merge to
  * main). In order: publish an
  * immutable Lambda version of what was deployed; create the Worker Deployment
  * Version pointing at that qualified ARN, which makes Temporal invoke it once
@@ -20,12 +21,13 @@
  * the CLI as an environment variable and is never printed.
  */
 import { execFileSync } from 'node:child_process';
-import { STACKS } from '../packages/infrastructure/names.js';
-import { BUILD_ID, DEPLOYMENT_NAME, TASK_QUEUE } from '../packages/worker/src/version.js';
+import { STACKS, WORKER } from '../packages/infrastructure/deployment.js';
+import { BUILD_ID } from '../packages/worker/src/version.js';
 import { REGION, temporalSecret } from './lib/temporal-env.mts';
 import { missingSearchAttributes } from './lib/temporal-namespace.mts';
 
 const STACK = STACKS.worker;
+const { deploymentName: DEPLOYMENT_NAME, taskQueue: TASK_QUEUE } = WORKER;
 /** Every morning: the connection check at 15:00 UTC, the assistant probe ten minutes after it, so a failure there is about the loop, not Composio. */
 const SCHEDULES = [
   { id: 'composio-health', cron: '0 15 * * *', type: 'composioHealth' },

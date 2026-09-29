@@ -11,7 +11,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { Client, Connection } from '@temporalio/client';
-import { TASK_QUEUE } from '../packages/worker/src/version.js';
+import { WORKER } from '../packages/infrastructure/deployment.js';
 import { temporalSecret } from './lib/temporal-env.mts';
 
 const text = process.argv[2] ?? 'What can you help me with?';
@@ -28,7 +28,7 @@ const client = new Client({ connection: await Connection.connect({ address: s.TE
 const updateId = Date.now();
 const update = { update_id: updateId, message: { message_id: updateId, from: { id: owner.telegramId, first_name: owner.name }, chat: { id: owner.telegramId, type: 'private' }, text } };
 console.log(`tenant: ${tenantId}  as: ${owner.name} (owner, telegram ${owner.telegramId})\n> ${text}`);
-const handle = await client.workflow.start('telegramTurn', { taskQueue: TASK_QUEUE, workflowId: `telegram-${updateId}`, args: [update] });
+const handle = await client.workflow.start('telegramTurn', { taskQueue: WORKER.taskQueue, workflowId: `telegram-${updateId}`, args: [update] });
 const outcome = await handle.result();
 
 const tools: string[] = [];

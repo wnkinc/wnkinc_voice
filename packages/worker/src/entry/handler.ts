@@ -7,13 +7,13 @@
 import { fileURLToPath } from 'node:url';
 import { runWorker, type LambdaHandler, type LambdaWorkerConfig } from '@temporalio/lambda-worker';
 import * as activities from '../activities/index.js';
-import { BUILD_ID, DEPLOYMENT_NAME, TASK_QUEUE } from '../version.js';
+import { BUILD_ID, deploymentName, taskQueue } from '../version.js';
 import { temporalConnection } from './temporal.js';
 
 let config!: LambdaWorkerConfig;
-const worker = runWorker({ deploymentName: DEPLOYMENT_NAME, buildId: BUILD_ID }, (c) => {
+const worker = runWorker({ deploymentName: deploymentName(), buildId: BUILD_ID }, (c) => {
   config = c;
-  c.workerOptions.taskQueue = TASK_QUEUE;
+  c.workerOptions.taskQueue = taskQueue();
   // Pre-bundled at image build (scripts/bundle-workflows.ts), beside this bundled entry in lib/: no webpack on a cold start.
   c.workerOptions.workflowBundle = { codePath: fileURLToPath(new URL('./workflow-bundle.js', import.meta.url)) };
   c.workerOptions.activities = activities;

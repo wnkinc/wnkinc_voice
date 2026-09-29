@@ -14,9 +14,8 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { execFileSync } from 'node:child_process';
-import { STACKS } from '../packages/infrastructure/names.js';
+import { REGION, STACKS } from '../packages/infrastructure/deployment.js';
 
-const REGION = 'us-west-2';
 const mode = process.argv[2] ?? 'ping';
 const to = process.argv[3] ?? '+15555550100';
 const from = process.argv[4] ?? '+15555550155';

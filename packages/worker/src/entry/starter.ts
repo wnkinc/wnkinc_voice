@@ -17,7 +17,7 @@ import { Client, Connection, WorkflowExecutionAlreadyStartedError } from '@tempo
 import { isAutomation } from '@wnk/shared/contracts';
 import { isRoutable, parseForm } from '../rules/sms.js';
 import { TENANT_ID } from '../search-attributes.js';
-import { TASK_QUEUE } from '../version.js';
+import { taskQueue } from '../version.js';
 import { temporalConnection } from './temporal.js';
 
 let client: Promise<Client> | undefined;
@@ -34,7 +34,7 @@ export const handler: SQSHandler = async (event) => {
     const sms = parseForm(record.body);
     if (!isRoutable(sms)) { console.log(JSON.stringify({ msg: 'not a text; ignored', keys: Object.keys(sms) })); continue; }
     try {
-      await c.workflow.start('smsTurn', { taskQueue: TASK_QUEUE, workflowId: `sms-${sms.MessageSid}`, args: [{ sms }], workflowIdReusePolicy: 'REJECT_DUPLICATE' });
+      await c.workflow.start('smsTurn', { taskQueue: taskQueue(), workflowId: `sms-${sms.MessageSid}`, args: [{ sms }], workflowIdReusePolicy: 'REJECT_DUPLICATE' });
     } catch (err) {
       if (err instanceof WorkflowExecutionAlreadyStartedError) { console.log(JSON.stringify({ msg: 'already started', messageSid: sms.MessageSid })); continue; }
       throw err;
@@ -49,7 +49,7 @@ export const telegram: APIGatewayProxyHandlerV2 = async (event) => {
   try { update = JSON.parse(event.isBase64Encoded ? Buffer.from(event.body ?? '', 'base64').toString() : event.body ?? '{}') as { update_id?: number }; } catch { return { statusCode: 200, body: '' }; }
   if (typeof update.update_id !== 'number') return { statusCode: 200, body: '' };
   try {
-    await c.workflow.start('telegramTurn', { taskQueue: TASK_QUEUE, workflowId: `telegram-${update.update_id}`, args: [update], workflowIdReusePolicy: 'REJECT_DUPLICATE' });
+    await c.workflow.start('telegramTurn', { taskQueue: taskQueue(), workflowId: `telegram-${update.update_id}`, args: [update], workflowIdReusePolicy: 'REJECT_DUPLICATE' });
   } catch (err) {
     if (!(err instanceof WorkflowExecutionAlreadyStartedError)) throw err;
   }
@@ -70,7 +70,7 @@ export const automation = async (event: AutomationStart): Promise<void> => {
   const c = await client;
   try {
     await c.workflow.start(name, {
-      taskQueue: TASK_QUEUE, workflowId: `${name}-${d.tenantId}-${key}`, args: [d, event.options ?? {}], workflowIdReusePolicy: 'ALLOW_DUPLICATE_FAILED_ONLY',
+      taskQueue: taskQueue(), workflowId: `${name}-${d.tenantId}-${key}`, args: [d, event.options ?? {}], workflowIdReusePolicy: 'ALLOW_DUPLICATE_FAILED_ONLY',
       typedSearchAttributes: [{ key: TENANT_ID, value: d.tenantId }],
     });
   } catch (err) {

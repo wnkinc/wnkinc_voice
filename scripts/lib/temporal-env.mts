@@ -1,8 +1,9 @@
 /** The platform namespace connection, from the worker stack's secret, as the environment the Temporal CLI and SDK read. */
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { PREFIX, temporalSecretName } from '../../packages/infrastructure/names.js';
+import { PREFIX, REGION } from '../../packages/infrastructure/deployment.js';
+import { temporalSecretName } from '../../packages/infrastructure/names.js';
 
-export const REGION = 'us-west-2';
+export { REGION };
 export const TEMPORAL_SECRET = temporalSecretName(PREFIX);
 
 export async function temporalSecret(): Promise<Record<string, string>> {
