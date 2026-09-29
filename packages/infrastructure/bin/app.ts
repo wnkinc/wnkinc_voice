@@ -1,7 +1,7 @@
 /**
  * The platform, as stacks, bottom up. Each layer takes handles only from the
- * ones above it here; deploying one touches nothing below it. Names come from
- * ../names.ts: one project, one stage.
+ * ones above it here; deploying one touches nothing below it. Names and region
+ * come from the deployment (../deployment.ts reads deployment.json).
  *
  *   memory        AgentCore Memory: the callers' memory across calls
  *   platform      the tables, the bus, the HTTP API, the alarm topic, the platform secrets
@@ -12,7 +12,7 @@
  *   telegram-mcp-<id>  one per tenant file asking for it; takes no platform handles
  */
 import * as cdk from 'aws-cdk-lib';
-import { PREFIX, STACKS } from '../names.js';
+import { PREFIX, REGION, STACKS } from '../deployment.js';
 import { MemoryStack } from '../stacks/memory-stack.js';
 import { PlatformStack } from '../stacks/platform-stack.js';
 import { ReceptionistStack } from '../stacks/receptionist-stack.js';
@@ -22,7 +22,7 @@ import { WorkerStack } from '../stacks/worker-stack.js';
 import { tenants } from '../../../tenants/index.js';
 
 const app = new cdk.App();
-const env = { region: 'us-west-2' };
+const env = { region: REGION };
 const prefix = PREFIX;
 
 const memory = new MemoryStack(app, STACKS.memory, { prefix, env });

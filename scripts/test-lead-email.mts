@@ -15,9 +15,8 @@ import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { STACKS } from '../packages/infrastructure/names.js';
+import { REGION, STACKS } from '../packages/infrastructure/deployment.js';
 
-const REGION = 'us-west-2';
 const tenantId = process.argv[2];
 if (!tenantId) { console.error('usage: npx tsx scripts/test-lead-email.mts <tenantId> [phone] [callerName] [reason]'); process.exit(2); }
 const phone = process.argv[3] ?? '+15555550155';

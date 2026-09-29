@@ -22,8 +22,9 @@
  */
 import { Composio } from '@composio/core';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { REGION as DEPLOYMENT_REGION } from '../../packages/infrastructure/deployment.js';
 
-const REGION = process.env.AWS_REGION ?? 'us-west-2';
+const REGION = process.env.AWS_REGION ?? DEPLOYMENT_REGION;
 
 let clientPromise: Promise<Composio> | undefined;
 function client(): Promise<Composio> {

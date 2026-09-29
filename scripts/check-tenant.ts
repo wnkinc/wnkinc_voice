@@ -11,9 +11,8 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dynamoStore, TenantConfigSchema } from '@wnk/shared';
-import { STACKS } from '../packages/infrastructure/names.js';
+import { REGION, STACKS } from '../packages/infrastructure/deployment.js';
 
-const REGION = 'us-west-2';
 const tenantId = process.argv[2];
 if (!tenantId) { console.error('usage: npx tsx scripts/check-tenant.ts <tenantId>'); process.exit(2); }
 

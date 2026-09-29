@@ -9,12 +9,12 @@
  */
 import { execFileSync } from 'node:child_process';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { STACKS } from '../packages/infrastructure/names.js';
+import { REGION, STACKS } from '../packages/infrastructure/deployment.js';
 
-process.env.AWS_REGION ??= 'us-west-2';
-const output = (stack: string, key: string) => execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--region', 'us-west-2',
+process.env.AWS_REGION ??= REGION;
+const output = (stack: string, key: string) => execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--region', REGION,
   '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text'], { encoding: 'utf8' }).trim();
-const secretArn = (prefix: string) => execFileSync('aws', ['secretsmanager', 'list-secrets', '--region', 'us-west-2',
+const secretArn = (prefix: string) => execFileSync('aws', ['secretsmanager', 'list-secrets', '--region', REGION,
   '--query', `SecretList[?starts_with(Name, '${prefix}')].ARN | [0]`, '--output', 'text'], { encoding: 'utf8' }).split('\n')[0]!.trim();
 process.env.MEDIA_BUCKET ??= output(STACKS.platform, 'mediaBucketName');
 process.env.TWILIO_SECRET_ARN ??= secretArn('TwilioSecret');

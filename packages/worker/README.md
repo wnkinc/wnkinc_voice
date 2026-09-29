@@ -25,7 +25,7 @@ Fargate fallback at zero tasks.
 - `src/activities/` — the side effects: a table, a secret, a SaaS, the model, a channel. Each activity that acts for a tenant takes the tenant id as an argument and names it on every Composio call; none reads it from anywhere else. The clients are the shared ones (`@wnk/shared`: the store, Composio's HTTP API, the callers' memory, the secret reader), made once per container in `clients.ts`.
 - `src/rules/` — pure functions both sides and the tests use: the assistant's tool catalog and prompts, the Facebook ledger rules, inbound SMS parsing, the automations' rules. No import but the contracts.
 - `src/entry/` — the three processes on one image: `handler.ts` (the Lambda Temporal invokes), `starter.ts` (the front doors, each opening a workflow keyed by the request's own id so a redelivery starts nothing twice), `service.ts` (the fallback, long-running). The Temporal connection is read once from the stack's secret in `temporal.ts`.
-- `src/version.ts` — the deployment name, the build id, the task queue. The names follow `packages/infrastructure/names.ts`; a test holds them in step.
+- `src/version.ts` — the build id, and the deployment name and task queue, which the worker stack sets from its prefix (`WORKER_DEPLOYMENT_NAME`, `WORKER_TASK_QUEUE`).
 
 Tenant id enters from an unforgeable input only: a rule's event (published by our own session Lambda), or the People row a channel identity resolves to. Neither the model nor a sender ever names a tenant.
 

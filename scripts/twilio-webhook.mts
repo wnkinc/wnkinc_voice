@@ -18,18 +18,18 @@
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { STACKS } from '../packages/infrastructure/names.js';
+import { REGION, STACKS } from '../packages/infrastructure/deployment.js';
 
 const action = process.argv[2] ?? 'info';
 const tenantId = process.argv[3];
 if (!tenantId) { console.error('usage: npx tsx scripts/twilio-webhook.mts set|info <tenantId>'); process.exit(2); }
 const output = (stack: string, key: string) =>
-  execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', 'us-west-2'], { encoding: 'utf8' }).trim();
+  execFileSync('aws', ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', `Stacks[0].Outputs[?OutputKey=='${key}'].OutputValue | [0]`, '--output', 'text', '--region', REGION], { encoding: 'utf8' }).trim();
 
 const { phoneNumber } = JSON.parse(readFileSync(`tenants/${tenantId}.json`, 'utf8')) as { phoneNumber: string };
 const secretArn = output(STACKS.worker, 'twilioSecretArn');
 const apiEndpoint = output(STACKS.platform, 'apiEndpoint');
-const sm = new SecretsManagerClient({ region: 'us-west-2' });
+const sm = new SecretsManagerClient({ region: REGION });
 const secret = JSON.parse((await sm.send(new GetSecretValueCommand({ SecretId: secretArn }))).SecretString ?? '{}') as { TWILIO_ACCOUNT_SID?: string; TWILIO_AUTH_TOKEN?: string; WEBHOOK_PATH?: string };
 if (!secret.TWILIO_ACCOUNT_SID || secret.TWILIO_ACCOUNT_SID === 'set-me') throw new Error(`TWILIO_ACCOUNT_SID not set in ${secretArn}`);
 if (!secret.TWILIO_AUTH_TOKEN || secret.TWILIO_AUTH_TOKEN === 'set-me') throw new Error(`TWILIO_AUTH_TOKEN not set in ${secretArn}`);

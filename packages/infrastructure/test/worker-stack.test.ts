@@ -42,6 +42,15 @@ const statementsOf = (roleRef: string) => Object.values(template.findResources('
 const actions = (s: Statement) => [s.Action].flat();
 
 describe('worker stack', () => {
+  it('hands the worker its Temporal names from the prefix, and each starter the queue', () => {
+    const vars = (name: string) => fnByName(name)?.Properties.Environment.Variables as Record<string, string>;
+    expect(vars('p-worker')).toMatchObject({ WORKER_DEPLOYMENT_NAME: 'p-worker', WORKER_TASK_QUEUE: 'p' });
+    for (const starter of ['p-sms-start', 'p-telegram-start', 'p-automation-start']) expect(vars(starter).WORKER_TASK_QUEUE).toBe('p');
+    const task = Object.values(template.findResources('AWS::ECS::TaskDefinition'))[0];
+    const fallback = task?.Properties.ContainerDefinitions[0].Environment as { Name: string; Value: string }[];
+    expect(fallback).toEqual(expect.arrayContaining([{ Name: 'WORKER_DEPLOYMENT_NAME', Value: 'p-worker' }, { Name: 'WORKER_TASK_QUEUE', Value: 'p' }]));
+  });
+
   it('lets only Temporal Cloud assume the invocation role, and only with the external id', () => {
     // CDK renders a composite principal as one statement per principal; every one carries the condition.
     const trust = invoke?.Properties.AssumeRolePolicyDocument.Statement as Statement[];

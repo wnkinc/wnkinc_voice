@@ -1,8 +1,9 @@
 # infrastructure
 
 The platform as CDK stacks, bottom up; `bin/app.ts` is the wiring and the deploy order.
-Names come from `names.ts`: one project, one stage (`wnk`, `dev`), so stacks are
-`wnk-dev-<layer>` and physical names `wnk-dev-<resource>`. A second stage is a second value.
+Names come from `names.ts`, each a function of the prefix; the prefix and the region come from
+`deployment.json` at the repo root (`deployment.ts` reads it): with `wnk` and `dev`, stacks are
+`wnk-dev-<layer>` and physical names `wnk-dev-<resource>`. A second stage is a second file.
 
 | Stack | Owns | Takes |
 |---|---|---|

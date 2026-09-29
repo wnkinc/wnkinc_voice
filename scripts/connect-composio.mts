@@ -11,7 +11,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { COMPOSIO_TOOLKITS, composioConnect, composioGmail, type ComposioToolkit } from './lib/composio.mts';
-import { STACKS } from '../packages/infrastructure/names.js';
+import { REGION, STACKS } from '../packages/infrastructure/deployment.js';
 
 const tenantId = process.argv[2];
 if (!tenantId) { console.error(`usage: npx tsx scripts/connect-composio.mts <tenantId> [${COMPOSIO_TOOLKITS.join('|')}]`); process.exit(2); }
@@ -22,7 +22,7 @@ if (!process.env.COMPOSIO_API_KEY && !process.env.COMPOSIO_SECRET_ARN) {
   process.env.COMPOSIO_SECRET_ARN = execFileSync('aws', [
     'cloudformation', 'describe-stacks', '--stack-name', STACKS.platform,
     '--query', "Stacks[0].Outputs[?OutputKey=='composioSecretArn'].OutputValue | [0]",
-    '--output', 'text', '--region', 'us-west-2',
+    '--output', 'text', '--region', REGION,
   ], { encoding: 'utf8' }).trim();
 }
 

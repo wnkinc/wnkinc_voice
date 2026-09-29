@@ -50,7 +50,7 @@ import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
 import { dlqAlarm, errorAlarm } from '../infra_utils/alarms.js';
-import { temporalSecretName } from '../names.js';
+import { temporalSecretName, workerNames } from '../names.js';
 import { MEMORY_USE_ACTIONS } from './memory-stack.js';
 import { EVENT_SOURCE } from './platform-stack.js';
 
@@ -92,6 +92,8 @@ export class WorkerStack extends cdk.Stack {
     super(scope, id, props);
     const { prefix } = props;
     const fnName = `${prefix}-worker`;
+    // The stage's names for Temporal, handed to every process on the image that names a queue.
+    const names = workerNames(prefix);
 
     // Address, namespace and API key are put in after the namespace exists
     // (ops, never a deploy variable); EXTERNAL_ID is generated here.
@@ -129,6 +131,8 @@ export class WorkerStack extends cdk.Stack {
     // What the activities reach, by name. Tenant config stays in the tenant row.
     const workerEnv = {
       TEMPORAL_SECRET_ARN: secret.secretArn,
+      WORKER_DEPLOYMENT_NAME: names.deploymentName,
+      WORKER_TASK_QUEUE: names.taskQueue,
       NODE_OPTIONS: '--enable-source-maps',
       PEOPLE_TABLE: props.peopleTable.tableName,
       TENANTS_TABLE: props.tenantsTable.tableName,
@@ -145,6 +149,8 @@ export class WorkerStack extends cdk.Stack {
       ASSISTANT_MODEL: process.env.ASSISTANT_MODEL ?? 'gpt-5.5',
       ...(props.callerMemory ? { MEMORY_ID: props.callerMemory.memoryId } : {}),
     };
+    // A starter only opens workflows: the connection and the queue to open them on.
+    const starterEnv = { TEMPORAL_SECRET_ARN: secret.secretArn, WORKER_TASK_QUEUE: names.taskQueue, NODE_OPTIONS: '--enable-source-maps' };
     // What a worker may touch, whichever compute runs it.
     const grantWorker = (role: iam.IGrantable) => {
       secret.grantRead(role);
@@ -241,7 +247,7 @@ export class WorkerStack extends cdk.Stack {
       architecture: lambda.Architecture.ARM_64,
       memorySize: 512,
       timeout: cdk.Duration.seconds(30),
-      environment: { TEMPORAL_SECRET_ARN: secret.secretArn, NODE_OPTIONS: '--enable-source-maps' },
+      environment: starterEnv,
       logGroup: logGroup(starterName, 'SmsStartLogs'),
     });
     secret.grantRead(starter);
@@ -261,7 +267,7 @@ export class WorkerStack extends cdk.Stack {
       architecture: lambda.Architecture.ARM_64,
       memorySize: 512,
       timeout: cdk.Duration.seconds(20),
-      environment: { TEMPORAL_SECRET_ARN: secret.secretArn, NODE_OPTIONS: '--enable-source-maps' },
+      environment: starterEnv,
       logGroup: logGroup(telegramStartName, 'TelegramStartLogs'),
     });
     secret.grantRead(telegramStart);
@@ -284,7 +290,7 @@ export class WorkerStack extends cdk.Stack {
       architecture: lambda.Architecture.ARM_64,
       memorySize: 512,
       timeout: cdk.Duration.seconds(20),
-      environment: { TEMPORAL_SECRET_ARN: secret.secretArn, NODE_OPTIONS: '--enable-source-maps' },
+      environment: starterEnv,
       logGroup: logGroup(automationStartName, 'AutomationStartLogs'),
     });
     secret.grantRead(automationStart);
