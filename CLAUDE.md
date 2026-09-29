@@ -42,7 +42,17 @@ should live.
   of rules filtered on its id. A variation for one tenant is an option the
   workflow reads with today's behavior as the default, or a workflow under its
   own name, in that order. Never a check of the tenant id inside a workflow
-  another tenant runs on.
+  another tenant runs on (`packages/shared/test/core-tenancy.test.ts` holds it).
+- An option is a typed value with today's behavior as its default: a number, a
+  flag, a name from a list. It sets how much, when, or to whom. If it would
+  change what happens, that is a workflow under its own name. Never logic in
+  configuration: no conditions, expressions, or templates of steps in a tenant
+  file or a row, and no rules engine to read them. An option no tenant sets is
+  deleted.
+- Which deployment this is comes from `deployment.json` (project, stage,
+  region); the tenants are handed to `definePlatform`
+  (`packages/infrastructure/platform.ts`). The packages name no stage, no
+  account, and no tenant.
 - Every change that should reach the worker, code or configuration, is a new
   `BUILD_ID` in `packages/worker/src/version.ts`: a published Lambda version is
   immutable, so nothing changes under a running workflow, and rollback is one
