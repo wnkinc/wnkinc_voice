@@ -1,6 +1,7 @@
 # infrastructure
 
-The platform as CDK stacks, bottom up; `bin/app.ts` is the wiring and the deploy order.
+The platform as CDK stacks, bottom up; `platform.ts` (`definePlatform`) is the wiring and the deploy order,
+and `bin/app.ts` calls it with this deployment's prefix, region and tenants.
 Names come from `names.ts`, each a function of the prefix; the prefix and the region come from
 `deployment.json` at the repo root (`deployment.ts` reads it): with `wnk` and `dev`, stacks are
 `wnk-dev-<layer>` and physical names `wnk-dev-<resource>`. A second stage is a second file.

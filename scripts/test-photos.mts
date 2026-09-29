@@ -5,7 +5,7 @@
  * activities in this process with the operator's reads. Prints no numbers,
  * message text, or links.
  *
- *   npx tsx scripts/test-photos.mts      (text a photo to a tenant number first)
+ *   npx tsx scripts/test-photos.mts <tenantId>      (text a photo to that tenant's number first)
  */
 import { execFileSync } from 'node:child_process';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
@@ -30,7 +30,8 @@ const inbound = (await twilio(`/2010-04-01/Accounts/${s.TWILIO_ACCOUNT_SID}/Mess
   .find((m: any) => m.direction === 'inbound' && Number(m.num_media) > 0);
 if (!inbound) throw new Error('no inbound message with a photo among the last 20; text one first');
 const media = (await twilio(inbound.subresource_uris.media)).media_list[0];
-const tenantId = process.argv[2] ?? 'wnk';
+const tenantId = process.argv[2];
+if (!tenantId) throw new Error('usage: npx tsx scripts/test-photos.mts <tenantId>');
 
 const stored = await storePhotos(tenantId, inbound.to, [{ messageSid: inbound.sid, mediaSid: media.sid, contentType: media.content_type }]);
 console.log(`stored       -> ${stored[0]!.key} (${stored[0]!.contentType})`);
