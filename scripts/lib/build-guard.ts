@@ -6,10 +6,17 @@
  * and never runs.
  */
 
-/** Paths whose change reaches the worker: its source and image, the contracts it bundles, and the stack that sets its environment. Tests and docs do not. */
+/**
+ * What the image's build context takes from outside the worker's package (the
+ * root .dockerignore names them): the workspace root and its lockfile, which
+ * decide every dependency the image installs, and the shared package's manifest.
+ */
+const IMAGE_CONTEXT = ['.dockerignore', 'package.json', 'package-lock.json', 'packages/shared/package.json'];
+
+/** Paths whose change reaches the worker: its source and image, what the image's build context takes, the contracts it bundles, and the stack that sets its environment. Tests and docs do not. */
 export function reachesTheWorker(path: string): boolean {
   if (path === 'packages/infrastructure/stacks/worker-stack.ts') return true;
-  if (path === '.dockerignore') return true;
+  if (IMAGE_CONTEXT.includes(path)) return true;
   if (path.startsWith('packages/shared/src/')) return true;
   if (!path.startsWith('packages/worker/')) return false;
   if (path.startsWith('packages/worker/test/')) return false;

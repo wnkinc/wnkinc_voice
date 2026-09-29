@@ -60,7 +60,10 @@ should live.
 - Every change that should reach the worker, code or configuration, is a new
   `BUILD_ID` in `packages/worker/src/version.ts`: a published Lambda version is
   immutable, so nothing changes under a running workflow, and rollback is one
-  Temporal command. CI enforces it (`scripts/check-build-id.mts`).
+  Temporal command. CI enforces it (`scripts/check-build-id.mts`), for the
+  worker's source and for everything the image's build context takes: the root
+  `package.json` and `package-lock.json` included, so a dependency bump is a
+  new build.
 - Changes land through a pull request. CI runs the gate on the PR (typecheck,
   tests, the build-id guard) and, on the merge to main, deploys every stack and
   runs the worker release (`.github/workflows/ci.yml`). Deploying by hand is
