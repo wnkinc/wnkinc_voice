@@ -64,7 +64,10 @@ export async function runAssistantLoop(input: LoopInput): Promise<LoopResult> {
   const count = (r: { tokens: number; inputTokens: number; outputTokens: number }) => {
     usage = { tokens: usage.tokens + r.tokens, inputTokens: usage.inputTokens + r.inputTokens, outputTokens: usage.outputTokens + r.outputTokens };
   };
-  let res = await model.callModel({ instructions: prompt, tools: defs, input: [...history, { role: 'user', content: input.content }] });
+  // The turn's items, all of them, every round: OpenAI holds nothing between calls, so each round is whole in
+  // its activity input. The model's output goes back as it came, reasoning included.
+  let items: unknown[] = [...history, { role: 'user', content: input.content }];
+  let res = await model.callModel({ instructions: prompt, tools: defs, input: items });
   count(res);
   let round = 0;
   while (res.calls.length > 0 && round < MAX_ROUNDS) {
@@ -78,7 +81,8 @@ export async function runAssistantLoop(input: LoopInput): Promise<LoopResult> {
       return { type: 'function_call_output', call_id: call.call_id, output };
     }));
     round += 1;
-    res = await model.callModel({ instructions: prompt, tools: defs, previousResponseId: res.responseId, input: outputs });
+    items = [...items, ...res.output, ...outputs];
+    res = await model.callModel({ instructions: prompt, tools: defs, input: items });
     count(res);
   }
   const gaveUp = res.calls.length > 0 || res.reply.trim().length === 0;

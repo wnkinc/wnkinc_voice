@@ -35,7 +35,18 @@ export const photoRef = (n: string): PhotoRef => ({ sk: photoRow(n).sk, key: pho
 export const photo = photoRef('1');
 export const draft = (revision: number, shown: number): DraftRow =>
   ({ tenantId: 'deck', sk: 'sms:+15550002222#facebook_post#t#1', status: 'pending', revision, shownRevision: shown, approveBy: 9e9, payload: { caption: 'Cedar deck, finished today.', media: [photo] } });
-export const answer = (reply: string, calls: ModelResult['calls'] = []): ModelResult => ({ responseId: 'r', calls, reply, tokens: 3, inputTokens: 2, outputTokens: 1 });
+/** A model answer shaped as the Responses API returns it: a reasoning item, then the calls, then the reply. */
+export const answer = (reply: string, calls: ModelResult['calls'] = []): ModelResult => ({
+  output: [
+    { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'enc' },
+    ...calls.map((c) => ({ type: 'function_call', id: `fc_${c.call_id}`, ...c })),
+    ...(reply ? [{ type: 'message', id: 'msg_1', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: reply }] }] : []),
+  ],
+  calls, reply, tokens: 3, inputTokens: 2, outputTokens: 1,
+});
+/** The tool results the loop handed the model on its nth call (1 = the second call). */
+export const toolOutputs = (f: Fakes, n = 1) =>
+  (f.callModel.mock.calls[n]?.[0].input as { type?: string; call_id: string; output: string }[]).filter((i) => i.type === 'function_call_output');
 
 export function fakes(): Fakes {
   return {

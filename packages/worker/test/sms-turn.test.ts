@@ -8,7 +8,7 @@
 import type { TestWorkflowEnvironment } from '@temporalio/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { smsTurn } from '../src/workflows/index.js';
-import { answer, draft, fakes, person, photoRef, photoRow, run as runWorkflow, tenant, type Fakes, testEnv } from './fakes.js';
+import { answer, draft, fakes, person, photoRef, photoRow, run as runWorkflow, tenant, toolOutputs, type Fakes, testEnv } from './fakes.js';
 
 const text = (body: string, extra: Record<string, string> = {}) => ({ sms: { From: '+15550002222', To: '+15550001111', AccountSid: 'AC1', MessageSid: `MM${Math.random()}`, Body: body, NumMedia: '0', ...extra } });
 
@@ -99,7 +99,7 @@ describe('the model', () => {
       .mockResolvedValueOnce(answer('Which photo?'));
     await run(f, text('post it'));
     expect(f.createDraft).not.toHaveBeenCalled();
-    const outputs = f.callModel.mock.calls[1]?.[0].input as { output: string }[];
+    const outputs = toolOutputs(f);
     expect(JSON.parse(outputs[0]!.output).error).toContain('no photo p4');
   }, 60_000);
 
@@ -118,7 +118,27 @@ describe('the model', () => {
     expect(f.createDraft).toHaveBeenCalledTimes(1);
     expect(f.createDraft).toHaveBeenCalledWith('deck', 'sms:+15550002222', 'First.', []);
     expect(f.reviseDraft).toHaveBeenCalledWith('deck', draft(1, 0).sk, 1, 'Second.', []);
-    expect((f.callModel.mock.calls[1]?.[0].input as { call_id: string }[]).map((o) => o.call_id)).toEqual(['c1', 'c2']);
+    expect(toolOutputs(f).map((o) => o.call_id)).toEqual(['c1', 'c2']);
+  }, 60_000);
+
+  it('is stateless: each round resends the whole turn, the model\'s own items (reasoning included) as they came', async () => {
+    const f = fakes();
+    f.loadHistory.mockResolvedValue([{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'noted' }]);
+    const search = { call_id: 'c1', name: 'HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', arguments: '{}' };
+    const note = { call_id: 'c2', name: 'HUBSPOT_CREATE_NOTE', arguments: '{}' };
+    const first = answer('', [search]);
+    const second = answer('', [note]);
+    f.callModel.mockResolvedValueOnce(first).mockResolvedValueOnce(second).mockResolvedValueOnce(answer('Done.'));
+    f.executeTool.mockResolvedValue({ successful: true, data: { ok: 1 } });
+    await run(f, text('find Sarah and note it'));
+    const inputs = f.callModel.mock.calls.map((c) => c[0].input);
+    const opening = [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'noted' }, { role: 'user', content: 'find Sarah and note it' }];
+    const out = (id: string) => ({ type: 'function_call_output', call_id: id, output: '{"ok":1}' });
+    expect(inputs[0]).toEqual(opening);
+    expect(inputs[1]).toEqual([...opening, ...first.output, out('c1')]);
+    expect(inputs[2]).toEqual([...opening, ...first.output, out('c1'), ...second.output, out('c2')]);
+    expect(inputs[1]).toContainEqual({ type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'enc' });
+    expect(f.callModel.mock.calls.every((c) => !('previousResponseId' in c[0]))).toBe(true);
   }, 60_000);
 
   it('a result over the bound keeps both ends, so an error or a total at the end still reaches the model', async () => {
@@ -128,7 +148,7 @@ describe('the model', () => {
       .mockResolvedValueOnce(answer('Found them.'));
     f.executeTool.mockResolvedValue({ successful: true, data: { results: 'x'.repeat(20_000), total: 4812 } });
     await run(f, text('everyone?'));
-    const output = (f.callModel.mock.calls[1]?.[0].input as { output: string }[])[0]!.output;
+    const output = toolOutputs(f)[0]!.output;
     expect(output.startsWith('{"results":"xxx')).toBe(true);
     expect(output.endsWith('"total":4812}')).toBe(true);
     expect(output).toMatch(/\.\.\.\[\d+ chars truncated\]\.\.\./);
@@ -142,7 +162,7 @@ describe('the model', () => {
       .mockResolvedValueOnce(answer('Done.'));
     expect(await run(f, text('publish it now'))).toBe('replied');
     expect(f.executeTool).not.toHaveBeenCalled();
-    const outputs = f.callModel.mock.calls[1]?.[0].input as { call_id: string; output: string }[];
+    const outputs = toolOutputs(f);
     expect(outputs.map((o) => o.output)).toEqual(['This tool is not available for this business.', 'This tool is not available for this business.']);
   }, 60_000);
 
@@ -154,7 +174,7 @@ describe('the model', () => {
     f.executeTool.mockResolvedValue({ successful: true, data: { total: 1, results: [{ id: '9', properties: { firstname: 'Sarah' } }] } });
     await run(f, text('who is Sarah?'));
     expect(f.executeTool).toHaveBeenCalledWith('deck', 'HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', { query: 'Sarah', limit: 5 }, '20260915_00');
-    const outputs = f.callModel.mock.calls[1]?.[0].input as { output: string }[];
+    const outputs = toolOutputs(f);
     expect(JSON.parse(outputs[0]!.output)).toEqual({ total: 1, results: [{ id: '9', properties: { firstname: 'Sarah' } }] });
     expect(f.callModel.mock.calls[0]?.[0].instructions).toContain('Added by My Assistant');
   }, 60_000);

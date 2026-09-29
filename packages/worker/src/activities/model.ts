@@ -1,4 +1,12 @@
-/** Calls to OpenAI's Responses API: the assistant's turn (rounds chain with previous_response_id, so a later round sends only the tool results), and the one-line descriptions of texted photos. */
+/**
+ * Calls to OpenAI's Responses API: the assistant's turn, and the one-line
+ * descriptions of texted photos. Stateless (store: false): OpenAI keeps no
+ * copy of a tenant's conversation or tool results beyond its abuse-monitoring
+ * logs, and a round needs nothing from OpenAI but the call. The loop resends
+ * the turn's items each round (billed the same as chaining, which bills the
+ * whole chain as input too), with the model's own output items untouched,
+ * reasoning (encrypted) included.
+ */
 import { ApplicationFailure } from '@temporalio/activity';
 import { MAX_OUTPUT_TOKENS } from '../rules/assistant.js';
 import { env, secret } from './config.js';
@@ -6,15 +14,21 @@ import { env, secret } from './config.js';
 export const OPENAI_API = 'https://api.openai.com/v1/';
 
 export interface ModelCall { call_id: string; name: string; arguments: string }
-export interface ModelResult { responseId: string; calls: ModelCall[]; reply: string; tokens: number; inputTokens: number; outputTokens: number }
+export interface ModelResult {
+  /** Everything the model returned (reasoning, function calls, messages), for the next round's input as it came. */
+  output: unknown[];
+  calls: ModelCall[];
+  reply: string;
+  tokens: number; inputTokens: number; outputTokens: number;
+}
 export interface ModelRequest {
   instructions: string;
   tools: unknown[];
+  /** The whole turn so far: history, the person's message, and every round's output and tool results. */
   input: unknown[];
-  previousResponseId?: string;
 }
 
-type ResponsesBody = { id: string; output?: { type: string; call_id?: string; name?: string; arguments?: string; content?: { type: string; text?: string }[] }[]; usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number } };
+type ResponsesBody = { output?: { type: string; call_id?: string; name?: string; arguments?: string; content?: { type: string; text?: string }[] }[]; usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number } };
 
 async function responses(body: Record<string, unknown>): Promise<ResponsesBody> {
   const key = (await secret(env('OPENAI_SECRET_ARN'))).OPENAI_API_KEY;
@@ -37,13 +51,12 @@ const textOf = (body: ResponsesBody) => (body.output ?? []).filter((o) => o.type
 
 export async function callModel(req: ModelRequest): Promise<ModelResult> {
   const body = await responses({
-    store: true, max_output_tokens: MAX_OUTPUT_TOKENS,
+    store: false, include: ['reasoning.encrypted_content'], max_output_tokens: MAX_OUTPUT_TOKENS,
     instructions: req.instructions, tools: req.tools, input: req.input,
-    ...(req.previousResponseId ? { previous_response_id: req.previousResponseId } : {}),
   });
   const output = body.output ?? [];
   return {
-    responseId: body.id,
+    output,
     calls: output.filter((o) => o.type === 'function_call').map((o) => ({ call_id: o.call_id!, name: o.name!, arguments: o.arguments ?? '{}' })),
     reply: textOf(body),
     tokens: body.usage?.total_tokens ?? 0, inputTokens: body.usage?.input_tokens ?? 0, outputTokens: body.usage?.output_tokens ?? 0,
