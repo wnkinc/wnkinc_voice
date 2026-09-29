@@ -20,15 +20,19 @@ export interface ModelResult {
   calls: ModelCall[];
   reply: string;
   tokens: number; inputTokens: number; outputTokens: number;
+  /** The input tokens OpenAI read from its prompt cache, a part of inputTokens. */
+  cachedTokens: number;
 }
 export interface ModelRequest {
   instructions: string;
   tools: unknown[];
   /** The whole turn so far: history, the person's message, and every round's output and tool results. */
   input: unknown[];
+  /** Routes requests that share a prefix to the cache that holds it: the tenant id, since the tools and the prompt are the tenant's. */
+  cacheKey: string;
 }
 
-type ResponsesBody = { output?: { type: string; call_id?: string; name?: string; arguments?: string; content?: { type: string; text?: string }[] }[]; usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number } };
+type ResponsesBody = { output?: { type: string; call_id?: string; name?: string; arguments?: string; content?: { type: string; text?: string }[] }[]; usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number } } };
 
 async function responses(body: Record<string, unknown>): Promise<ResponsesBody> {
   const key = (await secret(env('OPENAI_SECRET_ARN'))).OPENAI_API_KEY;
@@ -52,7 +56,7 @@ const textOf = (body: ResponsesBody) => (body.output ?? []).filter((o) => o.type
 export async function callModel(req: ModelRequest): Promise<ModelResult> {
   const body = await responses({
     store: false, include: ['reasoning.encrypted_content'], max_output_tokens: MAX_OUTPUT_TOKENS,
-    instructions: req.instructions, tools: req.tools, input: req.input,
+    instructions: req.instructions, tools: req.tools, input: req.input, prompt_cache_key: req.cacheKey,
   });
   const output = body.output ?? [];
   return {
@@ -60,6 +64,7 @@ export async function callModel(req: ModelRequest): Promise<ModelResult> {
     calls: output.filter((o) => o.type === 'function_call').map((o) => ({ call_id: o.call_id!, name: o.name!, arguments: o.arguments ?? '{}' })),
     reply: textOf(body),
     tokens: body.usage?.total_tokens ?? 0, inputTokens: body.usage?.input_tokens ?? 0, outputTokens: body.usage?.output_tokens ?? 0,
+    cachedTokens: body.usage?.input_tokens_details?.cached_tokens ?? 0,
   };
 }
 

@@ -56,11 +56,11 @@ export async function telegramTurn(update: TelegramUpdate): Promise<TelegramTurn
   const slugs = Object.values(tenant.assistant?.composioTools ?? {}).flat();
   const composioTools = slugs.length > 0 ? await reads.composioToolDefs(slugs) : [];
   const turn = await runAssistantLoop({
-    tenantId, allowed: tenant.assistant?.tools ?? [], text: m.text, content: m.text, actorId, sessionId, composioTools,
-    prompt: systemPrompt(tenant, person, 'chat', '', new Date().toISOString()),
+    tenantId, allowed: tenant.assistant?.tools ?? [], text: m.text, content: m.text, actorId, sessionId, composioTools, now: new Date().toISOString(),
+    prompt: systemPrompt(tenant, person, 'chat'),
   });
   await replies.sendTelegram(chatId, turn.reply);
   await orElse(bestEffort.saveTurn(actorId, sessionId, m.text, turn.reply), undefined);
-  await reads.recordUsage(tenantId, `telegram:${chatId}`, turn.tokens, turn.inputTokens, turn.outputTokens);
+  await reads.recordUsage(tenantId, `telegram:${chatId}`, turn.tokens, turn.inputTokens, turn.outputTokens, turn.cachedTokens);
   return 'replied';
 }

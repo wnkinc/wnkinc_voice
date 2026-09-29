@@ -99,8 +99,8 @@ export async function smsTurn({ sms }: SmsTurnInput): Promise<SmsTurnOutcome> {
   const composioTools = slugs.length > 0 ? await reads.composioToolDefs(slugs) : [];
   const tz = tenant.business.timezone ?? 'America/Los_Angeles';
   const turn = await runAssistantLoop({
-    tenantId, allowed, text, actorId, sessionId, approver, photos, composioTools,
-    prompt: systemPrompt(tenant, person, 'sms', fbOn ? facebookPrompt(draft, photos, tz, now) : '', now),
+    tenantId, allowed, text, actorId, sessionId, approver, photos, composioTools, now,
+    prompt: systemPrompt(tenant, person, 'sms', fbOn ? facebookPrompt(draft, photos, tz, now) : ''),
     content: modelContent(text, imageLinks),
   });
   const reply = turn.reply;
@@ -118,7 +118,7 @@ export async function smsTurn({ sms }: SmsTurnInput): Promise<SmsTurnOutcome> {
     await send(reply);
   }
   await orElse(bestEffort.saveTurn(actorId, sessionId, text, reply), undefined);
-  await reads.recordUsage(tenantId, approver, turn.tokens + described.tokens, turn.inputTokens + described.inputTokens, turn.outputTokens + described.outputTokens);
+  await reads.recordUsage(tenantId, approver, turn.tokens + described.tokens, turn.inputTokens + described.inputTokens, turn.outputTokens + described.outputTokens, turn.cachedTokens);
   return 'replied';
 }
 

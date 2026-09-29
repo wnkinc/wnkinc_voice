@@ -14,7 +14,7 @@ import { proxyActivities } from '@temporalio/workflow';
 import type * as activities from '../../activities/index.js';
 import type { ComposioToolSchema } from '@wnk/shared/composio-api';
 import type { PhotoRow } from '@wnk/shared/contracts';
-import { ASSISTANT_TOOLS, FALLBACK_REPLY, MAX_ROUNDS, boundedResult, instructions, toolDefs } from '../../rules/assistant.js';
+import { ASSISTANT_TOOLS, FALLBACK_REPLY, MAX_ROUNDS, boundedResult, instructions, timeNote, toolDefs } from '../../rules/assistant.js';
 import { MAX_CAPTION_CHARS, draftedNote, resolvePhotos } from '../../rules/facebook.js';
 import { orElse } from '../common.js';
 
@@ -37,6 +37,8 @@ export interface LoopInput {
   content: string | unknown[];
   actorId: string;
   sessionId: string;
+  /** The workflow's clock, told to the model ahead of the person's message. Absent: the model is not told the time. */
+  now?: string;
   /** For the ledger tools: who may approve, and the photos the model was shown (labels resolve against this list, in this order). Absent on channels without them. */
   approver?: string;
   photos?: PhotoRow[];
@@ -51,6 +53,8 @@ export interface LoopResult {
   tokens: number;
   inputTokens: number;
   outputTokens: number;
+  /** Of inputTokens, what OpenAI read from its prompt cache. */
+  cachedTokens: number;
 }
 
 export async function runAssistantLoop(input: LoopInput): Promise<LoopResult> {
@@ -60,14 +64,15 @@ export async function runAssistantLoop(input: LoopInput): Promise<LoopResult> {
   const native = input.composioTools ?? [];
   const defs = [...toolDefs(input.allowed), ...native.map((t) => ({ type: 'function', name: t.slug, description: t.description, parameters: t.parameters, strict: false }))];
 
-  let usage = { tokens: 0, inputTokens: 0, outputTokens: 0 };
-  const count = (r: { tokens: number; inputTokens: number; outputTokens: number }) => {
-    usage = { tokens: usage.tokens + r.tokens, inputTokens: usage.inputTokens + r.inputTokens, outputTokens: usage.outputTokens + r.outputTokens };
+  let usage = { tokens: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
+  const count = (r: typeof usage) => {
+    usage = { tokens: usage.tokens + r.tokens, inputTokens: usage.inputTokens + r.inputTokens, outputTokens: usage.outputTokens + r.outputTokens, cachedTokens: usage.cachedTokens + r.cachedTokens };
   };
+  const ask = (items: unknown[]) => model.callModel({ instructions: prompt, tools: defs, input: items, cacheKey: input.tenantId });
   // The turn's items, all of them, every round: OpenAI holds nothing between calls, so each round is whole in
   // its activity input. The model's output goes back as it came, reasoning included.
-  let items: unknown[] = [...history, { role: 'user', content: input.content }];
-  let res = await model.callModel({ instructions: prompt, tools: defs, input: items });
+  let items: unknown[] = [...history, ...(input.now ? [timeNote(input.now)] : []), { role: 'user', content: input.content }];
+  let res = await ask(items);
   count(res);
   let round = 0;
   while (res.calls.length > 0 && round < MAX_ROUNDS) {
@@ -82,7 +87,7 @@ export async function runAssistantLoop(input: LoopInput): Promise<LoopResult> {
     }));
     round += 1;
     items = [...items, ...res.output, ...outputs];
-    res = await model.callModel({ instructions: prompt, tools: defs, input: items });
+    res = await ask(items);
     count(res);
   }
   const gaveUp = res.calls.length > 0 || res.reply.trim().length === 0;

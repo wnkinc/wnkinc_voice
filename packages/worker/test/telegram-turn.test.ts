@@ -17,7 +17,7 @@ describe('telegram turn', () => {
     expect(f.lookupPerson).toHaveBeenCalledWith('telegram:777');
     expect(f.sendTelegram).toHaveBeenCalledWith(777, 'Sure.');
     expect(f.saveTurn).toHaveBeenCalledWith('deck_telegram_777', expect.stringMatching(/^telegram-chat-777-\d{8}$/), 'who is Sarah?', 'Sure.');
-    expect(f.recordUsage).toHaveBeenCalledWith('deck', 'telegram:777', 3, 2, 1);
+    expect(f.recordUsage).toHaveBeenCalledWith('deck', 'telegram:777', 3, 2, 1, 1);
     expect((f.callModel.mock.calls[0]?.[0].tools as { name: string }[]).map((t) => t.name)).toEqual(['draft_facebook_post', 'cancel_facebook_draft', 'HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', 'HUBSPOT_CREATE_NOTE']);
     expect(f.callModel.mock.calls[0]?.[0].instructions).toContain('This is a chat');
   }, 60_000);
@@ -68,7 +68,8 @@ describe('Composio tools on the row', () => {
     const req = f.callModel.mock.calls[0]![0];
     expect((req.tools as { name: string }[]).map((t) => t.name)).toEqual(['GOOGLECALENDAR_FIND_EVENT']);
     expect((req.tools as { description?: string }[])[0]!.description).toBe('GOOGLECALENDAR_FIND_EVENT does a thing');
-    expect(req.instructions).toMatch(/The time now is \d{4}-\d{2}-\d{2}T.*America\/Chicago/);
+    expect(req.instructions).toContain('America/Chicago timezone');
+    expect(req.input.at(-2)).toEqual({ role: 'developer', content: expect.stringMatching(/^The time now is \d{4}-\d{2}-\d{2}T/) });
     expect(f.executeTool).toHaveBeenCalledWith('deck', 'GOOGLECALENDAR_FIND_EVENT', { query: 'Thursday' }, '20260915_00');
     const outputs = toolOutputs(f);
     expect(JSON.parse(outputs[0]!.output)).toEqual({ event_data: { event_data: [] } });

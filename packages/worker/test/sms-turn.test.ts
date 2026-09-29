@@ -88,7 +88,7 @@ describe('the model', () => {
     expect(sent(f)).toHaveLength(1);
     expect(sent(f)[0]).toContain('Drafted it.\n\nDraft for the Facebook Page Deck Co:\n\nCedar deck, finished today.\n\nWith 2 photos: photo 2; photo 3.');
     expect(f.markShown).toHaveBeenCalledWith('deck', draft(1, 0).sk, 1);
-    expect(f.recordUsage).toHaveBeenCalledWith('deck', 'sms:+15550002222', 6, 4, 2);
+    expect(f.recordUsage).toHaveBeenCalledWith('deck', 'sms:+15550002222', 6, 4, 2, 2);
   }, 60_000);
 
   it('a label that is not on the list is refused, and no draft is written', async () => {
@@ -132,13 +132,26 @@ describe('the model', () => {
     f.executeTool.mockResolvedValue({ successful: true, data: { ok: 1 } });
     await run(f, text('find Sarah and note it'));
     const inputs = f.callModel.mock.calls.map((c) => c[0].input);
-    const opening = [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'noted' }, { role: 'user', content: 'find Sarah and note it' }];
+    const opening = [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'noted' }, { role: 'developer', content: expect.stringMatching(/^The time now is \d{4}-\d{2}-\d{2}T[\d:.]+Z\.$/) }, { role: 'user', content: 'find Sarah and note it' }];
     const out = (id: string) => ({ type: 'function_call_output', call_id: id, output: '{"ok":1}' });
     expect(inputs[0]).toEqual(opening);
     expect(inputs[1]).toEqual([...opening, ...first.output, out('c1')]);
     expect(inputs[2]).toEqual([...opening, ...first.output, out('c1'), ...second.output, out('c2')]);
     expect(inputs[1]).toContainEqual({ type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'enc' });
     expect(f.callModel.mock.calls.every((c) => !('previousResponseId' in c[0]))).toBe(true);
+  }, 60_000);
+
+  it('keeps the prompt the same from turn to turn: the time is an item of the input, and the cache is keyed by the tenant', async () => {
+    const f = fakes();
+    await run(f, text('hello'));
+    await new Promise((r) => setTimeout(r, 5));
+    await run(f, text('hello again'));
+    const [one, two] = f.callModel.mock.calls.map((c) => c[0]);
+    expect(one!.instructions).toBe(two!.instructions);
+    expect(one!.instructions).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+    expect(one!.instructions).toContain('America/Los_Angeles timezone');
+    expect(one!.tools).toEqual(two!.tools);
+    expect([one!.cacheKey, two!.cacheKey]).toEqual(['deck', 'deck']);
   }, 60_000);
 
   it('a result over the bound keeps both ends, so an error or a total at the end still reaches the model', async () => {
@@ -229,7 +242,7 @@ describe('who may text', () => {
     const content = f.callModel.mock.calls[0]?.[0].input.at(-1) as { content: unknown[] };
     expect(content.content).toEqual([{ type: 'input_text', text: 'Sent 1 photos with no text.' }, { type: 'input_image', image_url: `https://link/${rows[0]!.key}` }]);
     // The vision call's tokens are metered with the turn's.
-    expect(f.recordUsage).toHaveBeenCalledWith('deck', 'sms:+15550002222', 12, 10, 2);
+    expect(f.recordUsage).toHaveBeenCalledWith('deck', 'sms:+15550002222', 12, 10, 2, 1);
     expect(await run(fakes(), text(' '))).toBe('ignored');
   }, 60_000);
 

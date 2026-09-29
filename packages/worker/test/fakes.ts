@@ -42,7 +42,7 @@ export const answer = (reply: string, calls: ModelResult['calls'] = []): ModelRe
     ...calls.map((c) => ({ type: 'function_call', id: `fc_${c.call_id}`, ...c })),
     ...(reply ? [{ type: 'message', id: 'msg_1', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: reply }] }] : []),
   ],
-  calls, reply, tokens: 3, inputTokens: 2, outputTokens: 1,
+  calls, reply, tokens: 3, inputTokens: 2, outputTokens: 1, cachedTokens: 1,
 });
 /** The tool results the loop handed the model on its nth call (1 = the second call). */
 export const toolOutputs = (f: Fakes, n = 1) =>
