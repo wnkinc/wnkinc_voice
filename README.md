@@ -119,9 +119,10 @@ effect (a table, a secret, the model, Composio, Twilio, the Bot API) is an activ
 tenant id as an argument. The model makes every judgment: which tool, what arguments, when to
 stop. The steps between its decisions are the seam the platform controls: the tool must be on the
 tenant row's `assistant.tools` list, every Composio call names the tenant, tool results are
-bounded, rounds are capped at six, and each call is an activity in the workflow history. Rounds
-inside one turn chain with OpenAI's `previous_response_id`, so a later round sends only the tool
-results. A SaaS the assistant reaches is Composio's own tool: the row lists the toolkit and its tool
+bounded, rounds are capped at six, and each call is an activity in the workflow history. The
+model calls are stateless (`store: false`): each round resends the turn's items, the model's own
+output (encrypted reasoning included) as it came, so OpenAI keeps no copy of a tenant's
+conversation and a round is whole in its activity input. A SaaS the assistant reaches is Composio's own tool: the row lists the toolkit and its tool
 slugs under `assistant.composioTools`, the worker reads Composio's description and schema for each and
 shows them to the model as function tools, and each call runs as the same activity, as the tenant, the
 newest release pinned, every call in the workflow history. Guidance a schema does not give (a phone

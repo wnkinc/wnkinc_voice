@@ -2,7 +2,7 @@
 import type { TestWorkflowEnvironment } from '@temporalio/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { telegramTurn } from '../src/workflows/index.js';
-import { answer, fakes, person, run as runWorkflow, tenant, type Fakes, testEnv } from './fakes.js';
+import { answer, fakes, person, run as runWorkflow, tenant, toolOutputs, type Fakes, testEnv } from './fakes.js';
 
 const update = (text: string, extra: Record<string, unknown> = {}) => ({ update_id: Math.floor(Math.random() * 1e9), message: { text, from: { id: 777 }, chat: { id: 777, type: 'private' }, ...extra } });
 let env: TestWorkflowEnvironment;
@@ -24,10 +24,10 @@ describe('telegram turn', () => {
 
   it('a ledger tool asked for on Telegram is refused: no approver on this channel', async () => {
     const f = fakes();
-    f.callModel.mockResolvedValueOnce({ responseId: 'r', calls: [{ call_id: 'c', name: 'draft_facebook_post', arguments: '{"caption":"x","photos":"none"}' }], reply: '', tokens: 1, inputTokens: 1, outputTokens: 0 }).mockResolvedValueOnce({ responseId: 'r2', calls: [], reply: 'Ok.', tokens: 1, inputTokens: 1, outputTokens: 0 });
+    f.callModel.mockResolvedValueOnce(answer('', [{ call_id: 'c', name: 'draft_facebook_post', arguments: '{"caption":"x","photos":"none"}' }])).mockResolvedValueOnce(answer('Ok.'));
     await run(f, update('post it'));
     expect(f.createDraft).not.toHaveBeenCalled();
-    const outputs = f.callModel.mock.calls[1]?.[0].input as { output: string }[];
+    const outputs = toolOutputs(f);
     expect(outputs[0]?.output).toBe('This tool is not available for this business.');
   }, 60_000);
 
@@ -70,7 +70,7 @@ describe('Composio tools on the row', () => {
     expect((req.tools as { description?: string }[])[0]!.description).toBe('GOOGLECALENDAR_FIND_EVENT does a thing');
     expect(req.instructions).toMatch(/The time now is \d{4}-\d{2}-\d{2}T.*America\/Chicago/);
     expect(f.executeTool).toHaveBeenCalledWith('deck', 'GOOGLECALENDAR_FIND_EVENT', { query: 'Thursday' }, '20260915_00');
-    const outputs = f.callModel.mock.calls[1]![0].input as { output: string }[];
+    const outputs = toolOutputs(f);
     expect(JSON.parse(outputs[0]!.output)).toEqual({ event_data: { event_data: [] } });
   });
   it('refuses a Composio tool the row does not list, and fetches no definitions when it lists none', async () => {
@@ -80,7 +80,7 @@ describe('Composio tools on the row', () => {
     await runWorkflow(env, f, telegramTurn, [update('delete my 2pm')]);
     expect(f.composioToolDefs).not.toHaveBeenCalled();
     expect(f.executeTool).not.toHaveBeenCalled();
-    const outputs = f.callModel.mock.calls[1]![0].input as { output: string }[];
+    const outputs = toolOutputs(f);
     expect(outputs[0]!.output).toContain('not available');
   });
 });
