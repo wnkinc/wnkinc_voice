@@ -9,5 +9,5 @@ import type { TenantAutomations } from '@wnk/shared/contracts';
 
 export const wnk: TenantAutomations = {
   tenantId: 'wnk',
-  automations: [{ workflow: 'leadEmail' }, { workflow: 'crmLead' }, { workflow: 'crmCall' }, { workflow: 'ownerAlert' }],
+  automations: [{ workflow: 'leadEmail' }, { workflow: 'crmLead' }, { workflow: 'crmCall' }, { workflow: 'ownerAlert' }, { workflow: 'bookAppointment' }],
 };

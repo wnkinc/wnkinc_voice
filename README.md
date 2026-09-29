@@ -225,12 +225,13 @@ See `TenantConfigSchema` in `packages/shared/src/types.ts`. Key fields:
 | `active` | `false` → calls rejected with SIP 603 |
 | `business` | `name`, `description`, `services`, `hours`, `timezone`: the facts every service draws on (receptionist prompt, assistant prompt, lead email, CRM notes) |
 | `people` | The tenant's own people with their channel ids: `telegramId`, `phone` (E.164, for SMS), or both. `notify_owner` alerts go to the person with role `owner` and a `telegramId`; the assistant answers anyone listed, on whichever channel they have. |
-| `receptionist.session` | Passed to OpenAI Realtime under these same keys: `model` (default `gpt-realtime-2.1`), `audio.output.voice` (default `marin`), `tools` (subset of `record_lead`, `notify_owner`, `end_call`). Levers not yet built are listed in `packages/receptionist/README.md` |
+| `receptionist.session` | Passed to OpenAI Realtime under these same keys: `model` (default `gpt-realtime-2.1`), `audio.output.voice` (default `marin`), `tools` (subset of `record_lead`, `notify_owner`, `end_call`, `check_availability`, `book_appointment`; the last two need `calendar.enabled`). Levers not yet built are listed in `packages/receptionist/README.md` |
 | `receptionist.instructions` | What the platform composes into the prompt alongside `business`: `agentName` (default `Alex`), `extra` (tenant-specific rules) |
 | `receptionist.greeting` | Spoken verbatim on connect, through a separate response request |
 | `receptionist.maxCallSeconds` (default 600, max 840) | Ours, not OpenAI's: the agent is asked to wrap up, then the call is hung up |
 | `crm` | `{ "type": "hubspot", "via": "composio" }` enables caller recognition, CRM sync, and the assistant's CRM tools. The owner consents once (`scripts/connect-composio.mts <id> hubspot`); the token lives in Composio's vault under the tenant id. |
 | `emailResponder` | `{ enabled }`: owner follow-up email per lead, from the owner's Gmail through Composio (`scripts/connect-composio.mts <id>`). Default off; the workflow refuses a tenant whose flag is off. |
+| `calendar` | `{ enabled, calendarId, slotMinutes, horizonDays, open: { start, end, days } }`: appointments the receptionist books on the owner's Google Calendar (`scripts/connect-composio.mts <id> googlecalendar`). During the call it reads free/busy only (busy intervals, no event details) and offers the open slots on the grid inside `open`; the booking is an event the `bookAppointment` workflow handles. Default off. |
 | `assistant` | `{ enabled, composioTools, tools }`: the chat assistant for the tenant's people. `composioTools` lists the Composio toolkits it reaches and their tool slugs (`hubspot` needs the HubSpot consent, `googlecalendar` its own); `tools` names the platform's own rule-carrying tools (the Facebook draft and cancel). Both empty means it answers from the prompt and memory alone. |
 | `browser` | `{ enabled, contextId }`: the tenant's saved browser in Browserbase (cookies, logins). The browser-login workflow creates the context on the owner's first `/login` and writes it to the row; copy it into the file when the reply says so, or a re-seed starts a fresh browser. |
 
@@ -246,6 +247,7 @@ that starts it. A tenant file lists the ones it runs:
 | `crmCall` | `call.ended` | Transcript note on the HubSpot contact, if the caller is already a contact. The transcript is read from the call row, not the event |
 | `leadEmail` | `lead.recorded` | Email to the owner from the owner's own Gmail through Composio, carrying the CRM contact, its last note, and caller memory when they exist |
 | `ownerAlert` | `owner.notify` | The receptionist's urgent alert, delivered to the row's owner on Telegram |
+| `bookAppointment` | `appointment.requested` | The slot the caller chose, checked against free/busy once more, created on the tenant's calendar (one attempt, no attendees), and confirmed to the caller by text from the business number, by email too when they asked. A slot taken since the call texts the caller and tells the owner instead |
 
 `packages/infrastructure/stacks/tenant-stack.ts` turns the list into one stack per tenant
 (`wnk-dev-tenant-<id>`): for each entry a rule matching only events carrying that tenant's id, which

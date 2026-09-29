@@ -57,15 +57,15 @@ export const telegram: APIGatewayProxyHandlerV2 = async (event) => {
 };
 
 /** What a tenant stack's rule hands over: the automation to run and the event, plus that tenant's options. */
-interface AutomationStart { workflow: string; options?: Record<string, unknown>; detail: Record<string, unknown> & { tenantId?: string; callId?: string; lead?: { leadId?: string } }; id?: string }
+interface AutomationStart { workflow: string; options?: Record<string, unknown>; detail: Record<string, unknown> & { tenantId?: string; callId?: string; lead?: { leadId?: string }; appointment?: { appointmentId?: string } }; id?: string }
 
 export const automation = async (event: AutomationStart): Promise<void> => {
   const name = event.workflow;
   if (!isAutomation(name)) throw new Error(`not an automation: ${name}`);
   const d = event.detail;
   if (!d?.tenantId) throw new Error('the event names no tenant');
-  // Domain identity as the workflow id: a lead's automations by the lead, a call's by the call; an alert has none, so every delivery is its own.
-  const key = d.lead?.leadId ?? (name === 'ownerAlert' ? `${d.callId}-${event.id ?? Date.now()}` : d.callId);
+  // Domain identity as the workflow id: a lead's automations by the lead, a booking's by the appointment, a call's by the call; an alert has none, so every delivery is its own.
+  const key = d.lead?.leadId ?? d.appointment?.appointmentId ?? (name === 'ownerAlert' ? `${d.callId}-${event.id ?? Date.now()}` : d.callId);
   client ??= connect().catch((err: unknown) => { client = undefined; throw err; });
   const c = await client;
   try {

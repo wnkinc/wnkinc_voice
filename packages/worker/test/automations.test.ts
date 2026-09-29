@@ -1,8 +1,8 @@
 /** The tenant automations through a real Worker with recorded fakes: the flag first, the once-marker, the side effects in order, the mark after. */
 import type { TestWorkflowEnvironment } from '@temporalio/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { CallEnded, LeadRecorded, OwnerNotify, TenantRow } from '@wnk/shared/contracts';
-import { callEnded, crmCall, crmLead, leadEmail, ownerAlert } from '../src/workflows/index.js';
+import type { AppointmentRequested, CallEnded, LeadRecorded, OwnerNotify, TenantRow } from '@wnk/shared/contracts';
+import { bookAppointment, callEnded, crmCall, crmLead, leadEmail, ownerAlert } from '../src/workflows/index.js';
 import { failure, fakes, run as runWorkflow, tenant, type Fakes, testEnv } from './fakes.js';
 
 const crmTenant: TenantRow = { ...tenant, crm: { type: 'hubspot', via: 'composio' }, emailResponder: { enabled: true }, people: [{ name: 'Meg', role: 'owner', telegramId: 777 }] };
@@ -150,6 +150,64 @@ describe('owner alert', () => {
     f.lookupTenant.mockResolvedValue({ ...crmTenant, people: [{ name: 'Sam', role: 'employee' }] });
     expect((await failure(runWorkflow(env, f, ownerAlert, [notify]))).type).toBe('NoOwnerChannel');
     expect(f.sendTelegram).not.toHaveBeenCalled();
+  }, 60_000);
+});
+
+describe('book appointment', () => {
+  const calTenant: TenantRow = { ...crmTenant, calendar: { enabled: true, calendarId: 'primary', slotMinutes: 30, horizonDays: 30, open: { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] } } };
+  const booking: AppointmentRequested = { tenantId: 'deck', tenantPhoneNumber: '+15550001111', callId: 'call-1', appointment: {
+    tenantId: 'deck', appointmentId: 'appt-1', callId: 'call-1', createdAt: '2026-09-28T15:10:00.000Z', callerName: 'Jordan Rivera', phone: '+15555550155', reason: 'a deck estimate',
+    startsAt: '2026-10-01T21:00:00.000Z', endsAt: '2026-10-01T21:30:00.000Z', local: '2026-10-01T14:00', timezone: 'America/Los_Angeles', durationMinutes: 30,
+  } };
+  const withCal = () => { const f = fakes(); f.lookupTenant.mockResolvedValue(calTenant); f.readCall.mockResolvedValue({ done: false, transcript: [] }); return f; };
+
+  it('checks the slot again, creates the event once with no attendees, marks, and texts the caller from the business number', async () => {
+    const f = withCal();
+    f.executeTool.mockResolvedValueOnce({ successful: true, data: { calendars: { primary: { busy: [] } } } }).mockResolvedValueOnce({ successful: true, data: { id: 'evt1' } });
+    expect(await runWorkflow(env, f, bookAppointment, [booking])).toBe('done');
+    expect(slugs(f)).toEqual(['GOOGLECALENDAR_FREE_BUSY_QUERY', 'GOOGLECALENDAR_CREATE_EVENT']);
+    expect(f.executeTool.mock.calls[0]?.slice(2)).toEqual([{ timeMin: '2026-10-01T21:00:00.000Z', timeMax: '2026-10-01T21:30:00.000Z', items: [{ id: 'primary' }] }, '20260915_00']);
+    const [, , args, version] = f.executeTool.mock.calls[1]!;
+    expect(version).toBe('20260915_00');
+    expect(args).toMatchObject({ calendar_id: 'primary', summary: 'Jordan Rivera - a deck estimate', start_datetime: '2026-10-01T14:00:00', timezone: 'America/Los_Angeles', event_duration_hour: 0, event_duration_minutes: 30 });
+    expect(args).not.toHaveProperty('attendees');
+    expect(String((args as { description: string }).description)).toContain('Phone: +15555550155');
+    expect(f.markDone).toHaveBeenCalledWith('call-1', 'done:calendar:appointment:appt-1', true);
+    expect(f.sendText).toHaveBeenCalledWith(undefined, '+15550001111', '+15555550155', "Hi Jordan, this is Deck Co. You're booked for Thursday, October 1 at 2:00 PM. To change it, reply here or call +15550001111.");
+  }, 60_000);
+
+  it('a slot taken since the call: no event, the caller and the owner told, marked as handled', async () => {
+    const f = withCal();
+    f.executeTool.mockResolvedValueOnce({ successful: true, data: { calendars: { primary: { busy: [{ start: '2026-10-01T21:00:00Z', end: '2026-10-01T22:00:00Z' }] } } } });
+    expect(await runWorkflow(env, f, bookAppointment, [booking])).toBe('conflict');
+    expect(slugs(f)).toEqual(['GOOGLECALENDAR_FREE_BUSY_QUERY']);
+    expect(f.sendText.mock.calls[0]?.[3]).toContain('the Thursday, October 1 at 2:00 PM slot was taken just before we could hold it');
+    expect(f.sendTelegram.mock.calls[0]?.[1]).toContain('Booking conflict (Deck Co): Jordan Rivera asked for Thursday, October 1 at 2:00 PM');
+    expect(f.markDone).toHaveBeenCalledWith('call-1', 'done:calendar:appointment:appt-1');
+  }, 60_000);
+
+  it('skips a tenant without the calendar and a booking already made; a rejected create is one attempt and marks nothing', async () => {
+    const f = fakes();
+    f.readCall.mockResolvedValue({ done: false, transcript: [] });
+    expect(await runWorkflow(env, f, bookAppointment, [booking])).toBe('skipped');
+    const g = withCal();
+    g.readCall.mockResolvedValue({ done: true, transcript: [] });
+    expect(await runWorkflow(env, g, bookAppointment, [booking])).toBe('skipped');
+    expect(g.executeTool).not.toHaveBeenCalled();
+    const h = withCal();
+    h.executeTool.mockResolvedValueOnce({ successful: true, data: { calendars: { primary: { busy: [] } } } }).mockResolvedValue({ successful: false, error: 'quota' });
+    expect((await failure(runWorkflow(env, h, bookAppointment, [booking]))).type).toBe('CreateRejected');
+    expect(slugs(h).filter((s) => s === 'GOOGLECALENDAR_CREATE_EVENT')).toHaveLength(1);
+    expect(h.markDone).not.toHaveBeenCalled();
+    expect(h.sendText).not.toHaveBeenCalled();
+  }, 60_000);
+
+  it('emails the caller too when they asked and the tenant\'s Gmail is consented; the email failing costs only the email', async () => {
+    const f = withCal();
+    f.executeTool.mockResolvedValueOnce({ successful: true, data: { calendars: { primary: { busy: [] } } } }).mockResolvedValueOnce({ successful: true, data: { id: 'evt1' } }).mockRejectedValue(new Error('gmail down'));
+    expect(await runWorkflow(env, f, bookAppointment, [{ ...booking, appointment: { ...booking.appointment, email: 'jordan@example.com' } }])).toBe('done');
+    expect(slugs(f).filter((s) => s === 'GMAIL_SEND_EMAIL')).toHaveLength(2);
+    expect(f.executeTool.mock.calls[2]?.[2]).toMatchObject({ recipient_email: 'jordan@example.com', subject: 'Your appointment with Deck Co: Thursday, October 1 at 2:00 PM' });
   }, 60_000);
 });
 

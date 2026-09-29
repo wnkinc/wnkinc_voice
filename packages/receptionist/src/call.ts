@@ -1,5 +1,5 @@
 import { OpenAIRealtimeSIP, RealtimeSession } from '@openai/agents/realtime';
-import { buildAgent, greeting, sessionOptions, type CallContext } from './agent.js';
+import { buildAgent, greeting, sessionOptions, type CalendarReads, type CallContext } from './agent.js';
 import { type Logger, type OpenAISecrets } from '@wnk/shared';
 import { createOpenAI } from './openai.js';
 import type { EventPublisher } from '@wnk/shared';
@@ -11,6 +11,8 @@ export interface CallDeps {
   store: Store;
   events: EventPublisher;
   log: Logger;
+  /** Free/busy for the booking tools; absent, the tools answer that booking is unavailable. */
+  calendar?: CalendarReads;
 }
 
 export interface CallOutcome {
@@ -75,6 +77,7 @@ export async function runCall(job: SessionJob, deps: CallDeps, opts: { deadlineM
     store: deps.store,
     events: deps.events,
     log,
+    calendar: deps.calendar,
     requestHangup: () => { hangupAfterNextResponse = true; timer(TOOL_HANGUP_FALLBACK_MS, () => armHangup('end_call_fallback')); },
   };
 

@@ -6,13 +6,28 @@
  */
 import type { Context, SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { runCall, type CallDeps, type CallOutcome } from './call.js';
-import { createLogger, getOpenAISecrets, type Logger } from '@wnk/shared';
+import type { CalendarReads } from './agent.js';
+import { CALENDAR_TOOLS, composioApi, createLogger, getOpenAISecrets, secretValue, type Busy, type Logger } from '@wnk/shared';
 import { eventBridgePublisher } from '@wnk/shared';
 import { dynamoStore } from '@wnk/shared';
 import type { SessionJob } from '@wnk/shared';
 
 /** Wrap up this long before Lambda would kill the invocation mid-call. */
 const LAMBDA_DEADLINE_MARGIN_MS = 15_000;
+/** A free/busy read during a call: past this the tool answers that booking is unavailable rather than leave the caller in silence. */
+const FREE_BUSY_BUDGET_MS = 4_000;
+
+/** Free/busy through Composio's tool as the tenant, pinned, under a deadline: busy intervals only, which is all the endpoint carries. */
+export function calendarReads(secretArn: () => string): CalendarReads {
+  const composio = composioApi(() => secretValue(secretArn(), 'COMPOSIO_API_KEY'));
+  return {
+    async busy(tenantId, calendarId, timeMin, timeMax) {
+      const r = await composio.executeTool(tenantId, CALENDAR_TOOLS.freeBusy.slug, { timeMin, timeMax, items: [{ id: calendarId }] }, { version: CALENDAR_TOOLS.freeBusy.version, signal: AbortSignal.timeout(FREE_BUSY_BUDGET_MS) });
+      if (r.successful !== true) throw new Error(`free/busy: Composio answered successful=false: ${String(r.error ?? '')}`.slice(0, 300));
+      return (r.data?.calendars?.[calendarId]?.busy ?? []) as Busy[];
+    },
+  };
+}
 
 export interface SessionHandlerDeps {
   runCall: (job: SessionJob, deadlineMs: number) => Promise<CallOutcome | undefined>;
@@ -48,7 +63,8 @@ let deps: CallDeps | undefined; // built on first use so importing this module n
 export const handler = createSessionHandler({
   log,
   runCall: (job, deadlineMs) => {
-    deps ??= { secrets: getOpenAISecrets, store: dynamoStore(), events: eventBridgePublisher(), log };
+    // The secret ARN is read on the first booking call, so a session without it still runs calls; the tools then answer that booking is unavailable.
+    deps ??= { secrets: getOpenAISecrets, store: dynamoStore(), events: eventBridgePublisher(), log, calendar: calendarReads(() => { const v = process.env.COMPOSIO_SECRET_ARN; if (!v) throw new Error('COMPOSIO_SECRET_ARN not set'); return v; }) };
     return runCall(job, deps, { deadlineMs });
   },
 });

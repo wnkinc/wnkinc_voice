@@ -13,10 +13,15 @@ export function greeting(t: TenantConfig, extras: CallExtras = {}): string {
   return r.greeting ?? `Thanks for calling ${t.business.name}, this is ${r.instructions.agentName}. How can I help you today?`;
 }
 
+/** The receptionist may book when the tenant enabled the calendar and lists both booking tools. */
+export const canBook = (t: TenantConfig, tools: string[] = t.receptionist.session.tools): boolean =>
+  t.calendar.enabled && tools.includes('check_availability') && tools.includes('book_appointment');
+
 /** Deliberately narrow for v1: answer from config, capture a lead, escalate to the owner, end the call. */
-export function buildInstructions(t: TenantConfig, extras: CallExtras = {}, tools: string[] = t.receptionist.session.tools): string {
+export function buildInstructions(t: TenantConfig, extras: CallExtras = {}, tools: string[] = t.receptionist.session.tools, now: Date = new Date()): string {
   const b = t.business;
   const r = t.receptionist;
+  const booking = canBook(t, tools);
   const lines: string[] = [
     `You are ${r.instructions.agentName}, the phone receptionist for ${b.name}.`,
     'You are speaking with a caller on a live phone call. Keep every reply short (one or two sentences), warm, and natural. Speak in English unless the caller clearly prefers another language.',
@@ -31,7 +36,13 @@ export function buildInstructions(t: TenantConfig, extras: CallExtras = {}, tool
     '## What you do',
     '- Greet the caller, find out why they are calling, and help within the scope below.',
     '- Answer questions ONLY using the business information above. If you do not know something, say so and offer to take a message for the owner. Never invent prices, availability, policies, or promises.',
-    "- You cannot book, reschedule, or cancel appointments yet. If asked, take the caller's details and preferred time so the owner can confirm.",
+    ...(booking ? [
+      '- Appointments: when a caller wants one, ask what day works, call `check_availability` for that day, and offer two or three of the times it returns, not the whole list. If the time they want is not in the list, say it is not open and offer the nearest ones that are. Once they choose, repeat the day and time back, get their name and callback number, then call `book_appointment`. Tell them a text will confirm it.',
+      '- Only offer times `check_availability` returned. You know whether a time is open, never why; do not guess or explain.',
+      "- You cannot reschedule or cancel an existing appointment. If asked, take the caller's details and what they need so the owner can handle it.",
+    ] : [
+      "- You cannot book, reschedule, or cancel appointments yet. If asked, take the caller's details and preferred time so the owner can confirm.",
+    ]),
     "- Before the call ends, make sure you have the caller's name and a callback number whenever they want something from the business.",
     '- When a caller gives a phone number, read it back digit by digit and wait for them to confirm BEFORE calling any tool with it. Do not say you will read it back and then save it first.',
     '- If the caller is abusive, a robocall, or a sales solicitation, politely end the call.',
@@ -44,10 +55,11 @@ export function buildInstructions(t: TenantConfig, extras: CallExtras = {}, tool
     '',
     '## Time',
     `- Calls are limited to ${Math.round(r.maxCallSeconds / 60)} minutes. Be efficient: get what you need early, and do not let the call drift. You will receive a notice when time is running low; when that happens, tell the caller and finish up.`,
-    '',
-    '## Tools',
   );
+  if (booking) lines.push(`- Right now it is ${now.toLocaleString('en-US', { timeZone: b.timezone, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })} (${b.timezone}). Work out dates like "Thursday" or "tomorrow" from this, and give tools dates in this timezone.`);
+  lines.push('', '## Tools');
   if (tools.includes('record_lead')) lines.push("- Use `record_lead` once you have the caller's name, a confirmed callback number, and reason. Call it before saying goodbye. Do not call it more than once per caller unless details changed.");
+  if (booking) lines.push('- Use `check_availability` with a date (YYYY-MM-DD) before offering times for that day; call it again for another day. Use `book_appointment` with the `start` value of the slot they chose, once they have confirmed their name and number. Do not also call `record_lead` for the same request; the booking carries their details.');
   if (tools.includes('notify_owner')) lines.push('- Use `notify_owner` for anything time-sensitive (an emergency, an upset customer, a large job, someone the owner would want to hear about right now). Mark it urgent only when waiting would cost the business.');
   if (tools.includes('end_call')) lines.push('- Use `end_call` after you have said goodbye and the caller has nothing else. Always say a closing line first.');
   lines.push(

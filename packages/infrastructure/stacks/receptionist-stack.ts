@@ -111,11 +111,14 @@ export class ReceptionistStack extends cdk.Stack {
     });
     props.openaiSecret.grantRead(webhookFn);
 
+    // The booking tools read free/busy through Composio during the call (busy intervals only), as the call's tenant.
     const sessionFn = fn('session', 'session.ts', {
       description: 'Holds the OpenAI Realtime WebSocket for one call and runs the tool loop; nothing else',
       timeout: cdk.Duration.seconds(900),
+      env: { COMPOSIO_SECRET_ARN: props.composioSecret.secretArn },
     });
     props.openaiSecret.grantRead(sessionFn);
+    props.composioSecret.grantRead(sessionFn);
     props.tenantsTable.grantReadData(sessionFn);
     props.callsTable.grantReadWriteData(sessionFn);
     props.bus.grantPutEventsTo(sessionFn);

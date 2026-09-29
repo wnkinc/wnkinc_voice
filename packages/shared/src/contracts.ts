@@ -34,6 +34,20 @@ export const ACTION_STATUSES = ['pending', 'executing', 'completed', 'failed', '
 
 export type CallStatus = 'claimed' | 'accepted' | 'in_progress' | 'completed' | 'failed';
 
+/**
+ * The two Google Calendar tools the platform runs for a booking, pinned to
+ * one release on both sides: the receptionist reads free/busy during a
+ * call, the worker reads it again and creates the event. Free/busy is the
+ * one read the receptionist gets: it answers with busy intervals only, no
+ * titles, no attendees, so nothing another customer's event holds can reach
+ * a caller. (Composio's FIND_FREE_SLOTS enriches busy intervals with event
+ * details; it is not used.)
+ */
+export const CALENDAR_TOOLS = {
+  freeBusy: { slug: 'GOOGLECALENDAR_FREE_BUSY_QUERY', version: '20260915_00' },
+  createEvent: { slug: 'GOOGLECALENDAR_CREATE_EVENT', version: '20260915_00' },
+} as const;
+
 // ---- Rows, as they are read back ---------------------------------------------
 
 /**
@@ -121,9 +135,38 @@ export interface Lead {
   notes?: string;
 }
 
+/**
+ * An appointment a caller asked for, as carried on `appointment.requested`.
+ * The receptionist offered a slot from free/busy and the caller took it; the
+ * booking workflow checks the slot again, creates the event, and confirms.
+ * The time is carried twice: the instant (UTC, for free/busy) and the wall
+ * clock in the tenant's zone (for the event and the confirmation), so no
+ * workflow does timezone arithmetic.
+ */
+export interface Appointment {
+  tenantId: string;
+  appointmentId: string;
+  callId: string;
+  createdAt: string;
+  callerName: string;
+  /** E.164; the confirmation text goes here. */
+  phone?: string;
+  /** The confirmation email goes here when the caller asked for one. */
+  email?: string;
+  reason: string;
+  /** RFC 3339 UTC instants. */
+  startsAt: string;
+  endsAt: string;
+  /** `YYYY-MM-DDTHH:MM` on the tenant's wall clock, and that zone. */
+  local: string;
+  timezone: string;
+  durationMinutes: number;
+}
+
 /** Domain events on the EventBridge bus; rules route each to a workflow on the worker (the platform's, or a tenant's). */
 export type VoiceEvent =
   | { type: 'lead.recorded'; tenantId: string; tenantPhoneNumber: string; callId: string; lead: Lead }
+  | { type: 'appointment.requested'; tenantId: string; tenantPhoneNumber: string; callId: string; appointment: Appointment }
   | { type: 'owner.notify'; tenantId: string; tenantPhoneNumber: string; callId: string; summary: string; urgency: 'normal' | 'urgent'; callerPhone?: string }
   // Ids and outcome only: the transcript stays on the call row, fetched by id by whoever needs it.
   | { type: 'call.ended'; tenantId: string; tenantPhoneNumber: string; callId: string; callerPhone?: string; status: CallStatus; durationSeconds: number };
@@ -132,6 +175,7 @@ export type VoiceEventType = VoiceEvent['type'];
 /** An event as a rule hands it to a workflow: the detail, without the type that routed it. */
 export type EventDetail<T extends VoiceEventType> = Omit<Extract<VoiceEvent, { type: T }>, 'type'>;
 export type LeadRecorded = EventDetail<'lead.recorded'>;
+export type AppointmentRequested = EventDetail<'appointment.requested'>;
 export type OwnerNotify = EventDetail<'owner.notify'>;
 export type CallEnded = EventDetail<'call.ended'>;
 
@@ -154,6 +198,8 @@ export const AUTOMATIONS = {
   crmCall: { on: 'call.ended' },
   /** owner.notify -> the owner's Telegram. */
   ownerAlert: { on: 'owner.notify' },
+  /** appointment.requested -> the slot checked again, the event on the tenant's calendar, the caller texted. */
+  bookAppointment: { on: 'appointment.requested' },
 } as const satisfies Record<string, { on: VoiceEventType }>;
 export type AutomationName = keyof typeof AUTOMATIONS;
 

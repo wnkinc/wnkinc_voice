@@ -11,5 +11,5 @@
  * test on the infrastructure holds them in step.
  */
 export const DEPLOYMENT_NAME = 'wnk-dev-worker';
-export const BUILD_ID = 'build-18';
+export const BUILD_ID = 'build-19';
 export const TASK_QUEUE = 'wnk-dev';
