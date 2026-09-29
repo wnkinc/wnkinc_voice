@@ -103,6 +103,38 @@ describe('the model', () => {
     expect(JSON.parse(outputs[0]!.output).error).toContain('no photo p4');
   }, 60_000);
 
+  it('two drafts in one response run one after the other: the second revises the row the first wrote', async () => {
+    const f = fakes();
+    // The ledger as a table: a draft written is a draft found.
+    let row: ReturnType<typeof draft> | undefined;
+    f.findPending.mockImplementation(async () => row);
+    f.createDraft.mockImplementation(async () => { row = draft(1, 0); return { sk: row.sk }; });
+    f.listPhotos.mockResolvedValue([photoRow('1')]);
+    const drafting = (id: string, caption: string) => ({ call_id: id, name: 'draft_facebook_post', arguments: JSON.stringify({ caption, photos: [] }) });
+    f.callModel
+      .mockResolvedValueOnce(answer('', [drafting('c1', 'First.'), drafting('c2', 'Second.')]))
+      .mockResolvedValueOnce(answer('Drafted it.'));
+    await run(f, text('post something'));
+    expect(f.createDraft).toHaveBeenCalledTimes(1);
+    expect(f.createDraft).toHaveBeenCalledWith('deck', 'sms:+15550002222', 'First.', []);
+    expect(f.reviseDraft).toHaveBeenCalledWith('deck', draft(1, 0).sk, 1, 'Second.', []);
+    expect((f.callModel.mock.calls[1]?.[0].input as { call_id: string }[]).map((o) => o.call_id)).toEqual(['c1', 'c2']);
+  }, 60_000);
+
+  it('a result over the bound keeps both ends, so an error or a total at the end still reaches the model', async () => {
+    const f = fakes();
+    f.callModel
+      .mockResolvedValueOnce(answer('', [{ call_id: 'c1', name: 'HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA', arguments: '{}' }]))
+      .mockResolvedValueOnce(answer('Found them.'));
+    f.executeTool.mockResolvedValue({ successful: true, data: { results: 'x'.repeat(20_000), total: 4812 } });
+    await run(f, text('everyone?'));
+    const output = (f.callModel.mock.calls[1]?.[0].input as { output: string }[])[0]!.output;
+    expect(output.startsWith('{"results":"xxx')).toBe(true);
+    expect(output.endsWith('"total":4812}')).toBe(true);
+    expect(output).toMatch(/\.\.\.\[\d+ chars truncated\]\.\.\./);
+    expect(output.length).toBeLessThan(6100);
+  }, 60_000);
+
   it('has no publish tool: a call to one is refused, and no Facebook call is made', async () => {
     const f = fakes();
     f.callModel
